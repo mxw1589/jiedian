@@ -2,8 +2,9 @@
 # sing-box multi-protocol manager for Debian + Alpine
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
-# User-selected collision-checked TCP ports (1024-65535); Cloudflare DNS-01 or HTTP-01
+# Manual or random collision-checked TCP ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; supports single/multi-VPS deployment; overlay install preserves existing settings
+# WEB_CONFIG_SCHEMA=2; blank origin addresses are detected on the VPS
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -325,6 +326,13 @@ valid_main_address() {
     valid_host "$1"
 }
 
+valid_ipv4_address() {
+    printf '%s\n' "$1" | awk -F. 'NF == 4 {
+        for (i = 1; i <= NF; i++) if ($i !~ /^[0-9]+$/ || length($i) > 3 || $i > 255) next
+        valid = 1
+    } END { exit !(NR == 1 && valid) }'
+}
+
 valid_ipv6_address() {
     case "$1" in *:*) ;; *) return 1 ;; esac
     command -v ip >/dev/null 2>&1 || return 1
@@ -335,10 +343,6 @@ valid_port() {
     p=$1
     case "$p" in ''|*[!0-9]*) return 1 ;; esac
     [ "$p" -ge 1024 ] 2>/dev/null && [ "$p" -le 65535 ] 2>/dev/null
-}
-
-valid_ws_port() {
-    case "$1" in 2053|2083|2087|2096|8443) return 0 ;; *) return 1 ;; esac
 }
 
 port_listening() {
@@ -383,58 +387,17 @@ pick_random_range_port() {
 }
 
 pick_random_ws_port() {
-    tries=0
-    while [ "$tries" -lt 100 ]; do
-        index=$(random_between 1 5) || return 1
-        case "$index" in
-            1) candidate=2053 ;;
-            2) candidate=2083 ;;
-            3) candidate=2087 ;;
-            4) candidate=2096 ;;
-            5) candidate=8443 ;;
-        esac
-        if port_is_available "$candidate" "$@"; then
-            printf '%s\n' "$candidate"
-            return 0
+    available_ws_ports=""
+    for ws_candidate in 2053 2083 2087 2096 8443; do
+        if port_is_available "$ws_candidate" "$@"; then
+            available_ws_ports="$available_ws_ports $ws_candidate"
         fi
-        tries=$((tries + 1))
     done
-    return 1
-}
-
-choose_random_ports() {
-    previous_anytls=${1-}
-    previous_ws=${2-}
-    previous_reality=${3-}
-    previous_naive=${4-}
-    previous_anyreality=${5-}
-
-    new_anytls=$(pick_random_range_port 10000 65535 \
-        "$previous_anytls" "$previous_ws" "$previous_reality" "$previous_naive" "$previous_anyreality") ||
-        err '无法找到可用的 AnyTLS 随机端口。'
-
-    new_ws=$(pick_random_ws_port \
-        "$previous_anytls" "$previous_ws" "$previous_reality" "$previous_naive" "$previous_anyreality" "$new_anytls") ||
-        err 'Cloudflare 兼容的 WS TLS 端口均被占用，无法分配新端口。'
-
-    new_reality=$(pick_random_range_port 10000 65535 \
-        "$previous_anytls" "$previous_ws" "$previous_reality" "$previous_naive" "$previous_anyreality" "$new_anytls" "$new_ws") ||
-        err '无法找到可用的 VLESS Reality 随机端口。'
-
-    new_naive=$(pick_random_range_port 10000 65535 \
-        "$previous_anytls" "$previous_ws" "$previous_reality" "$previous_naive" "$previous_anyreality" "$new_anytls" "$new_ws" "$new_reality") ||
-        err '无法找到可用的 NaiveProxy 随机 TCP 端口。'
-
-    new_anyreality=$(pick_random_range_port 10000 65535 \
-        "$previous_anytls" "$previous_ws" "$previous_reality" "$previous_naive" "$previous_anyreality" "$new_anytls" "$new_ws" "$new_reality" "$new_naive") ||
-        err '无法找到可用的 AnyTLS + Reality 随机 TCP 端口。'
-
-    ANYTLS_PORT=$new_anytls
-    WS_PORT=$new_ws
-    REALITY_PORT=$new_reality
-    NAIVE_PORT=$new_naive
-    ANYREALITY_PORT=$new_anyreality
-    msg "随机端口分配完成：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，VLESS Reality=$REALITY_PORT，NaiveProxy=$NAIVE_PORT，AnyTLS Reality=$ANYREALITY_PORT"
+    set -- $available_ws_ports
+    [ "$#" -gt 0 ] || return 1
+    index=$(random_between 0 "$(($# - 1))") || return 1
+    shift "$index"
+    printf '%s\n' "$1"
 }
 
 manual_port_available() {
@@ -450,47 +413,65 @@ manual_port_available() {
     return 0
 }
 
-ask_manual_ports() {
-    old_ports="${PREVIOUS_ANYTLS_PORT:-} ${PREVIOUS_WS_PORT:-} ${PREVIOUS_REALITY_PORT:-} ${PREVIOUS_NAIVE_PORT:-} ${PREVIOUS_ANYREALITY_PORT:-}"
-    msg '请为五种协议分别指定 TCP 监听端口（1024–65535）。'
-    msg 'NAT VPS 模式：这里填写服务商允许你直接绑定的 VPS 端口；节点连接端口与监听端口相同。'
-    msg '五个端口必须互不相同，并且不能被其他程序占用。WS TLS 也允许自定义端口，不再限制为 Cloudflare 常见代理端口。'
+normalize_optional_port() {
+    port_input=$(trim_value "$1")
+    [ -n "$port_input" ] || return 0
+    valid_port "$port_input" || err "$2 端口必须是 1024–65535 的整数。"
+    printf '%s\n' "$port_input" | sed 's/^0*//'
+}
 
-    ask_value 'AnyTLS TCP 端口' "${PREVIOUS_ANYTLS_PORT:-}"
-    ANYTLS_PORT=$REPLY
-    ask_value 'VLESS WS TLS TCP 端口' "${PREVIOUS_WS_PORT:-}"
-    WS_PORT=$REPLY
-    ask_value 'VLESS Reality TCP 端口' "${PREVIOUS_REALITY_PORT:-}"
-    REALITY_PORT=$REPLY
-    ask_value 'NaiveProxy TCP 端口' "${PREVIOUS_NAIVE_PORT:-}"
-    NAIVE_PORT=$REPLY
-    ask_value 'AnyTLS + Reality TCP 端口' "${PREVIOUS_ANYREALITY_PORT:-}"
-    ANYREALITY_PORT=$REPLY
+requested_or_random_port() {
+    requested_port=$1
+    protocol_name=$2
+    shift 2
+    if [ -n "$requested_port" ]; then
+        printf '%s\n' "$requested_port"
+    elif [ "$protocol_name" = 'VLESS WS TLS' ]; then
+        pick_random_ws_port "$@" || err 'WS TLS 无可用的 Cloudflare HTTPS 代理端口（2053、2083、2087、2096、8443）。DNS Only 直连时可手动指定 1024–65535 中的空闲端口。'
+    else
+        pick_random_range_port 10000 65535 "$@" || err "无法为 $protocol_name 分配可用的随机端口。"
+    fi
+}
 
-    for item in "AnyTLS:$ANYTLS_PORT" "VLESS WS TLS:$WS_PORT" "VLESS Reality:$REALITY_PORT" "NaiveProxy:$NAIVE_PORT" "AnyTLS + Reality:$ANYREALITY_PORT"; do
-        item_name=${item%%:*}
-        item_port=${item#*:}
-        valid_port "$item_port" || err "$item_name 端口无效：$item_port。端口必须是 1024–65535 的整数。"
-    done
+assign_ports() {
+    ANYTLS_PORT=$(normalize_optional_port "$ANYTLS_PORT" 'AnyTLS') || exit 1
+    WS_PORT=$(normalize_optional_port "$WS_PORT" 'VLESS WS TLS') || exit 1
+    REALITY_PORT=$(normalize_optional_port "$REALITY_PORT" 'VLESS Reality') || exit 1
+    NAIVE_PORT=$(normalize_optional_port "$NAIVE_PORT" 'NaiveProxy') || exit 1
+    ANYREALITY_PORT=$(normalize_optional_port "$ANYREALITY_PORT" 'AnyTLS + Reality') || exit 1
 
-    [ "$ANYTLS_PORT" != "$WS_PORT" ] &&
-    [ "$ANYTLS_PORT" != "$REALITY_PORT" ] &&
-    [ "$ANYTLS_PORT" != "$NAIVE_PORT" ] &&
-    [ "$ANYTLS_PORT" != "$ANYREALITY_PORT" ] &&
-    [ "$WS_PORT" != "$REALITY_PORT" ] &&
-    [ "$WS_PORT" != "$NAIVE_PORT" ] &&
-    [ "$WS_PORT" != "$ANYREALITY_PORT" ] &&
-    [ "$REALITY_PORT" != "$NAIVE_PORT" ] &&
-    [ "$REALITY_PORT" != "$ANYREALITY_PORT" ] &&
-    [ "$NAIVE_PORT" != "$ANYREALITY_PORT" ] ||
-        err '五种协议的端口不能重复。'
-
+    set --
     for item_port in "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"; do
-        manual_port_available "$item_port" $old_ports ||
+        [ -n "$item_port" ] || continue
+        case " $* " in *" $item_port "*) err '五种协议的端口不能重复。' ;; esac
+        manual_port_available "$item_port" "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" ||
             err "TCP 端口 $item_port 已被其他程序占用。请更换端口后重试。"
+        set -- "$@" "$item_port"
     done
+    set -- "$@" "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT"
 
-    msg "手动端口设置完成：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，VLESS Reality=$REALITY_PORT，NaiveProxy=$NAIVE_PORT，AnyTLS Reality=$ANYREALITY_PORT"
+    ANYTLS_PORT=$(requested_or_random_port "$ANYTLS_PORT" 'AnyTLS' "$@") || exit 1
+    WS_PORT=$(requested_or_random_port "$WS_PORT" 'VLESS WS TLS' "$@" "$ANYTLS_PORT") || exit 1
+    REALITY_PORT=$(requested_or_random_port "$REALITY_PORT" 'VLESS Reality' "$@" "$ANYTLS_PORT" "$WS_PORT") || exit 1
+    NAIVE_PORT=$(requested_or_random_port "$NAIVE_PORT" 'NaiveProxy' "$@" "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT") || exit 1
+    ANYREALITY_PORT=$(requested_or_random_port "$ANYREALITY_PORT" 'AnyTLS + Reality' "$@" "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT") || exit 1
+    msg "TCP 端口：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，VLESS Reality=$REALITY_PORT，NaiveProxy=$NAIVE_PORT，AnyTLS Reality=$ANYREALITY_PORT"
+}
+
+ask_ports() {
+    msg 'TCP 端口可留空随机分配；手动填写时可用范围为 1024–65535。'
+    msg 'NAT VPS 请填写服务商分配的可用端口。Cloudflare 橙云代理请为 WS TLS 填写 2053、2083、2087、2096 或 8443。'
+
+    ask_value 'AnyTLS TCP 端口（留空随机选 10000–65535）' ''
+    ANYTLS_PORT=$REPLY
+    ask_value 'VLESS WS TLS TCP 端口（留空随机选 2053/2083/2087/2096/8443）' ''
+    WS_PORT=$REPLY
+    ask_value 'VLESS Reality TCP 端口（留空随机选 10000–65535）' ''
+    REALITY_PORT=$REPLY
+    ask_value 'NaiveProxy TCP 端口（留空随机选 10000–65535）' ''
+    NAIVE_PORT=$REPLY
+    ask_value 'AnyTLS + Reality TCP 端口（留空随机选 10000–65535）' ''
+    ANYREALITY_PORT=$REPLY
 }
 
 ipv6_kernel_enabled() {
@@ -503,6 +484,10 @@ ipv6_kernel_enabled() {
 
 uri_host() {
     case "$1" in *:*) printf '[%s]' "$1" ;; *) printf '%s' "$1" ;; esac
+}
+
+trim_value() {
+    printf '%s\n' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
 ask_value() {
@@ -1365,45 +1350,93 @@ overlay_install() {
 
 install_wizard() {
     need_root
-    PREVIOUS_ANYTLS_PORT=${ANYTLS_PORT:-}
-    PREVIOUS_WS_PORT=${WS_PORT:-}
-    PREVIOUS_REALITY_PORT=${REALITY_PORT:-}
-    PREVIOUS_NAIVE_PORT=${NAIVE_PORT:-}
-    PREVIOUS_ANYREALITY_PORT=${ANYREALITY_PORT:-}
-    install_dependencies_and_core
-    ensure_service_account
-    enable_bbr
-    create_service
-    setup_reload_hook
+    ORIGIN_ADDR=""
+    ORIGIN_IPV6=""
+    WS_SERVER=""
+    WS_HOST=""
 
     msg '========== sing-box 一键安装向导（IPv4 + IPv6 双栈，五种协议配置） =========='
-    detected_ip=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
-    detected_ipv6=""
-    if ipv6_kernel_enabled; then
-        detected_ipv6=$(curl -6 -fsS --max-time 5 https://api64.ipify.org 2>/dev/null || true)
+    msg '证书方式：'
+    printf '  1. Cloudflare DNS-01：使用 API Token 自动签发和续期。\n'
+    printf '  2. HTTP-01：域名必须解析到本机，公网 TCP 80 必须可访问且空闲。\n'
+    printf '  3. 手动导入已有证书。\n'
+    ask_value '请选择证书方式（1/2/3）' '2'
+    case "$REPLY" in
+        1) CERT_MODE=cloudflare ;;
+        2) CERT_MODE=standalone ;;
+        3) CERT_MODE=manual ;;
+        *) err '证书方式只能选择 1、2 或 3。' ;;
+    esac
+
+    if [ "$CERT_MODE" = cloudflare ]; then
+        ask_value 'Cloudflare DNS 区域根域名（例如 example.com）' ''
+        CF_ZONE_NAME=$(trim_value "$REPLY")
+        valid_cert_domain "$CF_ZONE_NAME" || err '请输入有效的 Cloudflare DNS 区域根域名。'
+        ask_value '已解析到本机的完整域名（留空使用根域名）' "$CF_ZONE_NAME"
     else
-        warn '当前系统内核未启用 IPv6；可继续安装 IPv4 节点，但 IPv6 需要先由 VPS 提供商/系统启用。'
+        ask_value 'TLS 证书域名（例如 node.example.com）' ''
     fi
+    TLS_DOMAIN=$(trim_value "$REPLY")
+    resolve_install_domains
+    confirm_domain_control "$TLS_DOMAIN" || err '未确认域名所有权，已停止证书申请。'
 
-    ask_value '源站 IPv4 地址 / 域名（没有可留空；输入 - 可清空自动检测值）' "$detected_ip"
-    ORIGIN_ADDR=$REPLY
+    ask_value '优选 IP/域名（可留空，默认使用证书域名；IPv6 不加方括号）' ''
+    WS_SERVER=$(trim_value "$REPLY")
+
+    ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'
+    REALITY_SNI=$(trim_value "$REPLY")
+    ask_value '节点辨识符（支持中文；可留空）' ''
+    NODE_LABEL=$(trim_value "$REPLY")
+    ask_ports
+
+    if [ "$CERT_MODE" = cloudflare ]; then
+        ask_secret 'Cloudflare API Token（输入时不会显示）'
+        cf_token=$(trim_value "$REPLY")
+        while :; do
+            ask_value '证书账户邮箱（可留空）' ''
+            cert_email=$(trim_value "$REPLY")
+            [ -z "$cert_email" ] && break
+            valid_email "$cert_email" && break
+            warn '邮箱格式不正确。请填写真实邮箱地址，或直接按 Enter 留空。'
+        done
+        ask_value 'Cloudflare Zone ID（可选，留空时 Token 还需 Zone:Zone:Read 权限）' ''
+        zone_id=$(trim_value "$REPLY")
+    fi
+    install_from_config
+}
+
+resolve_install_domains() {
+    if [ "$CERT_MODE" = cloudflare ]; then
+        valid_cert_domain "$CF_ZONE_NAME" || err '请输入有效的 Cloudflare DNS 区域根域名。'
+        TLS_DOMAIN=${TLS_DOMAIN:-${WS_SERVER:-$CF_ZONE_NAME}}
+        domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" ||
+            err "TLS 证书域名 $TLS_DOMAIN 必须属于 Cloudflare 区域 $CF_ZONE_NAME。"
+    fi
+    valid_cert_domain "$TLS_DOMAIN" || err '请输入有效的 TLS 证书域名，例如 node.example.com。'
+    WS_SERVER=${WS_SERVER:-$TLS_DOMAIN}
+    WS_HOST=${WS_HOST:-$TLS_DOMAIN}
+    valid_domain "$WS_HOST" || err 'WS HTTP Host 必须是有效域名。'
+}
+
+resolve_install_addresses() {
+    if [ -z "$ORIGIN_ADDR" ] && [ -z "$ORIGIN_IPV6" ]; then
+        ORIGIN_ADDR=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
+        if ! valid_ipv4_address "$ORIGIN_ADDR"; then ORIGIN_ADDR=""; fi
+        if ipv6_kernel_enabled; then
+            ORIGIN_IPV6=$(curl -6 -fsS --max-time 5 https://api64.ipify.org 2>/dev/null || true)
+            if ! valid_ipv6_address "$ORIGIN_IPV6"; then ORIGIN_IPV6=""; fi
+        fi
+    fi
     [ "$ORIGIN_ADDR" = "-" ] && ORIGIN_ADDR=""
-    if [ -n "$ORIGIN_ADDR" ]; then valid_main_address "$ORIGIN_ADDR" || err '源站主地址应填写 IPv4 或域名；IPv6 请填写在下一项。'; fi
-
-    ask_value '源站 IPv6 地址（可留空；请勿输入方括号）' "$detected_ipv6"
-    ORIGIN_IPV6=$REPLY
     [ "$ORIGIN_IPV6" = "-" ] && ORIGIN_IPV6=""
+    if [ -n "$ORIGIN_ADDR" ]; then valid_main_address "$ORIGIN_ADDR" || err '源站主地址必须是 IPv4 地址或域名。'; fi
     if [ -n "$ORIGIN_IPV6" ]; then
         ipv6_kernel_enabled || err '检测到系统未启用 IPv6，不能配置 IPv6 源站地址。'
         valid_ipv6_address "$ORIGIN_IPV6" || err '源站 IPv6 地址格式不正确，或服务器没有到该地址的 IPv6 路由。'
     fi
-    [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] || err '至少需要填写一个源站地址（IPv4/域名或 IPv6）。'
+    [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] || err '未能检测到 VPS 公网 IPv4 或 IPv6。请检查 VPS 的公网网络后重试。'
+    msg "源站地址：IPv4=${ORIGIN_ADDR:-未检测到}，IPv6=${ORIGIN_IPV6:-未检测到}"
 
-    ws_default=${ORIGIN_ADDR:-$ORIGIN_IPV6}
-    ask_value 'VLESS WS TLS 单一连接地址（IPv4 / IPv6 / 域名；只填写一个）' "$ws_default"
-    WS_SERVER=$REPLY
-    [ "$WS_SERVER" = "-" ] && WS_SERVER=""
-    [ -n "$WS_SERVER" ] || err 'VLESS WS TLS 需要填写一个连接地址。'
     case "$WS_SERVER" in
         *:*)
             ipv6_kernel_enabled || err '检测到系统未启用 IPv6，不能使用 IPv6 作为 WS 连接地址。'
@@ -1417,106 +1450,64 @@ install_wizard() {
             PREFERRED_IPV6=""
             ;;
     esac
+}
 
-    msg '重要：这里只填写你自己拥有/获准管理的 TLS 证书域名，例如 node.example.com。'
-    msg '不要填写 www.bing.com；它是 VLESS Reality / AnyTLS Reality 的 Reality SNI 默认值，不是 TLS 证书域名。'
-    ask_value '你的 TLS 证书域名（AnyTLS + WS TLS 共用；必须是自己的域名）' ''
-    TLS_DOMAIN=$REPLY
-    valid_cert_domain "$TLS_DOMAIN" || err '请输入有效的完整 DNS 域名，例如 node.example.com；不能填写 IP 地址。'
-    confirm_domain_control "$TLS_DOMAIN" || err '未确认域名所有权，已停止证书申请。'
-
-    msg "普通 AnyTLS、VLESS WS TLS 和 NaiveProxy 的 TLS 证书域名 / SNI 将统一使用：$TLS_DOMAIN"
-    msg "VLESS WS HTTP Host 将自动使用：$TLS_DOMAIN（它是 HTTP Host，不是 SNI）"
-    msg 'VLESS Reality 和 AnyTLS + Reality 共用 Reality SNI，默认：www.bing.com（可在管理菜单 3 修改）'
-    msg '不要把 www.bing.com 填入 TLS 证书域名：公共 CA 不会为你签发第三方域名证书。AnyTLS + Reality 不使用这张证书。'
-
-    # WS Host is an HTTP header value, not the TLS SNI.
-    ask_value 'VLESS WS HTTP Host（默认跟随 TLS 证书域名）' "$TLS_DOMAIN"
-    WS_HOST=$REPLY
-    valid_domain "$WS_HOST" || err 'WS HTTP Host 必须是有效域名。'
-
-    ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'
-    REALITY_SNI=$REPLY
+install_from_config() {
+    resolve_install_domains
+    REALITY_SNI=${REALITY_SNI:-www.bing.com}
     valid_domain "$REALITY_SNI" || err 'Reality SNI 必须是有效域名。'
+    if [ "$CERT_MODE" = cloudflare ]; then
+        [ -n "$cf_token" ] || err 'Cloudflare API Token 不能为空。'
+        [ -z "$cert_email" ] || valid_email "$cert_email" || err '证书账户邮箱格式不正确。'
+        if [ -n "$zone_id" ]; then
+            case "$zone_id" in *[!A-Fa-f0-9]*) err 'Zone ID 必须是 32 位十六进制字符串。' ;; esac
+            [ "${#zone_id}" -eq 32 ] || err 'Zone ID 必须是 32 位十六进制字符串。'
+        fi
+    fi
 
-    ask_value '节点辨识符（支持中文；可留空）' ''
-    NODE_LABEL=$REPLY
+    install_dependencies_and_core
+    resolve_install_addresses
+    PREVIOUS_ANYTLS_PORT=""
+    PREVIOUS_WS_PORT=""
+    PREVIOUS_REALITY_PORT=""
+    PREVIOUS_NAIVE_PORT=""
+    PREVIOUS_ANYREALITY_PORT=""
+    assign_ports
+
     if [ -n "$NODE_LABEL" ]; then
         label_length=$(jq -nr --arg label "$NODE_LABEL" '$label | length')
         [ "$label_length" -le 20 ] || err '节点辨识符最多 20 个字符。'
         jq -ne --arg label "$NODE_LABEL" '$label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
             err '节点辨识符仅支持中文、英文字母、数字、点、下划线和短横线。'
     fi
+    ensure_service_account
+    enable_bbr
+    create_service
+    setup_reload_hook
 
-    msg '端口分配方式：'
-    printf '  1. 随机端口（自动避开当前监听端口）\n'
-    printf '  2. 手动端口（适合 NAT / 端口受限 VPS；五种协议分别输入）\n'
-    ask_value '请选择端口方式（1/2）' '1'
-    port_choice=$REPLY
-    case "$port_choice" in
-        1)
-            choose_random_ports "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT"
-            ;;
-        2)
-            ask_manual_ports
-            ;;
-        *) err '端口方式只能选择 1 或 2。' ;;
-    esac
-
-    msg '证书方式：'
-    printf '  1. Cloudflare DNS-01：需要 API Token，可自动签发和续期。\n'
-    printf '  2. HTTP-01：不需要 Token，但域名必须解析到本机，公网 TCP 80 必须可访问且空闲。\n'
-    printf '  3. 手动导入已有证书。\n'
-    ask_value '请选择证书方式（1/2/3）' '2'
-    cert_choice=$REPLY
-    case "$cert_choice" in
-        1)
-            msg '请填写 Cloudflare 中实际管理的 DNS 区域主域名，例如 example.com。'
-            msg 'TLS 证书域名必须等于该域名或属于其子域名，例如 node.example.com。'
-            ask_value 'Cloudflare DNS 区域主域名（必须是你管理的域名）' ''
-            CF_ZONE_NAME=$REPLY
-            valid_cert_domain "$CF_ZONE_NAME" || err 'Cloudflare 区域主域名格式无效；请填写你在 Cloudflare 中管理的 DNS 域名。'
-            domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" || err "证书域名 $TLS_DOMAIN 不属于 Cloudflare 区域 $CF_ZONE_NAME；请检查是否把 Reality SNI 填成了证书域名。"
-            ask_secret 'Cloudflare API Token（输入时不会显示；不要填写 Zone ID）'
-            cf_token=$REPLY
-            [ -n "$cf_token" ] || err 'Cloudflare Token 不能为空。'
+    case "$CERT_MODE" in
+        cloudflare)
             printf '%s' "$cf_token" > "$CF_TOKEN_FILE"
             chmod 0600 "$CF_TOKEN_FILE"
             chown root:root "$CF_TOKEN_FILE"
-            CERT_MODE=cloudflare
-
-            while :; do
-                ask_value '证书账户邮箱（可直接留空；只填写真实邮箱，不能填写 Token 或 Zone ID）' ''
-                cert_email=$REPLY
-                [ -z "$cert_email" ] && break
-                valid_email "$cert_email" && break
-                warn '邮箱格式不正确。请填写真实邮箱地址，或直接按 Enter 留空。'
-            done
             rm -f "$CF_ZONE_ID_FILE"
-            ask_value 'Cloudflare Zone ID（可选；填写后 Token 只需 Zone:DNS:Edit；留空则还需要 Zone:Zone:Read）' ''
-            zone_id=$REPLY
             if [ -n "$zone_id" ]; then
-                case "$zone_id" in *[!A-Fa-f0-9]*|'') err 'Zone ID 必须是 32 位十六进制字符串。' ;; esac
-                [ "${#zone_id}" -eq 32 ] || err 'Zone ID 必须是 32 位十六进制字符串。'
                 printf '%s' "$zone_id" > "$CF_ZONE_ID_FILE"
                 chmod 0600 "$CF_ZONE_ID_FILE"
             fi
             install_acme "$cert_email"
             issue_cloudflare_cert "$TLS_DOMAIN" || err 'Cloudflare DNS-01 证书处理失败。请检查 Token 是否有效、Zone ID 是否属于该区域、Token 是否有该区域 DNS Edit 权限，以及该域名是否真的由 Cloudflare 托管。'
             ;;
-        2)
-            CERT_MODE=standalone
+        standalone)
             CF_ZONE_NAME=""
             rm -f "$CF_TOKEN_FILE" "$CF_ZONE_ID_FILE"
             issue_http_cert "$TLS_DOMAIN" || err 'HTTP-01 证书申请失败。请确认域名 A/AAAA 记录、TCP 80 入站和端口占用情况。'
             ;;
-        3)
-            CERT_MODE=manual
+        manual)
             CF_ZONE_NAME=""
             rm -f "$CF_TOKEN_FILE" "$CF_ZONE_ID_FILE"
             install_manual_cert "$TLS_DOMAIN"
             ;;
-        *) err '证书方式只能选择 1、2 或 3。' ;;
     esac
 
     ANYTLS_PASSWORD=$(openssl rand -hex 24)
@@ -1542,11 +1533,15 @@ install_wizard() {
     save_state
     msg '安装完成。正在显示全部五种协议节点……'
     show_nodes
-    msg '请在云厂商安全组和系统防火墙放行你指定的以下 TCP 端口（含 NaiveProxy 和 AnyTLS + Reality）：'
+    msg '请在云厂商安全组和系统防火墙放行以下 TCP 端口：'
     printf '  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
     msg '管理命令：/usr/local/sbin/sb-manager'
 }
 
+
+web_string() {
+    trim_value "$(jq -r --arg key "$1" '.[$key] // ""' "$web_cfg")"
+}
 
 install_web_config() {
     need_root
@@ -1565,92 +1560,46 @@ install_web_config() {
         fi
     fi
 
-    jq -e 'type == "object" and
-      (.origin_ipv4 | type == "string") and
-      (.origin_ipv6 | type == "string") and
-      (.ws_server | type == "string") and
-      (.tls_domain | type == "string") and
-      (.reality_sni | type == "string") and
-      (.ports | type == "object") and
-      (.ports.anytls != null) and
-      (.ports.ws_tls != null) and
-      (.ports.vless_reality != null) and
-      (.ports.naive != null) and
-      (.ports.anytls_reality != null) and
-      ([.origin_ipv4,.origin_ipv6,.ws_server,.tls_domain,(.ws_host // ""),.reality_sni,(.node_label // ""),(.cf_zone_name // ""),(.cf_token // ""),(.cf_email // ""),(.cf_zone_id // "")] | all(type == "string" and (contains("\n")|not) and (contains("\r")|not)))' \
+    jq -e 'def text: type == "string" and (test("[\u0000\r\n]") | not);
+      type == "object" and
+      ([.origin_ipv4,.origin_ipv6,.ws_server,.tls_domain,.ws_host,.reality_sni,.node_label,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
+        | all(. == null or text)) and
+      (.ports | . == null or (type == "object" and
+        ([.anytls,.ws_tls,.vless_reality,.naive,.anytls_reality] | all(. == null or type == "number" or text))))' \
       "$web_cfg" >/dev/null 2>&1 ||
         err '网页配置 JSON 格式不正确或字段包含非法换行。请从网页重新生成配置。'
 
-    origin_ipv4=$(jq -r '.origin_ipv4' "$web_cfg")
-    origin_ipv6=$(jq -r '.origin_ipv6' "$web_cfg")
-    ws_server=$(jq -r '.ws_server' "$web_cfg")
-    tls_domain=$(jq -r '.tls_domain' "$web_cfg")
-    ws_host=$(jq -r '.ws_host // .tls_domain' "$web_cfg")
-    reality_sni=$(jq -r '.reality_sni // "www.bing.com"' "$web_cfg")
-    node_label=$(jq -r '.node_label // ""' "$web_cfg")
-    anytls_port=$(jq -r '.ports.anytls' "$web_cfg")
-    ws_port=$(jq -r '.ports.ws_tls' "$web_cfg")
-    reality_port=$(jq -r '.ports.vless_reality' "$web_cfg")
-    naive_port=$(jq -r '.ports.naive' "$web_cfg")
-    anyreality_port=$(jq -r '.ports.anytls_reality' "$web_cfg")
-    cert_mode=$(jq -r '.cert_mode // "cloudflare"' "$web_cfg")
-    cf_zone_name=$(jq -r '.cf_zone_name // ""' "$web_cfg")
-    cf_token=$(jq -r '.cf_token // ""' "$web_cfg")
-    cf_email=$(jq -r '.cf_email // ""' "$web_cfg")
-    cf_zone_id=$(jq -r '.cf_zone_id // ""' "$web_cfg")
+    ORIGIN_ADDR=$(web_string origin_ipv4)
+    ORIGIN_IPV6=$(web_string origin_ipv6)
+    WS_SERVER=$(web_string ws_server)
+    TLS_DOMAIN=$(web_string tls_domain)
+    WS_HOST=$(web_string ws_host)
+    REALITY_SNI=$(web_string reality_sni)
+    NODE_LABEL=$(web_string node_label)
+    ANYTLS_PORT=$(jq -r '.ports.anytls // ""' "$web_cfg")
+    WS_PORT=$(jq -r '.ports.ws_tls // ""' "$web_cfg")
+    REALITY_PORT=$(jq -r '.ports.vless_reality // ""' "$web_cfg")
+    NAIVE_PORT=$(jq -r '.ports.naive // ""' "$web_cfg")
+    ANYREALITY_PORT=$(jq -r '.ports.anytls_reality // ""' "$web_cfg")
+    cert_mode=$(web_string cert_mode)
+    CF_ZONE_NAME=$(web_string cf_zone_name)
+    cf_token=$(web_string cf_token)
+    cert_email=$(web_string cf_email)
+    zone_id=$(web_string cf_zone_id)
 
-    case "$cert_mode" in
-        cloudflare) cert_choice=1 ;;
-        http01) cert_choice=2 ;;
+    case "${cert_mode:-cloudflare}" in
+        cloudflare) CERT_MODE=cloudflare ;;
+        http01) CERT_MODE=standalone ;;
         *) err '网页批量部署目前支持 Cloudflare DNS-01 或 HTTP-01 证书方式。' ;;
     esac
 
-    if [ "$cert_mode" = cloudflare ] && [ -z "$cf_token" ]; then
+    if [ "$CERT_MODE" = cloudflare ] && [ -z "$cf_token" ]; then
         ask_secret 'Cloudflare API Token（输入时不会显示）'
-        cf_token=$REPLY
+        cf_token=$(trim_value "$REPLY")
     fi
-    if [ "$cert_mode" = cloudflare ] && [ -z "$cf_token" ]; then
-        err 'Cloudflare API Token 不能为空。'
-    fi
-
-    answers=$(mktemp)
-    chmod 0600 "$answers"
-    trap 'rm -f "$answers"' EXIT
-    {
-        printf '%s\n' "${origin_ipv4:--}"
-        printf '%s\n' "${origin_ipv6:--}"
-        printf '%s\n' "$ws_server"
-        printf '%s\n' "$tls_domain"
-        printf '%s\n' 'YES'
-        printf '%s\n' "$ws_host"
-        printf '%s\n' "$reality_sni"
-        printf '%s\n' "$node_label"
-        printf '%s\n' '2'
-        printf '%s\n' "$anytls_port"
-        printf '%s\n' "$ws_port"
-        printf '%s\n' "$reality_port"
-        printf '%s\n' "$naive_port"
-        printf '%s\n' "$anyreality_port"
-        printf '%s\n' "$cert_choice"
-        if [ "$cert_mode" = cloudflare ]; then
-            printf '%s\n' "$cf_zone_name"
-            printf '%s\n' "$cf_token"
-            printf '%s\n' "$cf_email"
-            printf '%s\n' "$cf_zone_id"
-        fi
-    } > "$answers"
 
     msg '正在使用网页配置启动 sing-box 安装流程……'
-    if install_wizard < "$answers"; then
-        rm -f "$answers"
-        trap - EXIT
-        return 0
-    else
-        status=$?
-        rm -f "$answers"
-        trap - EXIT
-        return "$status"
-    fi
+    install_from_config
 }
 
 change_tls_sni() {
@@ -1744,16 +1693,13 @@ change_cloudflare_zone() {
     msg '修改 Cloudflare 绑定域名会重新申请 TLS 证书。脚本只管理 ACME 验证 TXT 记录，不会自动修改 A/AAAA 解析记录。'
     msg 'Token 必须具有新区域的 Zone:DNS:Edit 权限；若 Token 只授权旧区域，申请会失败。'
     ask_value '新的 Cloudflare DNS 区域主域名（例如 example.com）' "$CF_ZONE_NAME"
-    new_zone=$REPLY
+    new_zone=$(trim_value "$REPLY")
+    new_zone=${new_zone:-$CF_ZONE_NAME}
     valid_cert_domain "$new_zone" || { warn 'Cloudflare 区域域名无效。'; return 0; }
 
-    if domain_belongs_to_zone "$TLS_DOMAIN" "$new_zone"; then
-        cert_default=$TLS_DOMAIN
-    else
-        cert_default="node.$new_zone"
-    fi
-    ask_value '新的 TLS 证书域名 / TLS SNI（必须属于新 Cloudflare 区域）' "$cert_default"
-    new_cert_domain=$REPLY
+    ask_value '已解析到本机的完整域名（留空使用根域名）' "$new_zone"
+    new_cert_domain=$(trim_value "$REPLY")
+    new_cert_domain=${new_cert_domain:-$new_zone}
     valid_cert_domain "$new_cert_domain" || { warn 'TLS 证书域名无效；不能填写 IP。'; return 0; }
     domain_belongs_to_zone "$new_cert_domain" "$new_zone" || {
         warn "证书域名 $new_cert_domain 不属于 Cloudflare 区域 $new_zone。"
@@ -1777,7 +1723,7 @@ change_cloudflare_zone() {
         current_zone_id=""
     fi
     ask_value '新 Cloudflare Zone ID（建议填写；更换区域时必须填写）' "$current_zone_id"
-    new_zone_id=$REPLY
+    new_zone_id=$(trim_value "$REPLY")
     case "$new_zone_id" in
         ''|*[!A-Fa-f0-9]*) warn 'Zone ID 必须是 32 位十六进制字符串。'; return 0 ;;
     esac
@@ -1793,6 +1739,8 @@ change_cloudflare_zone() {
     old_zone=$CF_ZONE_NAME
     old_tls_domain=$TLS_DOMAIN
     old_ws_host=$WS_HOST
+    old_ws_server=$WS_SERVER
+    old_preferred_ip=$PREFERRED_IP
 
     printf '%s' "$new_zone_id" > "$CF_ZONE_ID_FILE"
     chmod 0600 "$CF_ZONE_ID_FILE"
@@ -1800,11 +1748,17 @@ change_cloudflare_zone() {
     CF_ZONE_NAME=$new_zone
     TLS_DOMAIN=$new_cert_domain
     WS_HOST=$new_ws_host
+    if [ "$WS_SERVER" = "$old_tls_domain" ]; then
+        WS_SERVER=$new_cert_domain
+        PREFERRED_IP=$new_cert_domain
+    fi
 
     if ! issue_cloudflare_cert "$TLS_DOMAIN"; then
         CF_ZONE_NAME=$old_zone
         TLS_DOMAIN=$old_tls_domain
         WS_HOST=$old_ws_host
+        WS_SERVER=$old_ws_server
+        PREFERRED_IP=$old_preferred_ip
         if [ -s "$backup_dir/fullchain.pem" ]; then cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"; fi
         if [ -s "$backup_dir/privkey.pem" ]; then cp -p "$backup_dir/privkey.pem" "$KEY_FILE"; fi
         if [ -s "$backup_dir/zone-id" ]; then cp -p "$backup_dir/zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
@@ -1821,6 +1775,8 @@ change_cloudflare_zone() {
         CF_ZONE_NAME=$old_zone
         TLS_DOMAIN=$old_tls_domain
         WS_HOST=$old_ws_host
+        WS_SERVER=$old_ws_server
+        PREFERRED_IP=$old_preferred_ip
         if [ -s "$backup_dir/fullchain.pem" ]; then cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"; fi
         if [ -s "$backup_dir/privkey.pem" ]; then cp -p "$backup_dir/privkey.pem" "$KEY_FILE"; fi
         if [ -s "$backup_dir/zone-id" ]; then cp -p "$backup_dir/zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
@@ -1887,7 +1843,6 @@ change_ws_host() {
 }
 
 change_ports() {
-    msg '手动修改五种协议的 TCP 监听端口。新端口必须互不相同且未被其他程序占用。'
     printf '当前端口：AnyTLS=%s, WS+TLS=%s, VLESS Reality=%s, NaiveProxy=%s, AnyTLS Reality=%s\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
     old_anytls=$ANYTLS_PORT
     old_ws=$WS_PORT
@@ -1899,7 +1854,8 @@ change_ports() {
     PREVIOUS_REALITY_PORT=$old_reality
     PREVIOUS_NAIVE_PORT=$old_naive
     PREVIOUS_ANYREALITY_PORT=$old_anyreality
-    ask_manual_ports
+    ask_ports
+    assign_ports
     if ! build_config; then
         ANYTLS_PORT=$old_anytls
         WS_PORT=$old_ws
@@ -2049,7 +2005,7 @@ menu() {
         printf '4. 修改 VLESS WS TLS 单一连接地址（IPv4/IPv6/域名）\n'
         printf '5. 修改 VLESS WS HTTP Host（不是 SNI；默认跟随 TLS 域名）\n'
         printf '6. 修改 Cloudflare DNS 区域 / TLS 证书域名（WS Host 自动跟随）\n'
-        printf '7. 手动修改五个协议端口（自动检查重复和占用）\n'
+        printf '7. 修改五个协议端口（留空随机）\n'
         printf '8. 重启 sing-box\n'
         printf '9. 查看服务状态\n'
         printf '10. 查看最近日志\n'
