@@ -1,9 +1,15 @@
 sing-box 多协议节点管理脚本
 快速安装（可直接复制）
 在 Debian / Alpine VPS 上以 root 身份执行：
+# 一键安装命令
 ```
 curl -fsSL https://github.com/mxw1589/jiedian/blob/main/sb-manager-debian-alpine.sh -o /usr/local/sbin/sb-manager && chmod 700 /usr/local/sbin/sb-manager && /usr/local/sbin/sb-manager install
 ```
+# 一键卸载命令
+```
+/usr/local/sbin/sb-manager uninstall --yes
+```
+
 在 GitHub README
 页面中，代码块右上角会显示复制图标。点击即可复制整条命令，再粘贴到 VPS
 的 SSH 终端执行。
