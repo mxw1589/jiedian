@@ -21,7 +21,21 @@ SERVICE_KIND=""
 
 msg() { printf '\n%s\n' "$*"; }
 err() { printf '\n[错误] %s\n' "$*" >&2; exit 1; }
-warn() { printf '[警告] %s\n' "$*" >&2; }
+warn() { printf '[警告] %s\\n' "$*" >&2; }
+run_with_timeout() {
+    timeout_seconds=$1
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$timeout_seconds" "$@"
+        return $?
+    fi
+    if command -v busybox >/dev/null 2>&1; then
+        busybox timeout "$timeout_seconds" "$@"
+        return $?
+    fi
+    warn '系统缺少 timeout 命令，无法为 ACME 网络请求设置超时。'
+    return 127
+}
 need_root() { [ "$(id -u)" -eq 0 ] || err '请使用 root 运行。'; }
 
 valid_domain() {
@@ -454,8 +468,8 @@ issue_cloudflare_cert() {
     # That is a normal skip, but cached ACME authorizations can also prevent
     # dns_cf_add() from running. In that case a newly rotated CF token/Zone ID
     # would not be saved for future renewals. Compare the saved credentials;
-    # if they differ, invalidate the cached authorization and force one DNS
-    # challenge so acme.sh persists the new credentials in its domain config.
+    # if they differ, deactivate the cached authorization (bounded timeout),
+    # then force one visible DNS challenge so acme.sh persists new credentials.
     if [ -n "$zone_id" ]; then
         CF_Token="$token" CF_Zone_ID="$zone_id" /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null || return 1
     else
@@ -500,12 +514,20 @@ issue_cloudflare_cert() {
     if ! acme_cf_credentials_match "$domain" "$token" "$zone_id"; then
         msg '检测到 acme.sh 尚未保存当前 Cloudflare Token / Zone ID。'
         msg '为确保后续自动续期使用新凭据，将刷新该域名的 ACME DNS 验证状态并执行一次强制 DNS 验证。'
-        /root/.acme.sh/acme.sh --deactivate -d "$domain" --server letsencrypt >/dev/null 2>&1 || warn '未能清除旧 ACME authorization；继续尝试强制 DNS 验证。'
+        msg '正在联系 Let’s Encrypt 清理旧授权；本步骤最多等待 90 秒，并显示详细进度。'
+        deactivate_status=0
+        run_with_timeout 90 /root/.acme.sh/acme.sh --deactivate -d "$domain" --server letsencrypt --debug 2 || deactivate_status=$?
+        if [ "$deactivate_status" -ne 0 ]; then
+            warn "清理旧 ACME authorization 失败或超时，退出码：$deactivate_status。"
+            warn '为避免继续使用旧的 Cloudflare DNS 授权，安装已安全停止。请检查到 Let’s Encrypt 的网络连接后重试。'
+            return 1
+        fi
+        msg '旧 ACME authorization 已清理。现在使用本次输入的 Cloudflare Token / Zone ID 执行强制 DNS 验证。'
         force_issue_status=0
         if [ -n "$zone_id" ]; then
-            CF_Token="$token" CF_Zone_ID="$zone_id" /root/.acme.sh/acme.sh --issue --force --dns dns_cf -d "$domain" --keylength ec-256 || force_issue_status=$?
+            run_with_timeout 300 env CF_Token="$token" CF_Zone_ID="$zone_id" /root/.acme.sh/acme.sh --issue --force --dns dns_cf -d "$domain" --keylength ec-256 --debug 2 || force_issue_status=$?
         else
-            CF_Token="$token" /root/.acme.sh/acme.sh --issue --force --dns dns_cf -d "$domain" --keylength ec-256 || force_issue_status=$?
+            run_with_timeout 300 env CF_Token="$token" /root/.acme.sh/acme.sh --issue --force --dns dns_cf -d "$domain" --keylength ec-256 --debug 2 || force_issue_status=$?
         fi
         [ "$force_issue_status" -eq 0 ] || {
             warn "使用新 Cloudflare 凭据强制 DNS 验证失败，退出码：$force_issue_status。"
