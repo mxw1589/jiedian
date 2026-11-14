@@ -4,6 +4,7 @@
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # Randomized collision-checked ports; Cloudflare DNS-01, HTTP-01, or manual TLS certs
 # Overlay install reuses saved state, credentials, certificates, keys, and node IDs
+# Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
 APP_DIR=/etc/sing-box
@@ -951,13 +952,15 @@ change_node_label() {
     printf '\n当前节点辨识符：%s\n' "${NODE_LABEL:-（未设置）}"
     msg '该辨识符会同时添加到 IPv4- 和 IPv6- 后面。'
     msg '示例：填写 KC 后，节点名称变为 IPv4-KC-AnyTLS、IPv6-KC-AnyTLS。'
-    msg '允许 1–20 个字符：英文字母、数字、点、下划线、短横线。留空可清除辨识符。'
+    msg '支持中文、英文字母和数字，可使用点、下划线、短横线；最多 20 个 Unicode 字符。'
+    msg '示例：香港、东京、日本01、KC、LAX-01。留空可清除辨识符。'
     ask_value '新的节点辨识符（留空清除）' ''
     new_label=$REPLY
     if [ -n "$new_label" ]; then
-        [ "${#new_label}" -le 20 ] || { warn '辨识符最长为 20 个字符。'; return 0; }
-        printf '%s\n' "$new_label" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]*$' ||
-            { warn '格式无效。请使用英文字母、数字、点、下划线或短横线，且首字符必须是字母或数字。'; return 0; }
+        label_length=$(jq -nr --arg label "$new_label" '$label | length')
+        [ "$label_length" -le 20 ] || { warn '辨识符最多 20 个字符（中文按一个字符计算）。'; return 0; }
+        jq -ne --arg label "$new_label" '$label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
+            { warn '格式无效。支持中文、英文字母、数字、点、下划线和短横线；不支持空格及特殊符号。'; return 0; }
     fi
     NODE_LABEL=$new_label
     save_state
@@ -974,36 +977,42 @@ show_nodes() {
         if [ -n "$ORIGIN_ADDR" ]; then
             origin_uri=$(uri_host "$ORIGIN_ADDR")
             tag=$(node_tag IPv4 AnyTLS)
-            ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag}"
+            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
             printf '[%s] AnyTLS | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYTLS_PORT" "$ANYTLS_LINK"
 
             tag=$(node_tag IPv4 VLESS-Reality)
-            REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag}"
+            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
             printf '[%s] VLESS + Reality | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
         fi
 
         if [ -n "$PREFERRED_IP" ]; then
             preferred_uri=$(uri_host "$PREFERRED_IP")
             tag=$(node_tag IPv4 VLESS-WS-TLS)
-            WS_LINK="vless://${WS_UUID}@${preferred_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag}"
+            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            WS_LINK="vless://${WS_UUID}@${preferred_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag_uri}"
             printf '[%s] VLESS + WebSocket + TLS | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$PREFERRED_IP" "$WS_PORT" "$WS_LINK"
         fi
 
         if [ -n "$ORIGIN_IPV6" ]; then
             origin6_uri=$(uri_host "$ORIGIN_IPV6")
             tag=$(node_tag IPv6 AnyTLS)
-            ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag}"
+            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
             printf '[%s] AnyTLS | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYTLS_PORT" "$ANYTLS6_LINK"
 
             tag=$(node_tag IPv6 VLESS-Reality)
-            REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag}"
+            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
             printf '[%s] VLESS + Reality | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$REALITY_PORT" "$REALITY6_LINK"
         fi
 
         if [ -n "$PREFERRED_IPV6" ]; then
             preferred6_uri=$(uri_host "$PREFERRED_IPV6")
             tag=$(node_tag IPv6 VLESS-WS-TLS)
-            WS6_LINK="vless://${WS_UUID}@${preferred6_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag}"
+            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            WS6_LINK="vless://${WS_UUID}@${preferred6_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag_uri}"
             printf '[%s] VLESS + WebSocket + TLS | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$PREFERRED_IPV6" "$WS_PORT" "$WS6_LINK"
         fi
     } > "$nodes_tmp"
