@@ -3,6 +3,7 @@
 # AnyTLS + VLESS/WS/TLS + VLESS/Reality
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # Randomized collision-checked ports; Cloudflare DNS-01, HTTP-01, or manual TLS certs
+# Overlay install reuses saved state, credentials, certificates, keys, and node IDs
 set -eu
 
 APP_DIR=/etc/sing-box
@@ -14,6 +15,9 @@ KEY_FILE="$CERT_DIR/privkey.pem"
 CF_TOKEN_FILE="$APP_DIR/cloudflare.token"
 CF_ZONE_ID_FILE="$APP_DIR/cloudflare-zone-id"
 CF_ZONE_NAME=""
+BBR_SYSCTL_FILE=/etc/sysctl.d/99-sb-manager-bbr.conf
+BBR_MODULES_FILE=/etc/modules-load.d/sb-manager-bbr.conf
+BBR_BACKUP_FILE="$APP_DIR/bbr-previous.conf"
 RELOAD_HOOK=/usr/local/sbin/sing-box-cert-reload
 SB_BIN="$(command -v sing-box 2>/dev/null || printf /usr/bin/sing-box)"
 OS_FAMILY=""
@@ -21,7 +25,7 @@ SERVICE_KIND=""
 
 msg() { printf '\n%s\n' "$*"; }
 err() { printf '\n[错误] %s\n' "$*" >&2; exit 1; }
-warn() { printf '[警告] %s\\n' "$*" >&2; }
+warn() { printf '[警告] %s\n' "$*" >&2; }
 run_with_timeout() {
     timeout_seconds=$1
     shift
@@ -37,6 +41,227 @@ run_with_timeout() {
     return 127
 }
 need_root() { [ "$(id -u)" -eq 0 ] || err '请使用 root 运行。'; }
+
+read_sysctl_value() {
+    key=$1
+    if command -v sysctl >/dev/null 2>&1; then
+        sysctl -n "$key" 2>/dev/null && return 0
+    fi
+    proc_path="/proc/sys/$(printf '%s' "$key" | tr '.' '/')"
+    [ -r "$proc_path" ] && cat "$proc_path" 2>/dev/null
+}
+
+bbr_available() {
+    available=$(read_sysctl_value net.ipv4.tcp_available_congestion_control 2>/dev/null || true)
+    case " $available " in
+        *" bbr "*) return 0 ;;
+    esac
+    return 1
+}
+
+write_alpine_sysctl_block() {
+    sysctl_conf=/etc/sysctl.conf
+    tmp_sysctl="${sysctl_conf}.sb-manager.$$"
+    [ -f "$sysctl_conf" ] || : > "$sysctl_conf"
+    awk '
+        $0 == "# BEGIN SB-MANAGER BBR" { skip=1; next }
+        $0 == "# END SB-MANAGER BBR" { skip=0; next }
+        !skip { print }
+    ' "$sysctl_conf" > "$tmp_sysctl"
+    {
+        cat "$tmp_sysctl"
+        printf '%s\n' '# BEGIN SB-MANAGER BBR'
+        if [ "$BBR_FQ_ENABLED" = 1 ]; then
+            printf '%s\n' 'net.core.default_qdisc=fq'
+        fi
+        printf '%s\n' 'net.ipv4.tcp_congestion_control=bbr' '# END SB-MANAGER BBR'
+    } > "${tmp_sysctl}.new"
+    cat "${tmp_sysctl}.new" > "$sysctl_conf"
+    rm -f "$tmp_sysctl" "${tmp_sysctl}.new"
+}
+
+write_alpine_modules_block() {
+    modules_conf=/etc/modules
+    tmp_modules="${modules_conf}.sb-manager.$$"
+    [ -f "$modules_conf" ] || : > "$modules_conf"
+    awk '
+        $0 == "# BEGIN SB-MANAGER BBR" { skip=1; next }
+        $0 == "# END SB-MANAGER BBR" { skip=0; next }
+        !skip { print }
+    ' "$modules_conf" > "$tmp_modules"
+    {
+        cat "$tmp_modules"
+        printf '%s\n' '# BEGIN SB-MANAGER BBR'
+        for module in $BBR_MODULES; do
+            printf '%s\n' "$module"
+        done
+        printf '%s\n' '# END SB-MANAGER BBR'
+    } > "${tmp_modules}.new"
+    cat "${tmp_modules}.new" > "$modules_conf"
+    rm -f "$tmp_modules" "${tmp_modules}.new"
+}
+
+persist_bbr_modules() {
+    [ -n "$BBR_MODULES" ] || return 0
+    if [ "$OS_FAMILY" = alpine ] || [ -f /etc/alpine-release ]; then
+        write_alpine_modules_block
+    else
+        install -d -m 0755 /etc/modules-load.d
+        modules_tmp="${BBR_MODULES_FILE}.tmp.$$"
+        : > "$modules_tmp"
+        for module in $BBR_MODULES; do
+            printf '%s\n' "$module" >> "$modules_tmp"
+        done
+        chmod 0644 "$modules_tmp"
+        mv "$modules_tmp" "$BBR_MODULES_FILE"
+    fi
+}
+
+remove_bbr_modules_config() {
+    rm -f "$BBR_MODULES_FILE"
+    if [ -f /etc/alpine-release ] && [ -f /etc/modules ]; then
+        tmp_modules="/etc/modules.sb-manager.$$"
+        awk '
+            $0 == "# BEGIN SB-MANAGER BBR" { skip=1; next }
+            $0 == "# END SB-MANAGER BBR" { skip=0; next }
+            !skip { print }
+        ' /etc/modules > "$tmp_modules"
+        cat "$tmp_modules" > /etc/modules
+        rm -f "$tmp_modules"
+    fi
+}
+
+enable_bbr() {
+    msg '正在检查并尝试启用 TCP BBR 加速……'
+    command -v sysctl >/dev/null 2>&1 || {
+        warn '系统没有可用的 sysctl 命令，无法自动配置 BBR；sing-box 安装将继续。'
+        return 0
+    }
+
+    BBR_MODULES=""
+    if command -v modprobe >/dev/null 2>&1; then
+        if modprobe tcp_bbr >/dev/null 2>&1; then
+            BBR_MODULES="tcp_bbr"
+        fi
+        if modprobe sch_fq >/dev/null 2>&1; then
+            BBR_MODULES="$BBR_MODULES sch_fq"
+        fi
+    fi
+    if ! bbr_available; then
+        warn '当前 VPS 内核没有提供 BBR 拥塞控制算法（tcp_available_congestion_control 中找不到 bbr）。'
+        warn '不会强行修改网络参数；请向 VPS 商家确认内核是否启用 CONFIG_TCP_CONG_BBR，或升级到支持 BBR 的内核。'
+        return 0
+    fi
+
+    if [ ! -s "$BBR_BACKUP_FILE" ]; then
+        previous_cc=$(read_sysctl_value net.ipv4.tcp_congestion_control 2>/dev/null || true)
+        previous_qdisc=$(read_sysctl_value net.core.default_qdisc 2>/dev/null || true)
+        if [ -n "$previous_cc" ] && [ -n "$previous_qdisc" ]; then
+            umask 077
+            {
+                printf 'previous_cc=%s\n' "$previous_cc"
+                printf 'previous_qdisc=%s\n' "$previous_qdisc"
+            } > "$BBR_BACKUP_FILE"
+            chmod 0600 "$BBR_BACKUP_FILE"
+        else
+            warn '无法读取原有 TCP 拥塞控制参数；为避免卸载时无法恢复，跳过 BBR 自动修改。'
+            return 0
+        fi
+    fi
+
+    if command -v modprobe >/dev/null 2>&1; then
+        modprobe sch_fq >/dev/null 2>&1 || true
+    fi
+
+    BBR_FQ_ENABLED=0
+    if sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1; then
+        current_qdisc=$(read_sysctl_value net.core.default_qdisc 2>/dev/null || true)
+        [ "$current_qdisc" = fq ] && BBR_FQ_ENABLED=1
+    else
+        warn '内核不支持 fq 默认队列规则，继续尝试启用 BBR；可能无法获得完整 pacing 效果。'
+    fi
+
+    if ! sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1; then
+        previous_qdisc=$(sed -n 's/^previous_qdisc=//p' "$BBR_BACKUP_FILE" | tail -n 1)
+        [ -n "$previous_qdisc" ] && sysctl -w "net.core.default_qdisc=$previous_qdisc" >/dev/null 2>&1 || true
+        warn '内核拒绝启用 TCP BBR；已恢复原默认 qdisc，未写入 BBR 持久化配置。'
+        return 0
+    fi
+    current_cc=$(read_sysctl_value net.ipv4.tcp_congestion_control 2>/dev/null || true)
+    if [ "$current_cc" != bbr ]; then
+        warn 'BBR 设置后校验未通过；不会写入持久化配置。'
+        return 0
+    fi
+
+    install -d -m 0755 /etc/sysctl.d
+    sysctl_tmp="${BBR_SYSCTL_FILE}.tmp.$$"
+    {
+        printf '%s\n' '# Managed by sb-manager; remove this file to disable these settings.'
+        if [ "$BBR_FQ_ENABLED" = 1 ]; then
+            printf '%s\n' 'net.core.default_qdisc=fq'
+        fi
+        printf '%s\n' 'net.ipv4.tcp_congestion_control=bbr'
+    } > "$sysctl_tmp"
+    chmod 0644 "$sysctl_tmp"
+    mv "$sysctl_tmp" "$BBR_SYSCTL_FILE"
+
+    if [ "$OS_FAMILY" = alpine ] || [ -f /etc/alpine-release ]; then
+        write_alpine_sysctl_block
+    fi
+    persist_bbr_modules
+
+    msg 'TCP BBR 已启用，并已配置开机加载所需内核模块及持久化 sysctl 参数。'
+    printf '当前 TCP congestion control：%s\n' "$current_cc"
+    printf '当前默认 qdisc：%s\n' "$(read_sysctl_value net.core.default_qdisc 2>/dev/null || printf unknown)"
+}
+
+show_bbr_status() {
+    current_cc=$(read_sysctl_value net.ipv4.tcp_congestion_control 2>/dev/null || printf unknown)
+    current_qdisc=$(read_sysctl_value net.core.default_qdisc 2>/dev/null || printf unknown)
+    available=$(read_sysctl_value net.ipv4.tcp_available_congestion_control 2>/dev/null || printf unknown)
+    printf '\n========== TCP BBR 状态 ==========\n'
+    printf '当前拥塞控制算法：%s\n' "$current_cc"
+    printf '当前默认队列规则：%s\n' "$current_qdisc"
+    printf '内核可用算法：%s\n' "$available"
+    if [ "$current_cc" = bbr ]; then
+        printf '%s\n' '状态：BBR 已启用'
+    else
+        printf '%s\n' '状态：BBR 未启用'
+    fi
+    if [ -f "$BBR_SYSCTL_FILE" ]; then
+        printf '持久化配置：%s\n' "$BBR_SYSCTL_FILE"
+    else
+        printf '%s\n' '持久化配置：未找到本脚本配置文件'
+    fi
+}
+
+restore_bbr() {
+    msg '正在恢复安装前的 TCP 拥塞控制设置……'
+    if [ -s "$BBR_BACKUP_FILE" ] && command -v sysctl >/dev/null 2>&1; then
+        previous_cc=$(sed -n 's/^previous_cc=//p' "$BBR_BACKUP_FILE" | tail -n 1)
+        previous_qdisc=$(sed -n 's/^previous_qdisc=//p' "$BBR_BACKUP_FILE" | tail -n 1)
+        if [ -n "$previous_qdisc" ]; then
+            sysctl -w "net.core.default_qdisc=$previous_qdisc" >/dev/null 2>&1 || warn "无法恢复原默认 qdisc：$previous_qdisc"
+        fi
+        if [ -n "$previous_cc" ]; then
+            sysctl -w "net.ipv4.tcp_congestion_control=$previous_cc" >/dev/null 2>&1 || warn "无法恢复原 TCP 拥塞控制算法：$previous_cc"
+        fi
+    fi
+    rm -f "$BBR_SYSCTL_FILE"
+    remove_bbr_modules_config
+    if [ -f /etc/alpine-release ] && [ -f /etc/sysctl.conf ]; then
+        tmp_sysctl="/etc/sysctl.conf.sb-manager.$$"
+        awk '
+            $0 == "# BEGIN SB-MANAGER BBR" { skip=1; next }
+            $0 == "# END SB-MANAGER BBR" { skip=0; next }
+            !skip { print }
+        ' /etc/sysctl.conf > "$tmp_sysctl"
+        cat "$tmp_sysctl" > /etc/sysctl.conf
+        rm -f "$tmp_sysctl"
+    fi
+    msg 'BBR 持久化配置已移除；已尝试恢复原有运行时参数。'
+}
+
 
 valid_domain() {
     v=$1
@@ -243,7 +468,7 @@ install_dependencies_and_core() {
         OS_FAMILY=alpine
         msg '检测到 Alpine Linux，安装 sing-box 和依赖……'
         apk update
-        apk add --no-cache ca-certificates curl jq openssl iproute2 tar gzip
+        apk add --no-cache ca-certificates curl jq openssl iproute2 tar gzip kmod
         if ! apk add --no-cache sing-box; then
             warn '当前 Alpine 仓库没有 sing-box 包，尝试安装官方 Linux 发布版。'
             tag=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r '.tag_name')
@@ -266,7 +491,7 @@ install_dependencies_and_core() {
         OS_FAMILY=debian
         msg '检测到 Debian，安装 sing-box 官方仓库和依赖……'
         apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq openssl iproute2 gpg
+        DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq openssl iproute2 gpg procps kmod
         install -d -m 0755 /etc/apt/keyrings
         curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
         chmod a+r /etc/apt/keyrings/sagernet.asc
@@ -753,6 +978,112 @@ show_nodes() {
     printf '===========================================\n'
 }
 
+
+overlay_install() {
+    need_root
+    msg '========== sing-box 覆盖安装（保留现有配置） =========='
+
+    # The existing manager state and secret files are authoritative.
+    # Never ask for domains, SNI values, UUIDs, ports, or Cloudflare credentials
+    # during an overlay installation.
+    [ -s "$STATE_FILE" ] || err '找不到现有 manager.json，不能执行覆盖安装；请使用首次安装向导。'
+    [ -s "$CONFIG_FILE" ] || warn '现有 config.json 不存在或为空；将根据已保存状态重新生成。'
+
+    [ -n "$TLS_DOMAIN" ] && valid_cert_domain "$TLS_DOMAIN" ||
+        err '已保存的 TLS 证书域名无效；为避免覆盖错误配置，已停止。'
+    [ -n "$WS_HOST" ] && valid_domain "$WS_HOST" ||
+        err '已保存的 WS Host 无效；为避免覆盖错误配置，已停止。'
+    [ -n "$REALITY_SNI" ] && valid_domain "$REALITY_SNI" ||
+        err '已保存的 Reality SNI 无效；为避免覆盖错误配置，已停止。'
+    [ -n "$ANYTLS_PASSWORD" ] || err '现有 AnyTLS 密码缺失，不能安全覆盖安装。'
+    [ -n "$WS_UUID" ] || err '现有 WS UUID 缺失，不能安全覆盖安装。'
+    [ -n "$REALITY_UUID" ] || err '现有 Reality UUID 缺失，不能安全覆盖安装。'
+    [ -n "$REALITY_PRIVATE" ] && [ -n "$REALITY_PUBLIC" ] ||
+        err '现有 Reality 密钥缺失，不能安全覆盖安装。'
+    [ -n "$REALITY_SID" ] && [ -n "$WS_PATH" ] ||
+        err '现有 Reality short ID 或 WS 路径缺失，不能安全覆盖安装。'
+    valid_port "$ANYTLS_PORT" && valid_ws_port "$WS_PORT" && valid_port "$REALITY_PORT" ||
+        err '已保存的端口配置无效，不能安全覆盖安装。'
+    [ "$ANYTLS_PORT" != "$WS_PORT" ] &&
+    [ "$ANYTLS_PORT" != "$REALITY_PORT" ] &&
+    [ "$WS_PORT" != "$REALITY_PORT" ] ||
+        err '已保存的三个协议端口存在重复，不能安全覆盖安装。'
+    [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] ||
+        err '已保存的源站地址为空，不能安全覆盖安装。'
+    [ -n "$PREFERRED_IP" ] || [ -n "$PREFERRED_IPV6" ] ||
+        err '已保存的 WS 优选地址为空，不能安全覆盖安装。'
+
+    case "$CERT_MODE" in
+        cloudflare)
+            [ -n "$CF_ZONE_NAME" ] && valid_cert_domain "$CF_ZONE_NAME" ||
+                err '已保存的 Cloudflare DNS 区域无效；没有重新询问或覆盖任何配置。'
+            domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" ||
+                err "已保存的 TLS 域名不属于 Cloudflare 区域 $CF_ZONE_NAME；覆盖安装已停止。"
+            [ -s "$CF_TOKEN_FILE" ] ||
+                err "Cloudflare Token 文件不存在：$CF_TOKEN_FILE。为避免丢失凭据，本次没有重新询问 Token。请先恢复原 Token 文件。"
+            chmod 0600 "$CF_TOKEN_FILE"
+            chown root:root "$CF_TOKEN_FILE"
+            if [ -s "$CF_ZONE_ID_FILE" ]; then
+                saved_zone_id=$(cat "$CF_ZONE_ID_FILE")
+                case "$saved_zone_id" in *[!A-Fa-f0-9]*|'') err '已保存的 Cloudflare Zone ID 格式无效。' ;; esac
+                [ "${#saved_zone_id}" -eq 32 ] || err '已保存的 Cloudflare Zone ID 必须是 32 位十六进制字符串。'
+                chmod 0600 "$CF_ZONE_ID_FILE"
+                chown root:root "$CF_ZONE_ID_FILE"
+            fi
+            ;;
+        standalone|manual) ;;
+        *) err "不支持的已保存证书模式：$CERT_MODE" ;;
+    esac
+
+    msg '检测到已有安装：将保留原域名、SNI、WS Host、Cloudflare Token、Zone ID、证书、UUID、密码、Reality 密钥、端口和节点路径。'
+    msg "TLS 域名：$TLS_DOMAIN"
+    msg "Reality SNI：$REALITY_SNI"
+    msg "Cloudflare 区域：${CF_ZONE_NAME:-不适用}"
+    msg 'Cloudflare Token：已保留（不会显示，也不会重新询问）。'
+
+    install_dependencies_and_core
+    ensure_service_account
+    enable_bbr
+    create_service
+    setup_reload_hook
+
+    # Reuse the installed certificate. Do not call --issue, --force, or
+    # --deactivate here: overlay installation must never trigger ACME issuance.
+    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$TLS_DOMAIN" ||
+        err '现有 TLS 证书或私钥无效/缺失。为避免重新申请证书或覆盖凭据，覆盖安装已停止。'
+
+    case "$CERT_MODE" in
+        cloudflare)
+            if [ -x /root/.acme.sh/acme.sh ]; then
+                start_cron
+            else
+                warn '找不到现有 acme.sh；当前证书仍会继续使用，但自动续期尚未恢复。覆盖安装不会重新申请证书。'
+            fi
+            ;;
+        standalone)
+            if [ -x /root/.acme.sh/acme.sh ]; then
+                start_cron
+            else
+                warn '找不到现有 acme.sh；当前证书仍会继续使用，但自动续期尚未恢复。'
+            fi
+            ;;
+        manual)
+            msg '当前使用手动证书；覆盖安装不会更换证书。'
+            ;;
+    esac
+
+    msg '正在根据原有配置重建 sing-box 配置……'
+    build_config || err '覆盖安装未能应用原有配置。旧配置已按构建流程尝试回滚，请检查服务日志。'
+
+    msg '========== 覆盖安装完成 =========='
+    msg '所有原有节点参数已保留。现在显示全部可用节点：'
+    show_nodes
+    msg '请确认云厂商安全组和系统防火墙仍放行以下 TCP 端口：'
+    printf '  %s/tcp\n  %s/tcp\n  %s/tcp\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT"
+    msg '管理命令：/usr/local/sbin/sb-manager'
+    msg '节点文件：/etc/sing-box/nodes.txt'
+}
+
 install_wizard() {
     need_root
     PREVIOUS_ANYTLS_PORT=${ANYTLS_PORT:-}
@@ -760,6 +1091,7 @@ install_wizard() {
     PREVIOUS_REALITY_PORT=${REALITY_PORT:-}
     install_dependencies_and_core
     ensure_service_account
+    enable_bbr
     create_service
     setup_reload_hook
 
@@ -1185,6 +1517,7 @@ uninstall_manager() {
     fi
 
     remove_acme_cron_entry
+    restore_bbr
 
     msg '正在删除 sing-box 配置、证书副本和管理脚本……'
     rm -f "$RELOAD_HOOK"
@@ -1225,6 +1558,7 @@ show_logs() {
 menu() {
     need_root
     load_state
+    enable_bbr
     while :; do
         printf '\n========== sing-box 节点管理 ==========' 
         printf '\n源站 IPv4/域名：%s | 源站 IPv6：%s' "${ORIGIN_ADDR:-未设置}" "${ORIGIN_IPV6:-未设置}"
@@ -1245,6 +1579,7 @@ menu() {
         printf '9. 查看服务状态\n'
         printf '10. 查看最近日志\n'
         printf '11. 卸载 sing-box 和本脚本配置\n'
+        printf '12. 查看 TCP BBR 加速状态\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -1260,6 +1595,7 @@ menu() {
             9) service_status ;;
             10) show_logs ;;
             11) uninstall_manager || true; exit 0 ;;
+            12) show_bbr_status ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac
@@ -1282,6 +1618,23 @@ install_manager_command() {
 
 main() {
     need_root
+    if [ "${1:-}" = bbr ] || [ "${1:-}" = bbr-status ]; then
+        if [ -f /etc/alpine-release ]; then
+            OS_FAMILY=alpine
+            apk add --no-cache kmod >/dev/null
+        elif [ -f /etc/debian_version ]; then
+            OS_FAMILY=debian
+            DEBIAN_FRONTEND=noninteractive apt-get install -y procps kmod >/dev/null
+        else
+            err '仅支持 Debian 和 Alpine Linux。'
+        fi
+        install -d -m 0750 "$APP_DIR"
+        if [ "${1:-}" = bbr ]; then
+            enable_bbr
+        fi
+        show_bbr_status
+        return 0
+    fi
     if [ "${1:-}" = uninstall ] || [ "${1:-}" = remove ]; then
         uninstall_manager "${2:-}"
         return 0
@@ -1291,7 +1644,10 @@ main() {
         load_state
         if [ -f /etc/alpine-release ]; then OS_FAMILY=alpine; SERVICE_KIND=openrc; else OS_FAMILY=debian; SERVICE_KIND=systemd; fi
         SB_BIN="$(command -v sing-box 2>/dev/null || printf /usr/bin/sing-box)"
-        case "${1:-}" in install|--install) install_wizard ;; *) menu ;; esac
+        case "${1:-}" in
+            install|--install) overlay_install ;;
+            *) menu ;;
+        esac
     else
         install_wizard
     fi
