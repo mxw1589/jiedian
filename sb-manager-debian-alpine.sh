@@ -1,7 +1,8 @@
 #!/bin/sh
 # sing-box multi-protocol manager for Debian + Alpine
 # AnyTLS + VLESS/WS/TLS + VLESS/Reality
-# Random high-port allocation with occupied-port detection and retry
+# IPv4 + IPv6 dual-stack listeners and separate address-family node links
+# Randomized collision-checked ports; Cloudflare DNS-01, HTTP-01, or manual TLS certs
 set -eu
 
 APP_DIR=/etc/sing-box
@@ -12,6 +13,7 @@ CERT_FILE="$CERT_DIR/fullchain.pem"
 KEY_FILE="$CERT_DIR/privkey.pem"
 CF_TOKEN_FILE="$APP_DIR/cloudflare.token"
 CF_ZONE_ID_FILE="$APP_DIR/cloudflare-zone-id"
+CF_ZONE_NAME=""
 RELOAD_HOOK=/usr/local/sbin/sing-box-cert-reload
 SB_BIN="$(command -v sing-box 2>/dev/null || printf /usr/bin/sing-box)"
 OS_FAMILY=""
@@ -31,12 +33,57 @@ valid_domain() {
     printf '%s\n' "$v" | awk -F. 'NF >= 2 { for (i=1;i<=NF;i++) if (length($i)<1 || length($i)>63 || $i ~ /^-/ || $i ~ /-$/) exit 1; exit 0 } { exit 1 }'
 }
 
+valid_cert_domain() {
+    valid_domain "$1" || return 1
+    # Do not let the known Reality default / third-party examples be mistaken
+    # for a certificate hostname. Reality SNI is validated separately.
+    cert_domain_lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    case "$cert_domain_lc" in
+        bing.com|www.bing.com|microsoft.com|www.microsoft.com) return 1 ;;
+    esac
+    # A dotted numeric address is not a DNS hostname suitable for a public TLS certificate.
+    case "$1" in *[!0-9.]*) return 0 ;; *) return 1 ;; esac
+}
+
+# Ensure a certificate hostname is a subdomain of the Cloudflare zone the
+# operator actually controls. This catches common mistakes such as entering
+# www.bing.com as the TLS certificate domain while managing example.com.
+domain_belongs_to_zone() {
+    cert_domain=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    zone_domain=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+    [ -n "$cert_domain" ] && [ -n "$zone_domain" ] || return 1
+    case "$cert_domain" in
+        "$zone_domain"|*."$zone_domain") return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+confirm_domain_control() {
+    domain_to_confirm=$1
+    printf '\n即将为域名 %s 申请 TLS 证书。\n' "$domain_to_confirm"
+    printf '请确认这是你拥有或获准管理的域名，而不是 www.bing.com / www.microsoft.com 等第三方域名。\n'
+    ask_value '确认请输入大写 YES' ''
+    [ "$REPLY" = "YES" ] || { warn '未确认域名所有权，已停止证书申请。'; return 1; }
+    return 0
+}
+
 valid_host() {
     v=$1
     [ -n "$v" ] || return 1
     [ "${#v}" -le 253 ] || return 1
     case "$v" in *[!A-Za-z0-9.:-]*|.*|*..*|*.) return 1 ;; esac
     return 0
+}
+
+valid_main_address() {
+    case "$1" in *:*) return 1 ;; esac
+    valid_host "$1"
+}
+
+valid_ipv6_address() {
+    case "$1" in *:*) ;; *) return 1 ;; esac
+    command -v ip >/dev/null 2>&1 || return 1
+    ip -6 route get "$1" >/dev/null 2>&1
 }
 
 valid_port() {
@@ -49,47 +96,39 @@ valid_ws_port() {
     case "$1" in 2053|2083|2087|2096|8443) return 0 ;; *) return 1 ;; esac
 }
 
-# 检查 TCP 监听端口。ss 的本地地址可能是 IPv4、IPv6 或通配地址。
 port_listening() {
     p=$1
-    if command -v ss >/dev/null 2>&1; then
-        ss -H -ltn 2>/dev/null | awk -v p="$p" '{a=$4; sub(/^.*:/,"",a); if (a==p) found=1} END {exit !found}'
-    elif command -v netstat >/dev/null 2>&1; then
-        netstat -lnt 2>/dev/null | awk -v p="$p" '{a=$4; sub(/^.*:/,"",a); if (a==p) found=1} END {exit !found}'
-    else
-        # 安装流程会安装 iproute2；没有 ss/netstat 时采取保守策略。
-        return 1
-    fi
+    ss -H -lnt 2>/dev/null | awk -v suffix=":$p" '$4 ~ (suffix "$") {found=1} END {exit !found}'
 }
 
-port_in_list() {
-    needle=" $1 "
-    haystack=" ${2-} "
-    case "$haystack" in *"$needle"*) return 0 ;; *) return 1 ;; esac
+random_between() {
+    min=$1
+    max=$2
+    span=$((max - min + 1))
+    random_value=$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d '[:space:]')
+    case "$random_value" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s\n' "$((min + (random_value % span)))"
 }
 
-random_u32() {
-    n=$(od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' ')
-    case "$n" in ''|*[!0-9]*) n=$(date +%s) ;; esac
-    printf '%s\n' "$n"
-}
-
-candidate_port_free() {
-    p=$1
-    if port_in_list "$p" "${EXCLUDE_PORTS-} ${USED_PORTS-}"; then return 1; fi
-    if port_listening "$p"; then return 1; fi
+port_is_available() {
+    candidate=$1
+    shift
+    for blocked in "$@"; do
+        [ -n "$blocked" ] || continue
+        [ "$candidate" = "$blocked" ] && return 1
+    done
+    port_listening "$candidate" && return 1
     return 0
 }
 
-pick_random_port_range() {
-    low=$1
-    high=$2
-    span=$((high - low + 1))
+pick_random_range_port() {
+    min=$1
+    max=$2
+    shift 2
     tries=0
-    while [ "$tries" -lt 1200 ]; do
-        n=$(random_u32)
-        candidate=$((low + n % span))
-        if candidate_port_free "$candidate"; then
+    while [ "$tries" -lt 1000 ]; do
+        candidate=$(random_between "$min" "$max") || return 1
+        if port_is_available "$candidate" "$@"; then
             printf '%s\n' "$candidate"
             return 0
         fi
@@ -99,38 +138,54 @@ pick_random_port_range() {
 }
 
 pick_random_ws_port() {
-    # Cloudflare 默认代理的 HTTPS 端口；均高于 1024。
-    available=""
-    for p in 2053 2083 2087 2096 8443; do
-        if candidate_port_free "$p"; then available="$available $p"; fi
-    done
-    set -- $available
-    count=$#
-    [ "$count" -gt 0 ] || return 1
-    n=$(random_u32)
-    wanted=$((n % count + 1))
-    i=1
-    for p do
-        if [ "$i" -eq "$wanted" ]; then
-            printf '%s\n' "$p"
+    tries=0
+    while [ "$tries" -lt 100 ]; do
+        index=$(random_between 1 5) || return 1
+        case "$index" in
+            1) candidate=2053 ;;
+            2) candidate=2083 ;;
+            3) candidate=2087 ;;
+            4) candidate=2096 ;;
+            5) candidate=8443 ;;
+        esac
+        if port_is_available "$candidate" "$@"; then
+            printf '%s\n' "$candidate"
             return 0
         fi
-        i=$((i + 1))
+        tries=$((tries + 1))
     done
     return 1
 }
 
 choose_random_ports() {
-    EXCLUDE_PORTS="${PREVIOUS_PORTS-}"
-    USED_PORTS=""
-    ANYTLS_PORT=$(pick_random_port_range 10000 65535) || err '没有找到可用的 AnyTLS 高位 TCP 端口。'
-    USED_PORTS="$USED_PORTS $ANYTLS_PORT"
-    WS_PORT=$(pick_random_ws_port) || err 'Cloudflare 支持的 HTTPS 高位端口均不可用，无法分配 WS TLS 端口。'
-    USED_PORTS="$USED_PORTS $WS_PORT"
-    REALITY_PORT=$(pick_random_port_range 10000 65535) || err '没有找到可用的 Reality 高位 TCP 端口。'
-    USED_PORTS="$USED_PORTS $REALITY_PORT"
-    [ "$ANYTLS_PORT" != "$WS_PORT" ] && [ "$ANYTLS_PORT" != "$REALITY_PORT" ] && [ "$WS_PORT" != "$REALITY_PORT" ] || err '随机端口发生重复，请重试。'
-    msg "随机端口分配完成：AnyTLS=$ANYTLS_PORT / WS-TLS=$WS_PORT / Reality=$REALITY_PORT"
+    previous_anytls=${1-}
+    previous_ws=${2-}
+    previous_reality=${3-}
+
+    new_anytls=$(pick_random_range_port 10000 65535 \
+        "$previous_anytls" "$previous_ws" "$previous_reality") ||
+        err '无法找到可用的 AnyTLS 随机端口。'
+
+    new_ws=$(pick_random_ws_port \
+        "$previous_anytls" "$previous_ws" "$previous_reality" "$new_anytls") ||
+        err 'Cloudflare 兼容的 WS TLS 端口均被占用，无法分配新端口。'
+
+    new_reality=$(pick_random_range_port 10000 65535 \
+        "$previous_anytls" "$previous_ws" "$previous_reality" "$new_anytls" "$new_ws") ||
+        err '无法找到可用的 Reality 随机端口。'
+
+    ANYTLS_PORT=$new_anytls
+    WS_PORT=$new_ws
+    REALITY_PORT=$new_reality
+    msg "随机端口分配完成：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，Reality=$REALITY_PORT"
+}
+
+ipv6_kernel_enabled() {
+    [ -r /proc/net/if_inet6 ] || return 1
+    if [ -r /proc/sys/net/ipv6/conf/all/disable_ipv6 ]; then
+        [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" = "0" ] || return 1
+    fi
+    return 0
 }
 
 uri_host() {
@@ -264,12 +319,9 @@ EOF_SERVICE
 
 service_restart() {
     if [ "$SERVICE_KIND" = systemd ]; then
-        systemctl restart sing-box || return 1
-        systemctl is-active --quiet sing-box
+        systemctl restart sing-box
     elif [ "$SERVICE_KIND" = openrc ]; then
-        rc-service sing-box restart >/dev/null 2>&1 || rc-service sing-box start >/dev/null 2>&1 || return 1
-        sleep 1
-        rc-service sing-box status >/dev/null 2>&1
+        rc-service sing-box restart >/dev/null 2>&1 || rc-service sing-box start
     else
         err '服务管理器尚未初始化。'
     fi
@@ -320,7 +372,7 @@ start_cron() {
 
 install_acme() {
     if [ ! -x /root/.acme.sh/acme.sh ]; then
-        msg '安装 acme.sh（用于 DNS-01 证书和自动续期）……'
+        msg '安装 acme.sh（用于自动申请和续期证书）……'
         if [ -n "$1" ]; then
             curl -fsSL https://get.acme.sh | HOME=/root sh -s email="$1"
         else
@@ -333,7 +385,14 @@ install_acme() {
 
 issue_cloudflare_cert() {
     domain=$1
-    [ -s "$CF_TOKEN_FILE" ] || err 'Cloudflare API Token 文件不存在。'
+    valid_cert_domain "$domain" || { warn '证书域名格式无效；请填写你控制的 DNS 域名，不要填写 IP 地址。'; return 1; }
+    [ -n "$CF_ZONE_NAME" ] || { warn '缺少 Cloudflare DNS 区域主域名；请重新运行安装向导并填写你管理的域名。'; return 1; }
+    if ! domain_belongs_to_zone "$domain" "$CF_ZONE_NAME"; then
+        warn "证书域名 $domain 不属于 Cloudflare 区域 $CF_ZONE_NAME。"
+        warn '请填写你自己管理的域名下的主机名，例如 node.example.com；不要把 Reality SNI（例如 www.bing.com）填到 TLS 证书域名。'
+        return 1
+    fi
+    [ -s "$CF_TOKEN_FILE" ] || { warn 'Cloudflare API Token 文件不存在。'; return 1; }
     token=$(cat "$CF_TOKEN_FILE")
     [ -n "$token" ] || err 'Cloudflare API Token 为空。'
     install_acme ''
@@ -353,21 +412,40 @@ issue_cloudflare_cert() {
     chown root:sing-box "$CERT_FILE" "$KEY_FILE"
     chmod 0644 "$CERT_FILE"
     chmod 0640 "$KEY_FILE"
-    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$domain"
+    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$domain" || return 1
+}
+
+issue_http_cert() {
+    domain=$1
+    if port_listening 80; then
+        warn 'HTTP-01 自动验证需要 TCP 80 端口空闲。请暂时停止占用 80 端口的服务，或改用 Cloudflare DNS-01 / 手动证书。'
+        return 1
+    fi
+    install_acme ''
+    msg "通过 Let's Encrypt HTTP-01 为 $domain 申请/更新证书（不需要 Cloudflare Token）……"
+    /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null || return 1
+    /root/.acme.sh/acme.sh --issue --standalone -d "$domain" --keylength ec-256 || return 1
+    /root/.acme.sh/acme.sh --install-cert -d "$domain" --ecc \
+        --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$RELOAD_HOOK" || return 1
+    chown root:sing-box "$CERT_FILE" "$KEY_FILE"
+    chmod 0644 "$CERT_FILE"
+    chmod 0640 "$KEY_FILE"
+    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$domain" || return 1
 }
 
 check_cert_pair() {
     cert=$1
     key=$2
     domain=$3
-    [ -r "$cert" ] || err "证书文件不可读：$cert"
-    [ -r "$key" ] || err "私钥文件不可读：$key"
-    openssl x509 -in "$cert" -noout >/dev/null 2>&1 || err '证书 PEM 格式无效。'
-    openssl pkey -in "$key" -noout >/dev/null 2>&1 || err '私钥 PEM 格式无效或带有不受支持的口令。'
-    openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1 || err "证书不包含域名 $domain。"
-    cert_pub=$(openssl x509 -in "$cert" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum | awk '{print $1}')
-    key_pub=$(openssl pkey -in "$key" -pubout -outform DER | sha256sum | awk '{print $1}')
-    [ "$cert_pub" = "$key_pub" ] || err '证书和私钥不匹配。'
+    [ -r "$cert" ] || { warn "证书文件不可读：$cert"; return 1; }
+    [ -r "$key" ] || { warn "私钥文件不可读：$key"; return 1; }
+    openssl x509 -in "$cert" -noout >/dev/null 2>&1 || { warn '证书 PEM 格式无效。'; return 1; }
+    openssl pkey -in "$key" -noout >/dev/null 2>&1 || { warn '私钥 PEM 格式无效或带有不受支持的口令。'; return 1; }
+    openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1 || { warn "证书不包含域名 $domain。"; return 1; }
+    cert_pub=$(openssl x509 -in "$cert" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum | awk '{print $1}') || return 1
+    key_pub=$(openssl pkey -in "$key" -pubout -outform DER | sha256sum | awk '{print $1}') || return 1
+    [ "$cert_pub" = "$key_pub" ] || { warn '证书和私钥不匹配。'; return 1; }
+    return 0
 }
 
 install_manual_cert() {
@@ -376,7 +454,7 @@ install_manual_cert() {
     src_cert=$REPLY
     ask_value '请输入 privkey.pem / 私钥文件路径' ''
     src_key=$REPLY
-    check_cert_pair "$src_cert" "$src_key" "$domain"
+    check_cert_pair "$src_cert" "$src_key" "$domain" || err '手动证书校验失败。'
     cp "$src_cert" "$CERT_FILE"
     cp "$src_key" "$KEY_FILE"
     chown root:sing-box "$CERT_FILE" "$KEY_FILE"
@@ -389,7 +467,9 @@ save_state() {
     tmp="$STATE_FILE.tmp.$$"
     jq -n \
       --arg origin_addr "$ORIGIN_ADDR" \
+      --arg origin_ipv6 "$ORIGIN_IPV6" \
       --arg preferred_ip "$PREFERRED_IP" \
+      --arg preferred_ipv6 "$PREFERRED_IPV6" \
       --arg tls_domain "$TLS_DOMAIN" \
       --arg ws_host "$WS_HOST" \
       --arg reality_sni "$REALITY_SNI" \
@@ -406,7 +486,8 @@ save_state() {
       --arg cert_file "$CERT_FILE" \
       --arg key_file "$KEY_FILE" \
       --arg cert_mode "$CERT_MODE" \
-      '{origin_addr:$origin_addr,preferred_ip:$preferred_ip,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,anytls_port:($anytls_port|tonumber),ws_port:($ws_port|tonumber),reality_port:($reality_port|tonumber),anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode}' > "$tmp"
+      --arg cf_zone_name "$CF_ZONE_NAME" \
+      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,anytls_port:($anytls_port|tonumber),ws_port:($ws_port|tonumber),reality_port:($reality_port|tonumber),anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name}' > "$tmp"
     chmod 0600 "$tmp"
     chown root:root "$tmp"
     mv "$tmp" "$STATE_FILE"
@@ -414,11 +495,13 @@ save_state() {
 
 load_state() {
     [ -s "$STATE_FILE" ] || err '没有找到配置。请先运行安装向导。'
-    ORIGIN_ADDR=$(jq -r '.origin_addr' "$STATE_FILE")
-    PREFERRED_IP=$(jq -r '.preferred_ip' "$STATE_FILE")
+    ORIGIN_ADDR=$(jq -r '.origin_addr // ""' "$STATE_FILE")
+    ORIGIN_IPV6=$(jq -r '.origin_ipv6 // ""' "$STATE_FILE")
+    PREFERRED_IP=$(jq -r '.preferred_ip // ""' "$STATE_FILE")
+    PREFERRED_IPV6=$(jq -r '.preferred_ipv6 // ""' "$STATE_FILE")
     TLS_DOMAIN=$(jq -r '.tls_domain' "$STATE_FILE")
     WS_HOST=$(jq -r '.ws_host' "$STATE_FILE")
-    REALITY_SNI=$(jq -r '.reality_sni' "$STATE_FILE")
+    REALITY_SNI=$(jq -r '.reality_sni // "www.bing.com"' "$STATE_FILE")
     ANYTLS_PORT=$(jq -r '.anytls_port' "$STATE_FILE")
     WS_PORT=$(jq -r '.ws_port' "$STATE_FILE")
     REALITY_PORT=$(jq -r '.reality_port' "$STATE_FILE")
@@ -432,11 +515,23 @@ load_state() {
     CERT_FILE=$(jq -r '.cert_file' "$STATE_FILE")
     KEY_FILE=$(jq -r '.key_file' "$STATE_FILE")
     CERT_MODE=$(jq -r '.cert_mode' "$STATE_FILE")
+    CF_ZONE_NAME=$(jq -r '.cf_zone_name // ""' "$STATE_FILE")
 }
 
-write_config_temp() {
+build_config() {
     tmp="$CONFIG_FILE.tmp.$$"
+    if ipv6_kernel_enabled; then
+        # sing-box uses the generic TCP network for the IPv6 unspecified address.
+        # On Linux/Go this creates a dual-stack wildcard listener (IPv4-mapped + IPv6)
+        # when the kernel supports IPv4-mapped IPv6 sockets.
+        listen_addr="::"
+        msg 'IPv6 内核已启用：使用 :: 通配监听，支持 IPv4 + IPv6 双栈。'
+    else
+        listen_addr="0.0.0.0"
+        warn '系统内核未启用 IPv6，当前配置只能监听 IPv4。若需要双栈，请先在 VPS 系统/内核中启用 IPv6。'
+    fi
     jq -n \
+      --arg listen_addr "$listen_addr" \
       --arg tls_domain "$TLS_DOMAIN" \
       --arg reality_sni "$REALITY_SNI" \
       --arg cert_file "$CERT_FILE" \
@@ -451,142 +546,181 @@ write_config_temp() {
       --arg ws_port "$WS_PORT" \
       --arg reality_port "$REALITY_PORT" \
       '{log:{level:"info",timestamp:true},inbounds:[
-        {type:"anytls",tag:"anytls-in",listen:"::",listen_port:($anytls_port|tonumber),users:[{name:"primary",password:$anytls_password}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file}},
-        {type:"vless",tag:"vless-ws-tls-in",listen:"::",listen_port:($ws_port|tonumber),users:[{uuid:$ws_uuid}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file},transport:{type:"ws",path:$ws_path}},
-        {type:"vless",tag:"vless-reality-in",listen:"::",listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}}
+        {type:"anytls",tag:"anytls-in",listen:$listen_addr,listen_port:($anytls_port|tonumber),users:[{name:"primary",password:$anytls_password}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file}},
+        {type:"vless",tag:"vless-ws-tls-in",listen:$listen_addr,listen_port:($ws_port|tonumber),users:[{uuid:$ws_uuid}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file},transport:{type:"ws",path:$ws_path}},
+        {type:"vless",tag:"vless-reality-in",listen:$listen_addr,listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}}
       ],outbounds:[{type:"direct",tag:"direct"}]}' > "$tmp"
     if ! "$SB_BIN" check -c "$tmp"; then
         rm -f "$tmp"
-        err 'sing-box 配置检查失败，原配置未更改。'
+        warn 'sing-box 配置检查失败，原配置未更改。'
+        return 1
     fi
+    if [ -f "$CONFIG_FILE" ]; then cp "$CONFIG_FILE" "$CONFIG_FILE.bak"; fi
     chown root:sing-box "$tmp"
     chmod 0640 "$tmp"
-}
-
-build_config() {
-    had_old_config=0
-    if [ -f "$CONFIG_FILE" ]; then
-        cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
-        had_old_config=1
-    fi
-
-    attempt=1
-    max_attempts=6
-    while [ "$attempt" -le "$max_attempts" ]; do
-        write_config_temp
-        mv "$CONFIG_FILE.tmp.$$" "$CONFIG_FILE"
-        if service_restart; then
-            save_state
-            msg '配置已检查并应用，sing-box 已重启。'
-            return 0
-        fi
-
-        warn "第 $attempt/$max_attempts 次启动失败；可能是端口冲突，正在重新随机分配端口。"
-        if [ "$attempt" -lt "$max_attempts" ]; then
-            PREVIOUS_PORTS="${PREVIOUS_PORTS-} $ANYTLS_PORT $WS_PORT $REALITY_PORT"
-            choose_random_ports
-            attempt=$((attempt + 1))
-            continue
-        fi
-        break
-    done
-
-    warn '多次尝试仍无法启动，正在恢复原配置。'
-    if [ "$had_old_config" -eq 1 ]; then
-        cp "$CONFIG_FILE.bak" "$CONFIG_FILE"
+    mv "$tmp" "$CONFIG_FILE"
+    if ! service_restart; then
+        warn '新配置启动失败，正在回滚。'
+        if [ -f "$CONFIG_FILE.bak" ]; then cp "$CONFIG_FILE.bak" "$CONFIG_FILE"; fi
         service_restart || true
-    else
-        rm -f "$CONFIG_FILE"
-        if [ "$SERVICE_KIND" = systemd ]; then systemctl stop sing-box >/dev/null 2>&1 || true; fi
-        if [ "$SERVICE_KIND" = openrc ]; then rc-service sing-box stop >/dev/null 2>&1 || true; fi
+        warn '服务重启失败，已尝试恢复旧配置。请查看服务日志。'
+        return 1
     fi
-    err '服务启动失败，已回滚配置（如果存在旧配置）。请查看服务日志。'
+    save_state
+    msg '配置已检查并应用，sing-box 已重启。'
 }
 
 show_nodes() {
-    ORIGIN_URI=$(uri_host "$ORIGIN_ADDR")
-    PREFERRED_URI=$(uri_host "$PREFERRED_IP")
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
-    ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${ORIGIN_URI}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#AnyTLS"
-    WS_LINK="vless://${WS_UUID}@${PREFERRED_URI}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#VLESS-WS-TLS"
-    REALITY_LINK="vless://${REALITY_UUID}@${ORIGIN_URI}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#VLESS-Reality"
-    cat > "$APP_DIR/nodes.txt" <<EOF_NODES
-AnyTLS:
-$ANYTLS_LINK
-
-VLESS + WS + TLS:
-$WS_LINK
-
-VLESS + Reality:
-$REALITY_LINK
-EOF_NODES
-    chmod 0600 "$APP_DIR/nodes.txt"
+    nodes_tmp="$APP_DIR/nodes.txt.tmp.$$"
+    {
+        printf 'sing-box 节点信息\n\n'
+        if [ -n "$ORIGIN_ADDR" ]; then
+            origin_uri=$(uri_host "$ORIGIN_ADDR")
+            ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#AnyTLS-Main"
+            REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#VLESS-Reality-Main"
+            printf '[1] AnyTLS（主地址 / IPv4 / 域名）\n%s\n\n' "$ANYTLS_LINK"
+            printf '[4] VLESS + Reality（主地址 / IPv4 / 域名）\n%s\n\n' "$REALITY_LINK"
+        fi
+        if [ -n "$ORIGIN_IPV6" ]; then
+            origin6_uri=$(uri_host "$ORIGIN_IPV6")
+            ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#AnyTLS-IPv6"
+            REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#VLESS-Reality-IPv6"
+            printf '[2] AnyTLS（IPv6）\n%s\n\n' "$ANYTLS6_LINK"
+            printf '[5] VLESS + Reality（IPv6）\n%s\n\n' "$REALITY6_LINK"
+        fi
+        if [ -n "$PREFERRED_IP" ]; then
+            preferred_uri=$(uri_host "$PREFERRED_IP")
+            WS_LINK="vless://${WS_UUID}@${preferred_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#VLESS-WS-TLS-Main"
+            printf '[3] VLESS + WebSocket + TLS（主地址 / IPv4 / 域名）\n%s\n\n' "$WS_LINK"
+        fi
+        if [ -n "$PREFERRED_IPV6" ]; then
+            preferred6_uri=$(uri_host "$PREFERRED_IPV6")
+            WS6_LINK="vless://${WS_UUID}@${preferred6_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#VLESS-WS-TLS-IPv6"
+            printf '[6] VLESS + WebSocket + TLS（IPv6）\n%s\n\n' "$WS6_LINK"
+        fi
+    } > "$nodes_tmp"
+    chmod 0600 "$nodes_tmp"
+    mv "$nodes_tmp" "$APP_DIR/nodes.txt"
     msg '================ 节点信息 ================'
-    printf '\n[1] AnyTLS\n%s\n' "$ANYTLS_LINK"
-    printf '\n[2] VLESS + WebSocket + TLS\n%s\n' "$WS_LINK"
-    printf '\n[3] VLESS + Reality\n%s\n' "$REALITY_LINK"
-    printf '\n节点文件：%s/nodes.txt\n' "$APP_DIR"
+    cat "$APP_DIR/nodes.txt"
+    printf '节点文件：%s/nodes.txt\n' "$APP_DIR"
     printf '===========================================\n'
 }
 
 install_wizard() {
     need_root
-    # 重装时读取旧端口，确保同一主机下一次安装不会复用上一轮端口。
-    PREVIOUS_PORTS="${ANYTLS_PORT-} ${WS_PORT-} ${REALITY_PORT-}"
+    PREVIOUS_ANYTLS_PORT=${ANYTLS_PORT:-}
+    PREVIOUS_WS_PORT=${WS_PORT:-}
+    PREVIOUS_REALITY_PORT=${REALITY_PORT:-}
     install_dependencies_and_core
     ensure_service_account
     create_service
     setup_reload_hook
 
-    msg '========== sing-box 一键安装向导 =========='
+    msg '========== sing-box 一键安装向导（IPv4 + IPv6 双栈） =========='
     detected_ip=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
-    ask_value '源站公网 IP（AnyTLS / Reality 直连地址）' "$detected_ip"
+    detected_ipv6=""
+    if ipv6_kernel_enabled; then
+        detected_ipv6=$(curl -6 -fsS --max-time 5 https://api64.ipify.org 2>/dev/null || true)
+    else
+        warn '当前系统内核未启用 IPv6；可继续安装 IPv4 节点，但 IPv6 需要先由 VPS 提供商/系统启用。'
+    fi
+
+    ask_value '源站 IPv4 地址 / 域名（没有可留空；输入 - 可清空自动检测值）' "$detected_ip"
     ORIGIN_ADDR=$REPLY
-    valid_host "$ORIGIN_ADDR" || err '源站地址格式不正确。'
+    [ "$ORIGIN_ADDR" = "-" ] && ORIGIN_ADDR=""
+    if [ -n "$ORIGIN_ADDR" ]; then valid_main_address "$ORIGIN_ADDR" || err '源站主地址应填写 IPv4 或域名；IPv6 请填写在下一项。'; fi
 
-    ask_value 'VLESS WS TLS 优选 IP（默认与源站相同）' "$ORIGIN_ADDR"
+    ask_value '源站 IPv6 地址（可留空；请勿输入方括号）' "$detected_ipv6"
+    ORIGIN_IPV6=$REPLY
+    [ "$ORIGIN_IPV6" = "-" ] && ORIGIN_IPV6=""
+    if [ -n "$ORIGIN_IPV6" ]; then
+        ipv6_kernel_enabled || err '检测到系统未启用 IPv6，不能配置 IPv6 源站地址。'
+        valid_ipv6_address "$ORIGIN_IPV6" || err '源站 IPv6 地址格式不正确，或服务器没有到该地址的 IPv6 路由。'
+    fi
+    [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] || err '至少需要填写一个源站地址（IPv4/域名或 IPv6）。'
+
+    ask_value 'VLESS WS TLS 优选 IPv4 地址 / 域名（可留空）' "$ORIGIN_ADDR"
     PREFERRED_IP=$REPLY
-    valid_host "$PREFERRED_IP" || err '优选 IP / 地址格式不正确。'
+    [ "$PREFERRED_IP" = "-" ] && PREFERRED_IP=""
+    if [ -n "$PREFERRED_IP" ]; then valid_main_address "$PREFERRED_IP" || err 'WS TLS 主地址应填写 IPv4 或域名；IPv6 请填写在下一项。'; fi
 
-    ask_value 'TLS 证书域名 / AnyTLS 与 WS 的 SNI' ''
+    ask_value 'VLESS WS TLS 优选 IPv6 地址（可留空；请勿输入方括号）' "$ORIGIN_IPV6"
+    PREFERRED_IPV6=$REPLY
+    [ "$PREFERRED_IPV6" = "-" ] && PREFERRED_IPV6=""
+    if [ -n "$PREFERRED_IPV6" ]; then
+        ipv6_kernel_enabled || err '检测到系统未启用 IPv6，不能配置 IPv6 优选地址。'
+        valid_ipv6_address "$PREFERRED_IPV6" || err 'WS TLS 优选 IPv6 地址格式不正确，或服务器没有到该地址的 IPv6 路由。'
+    fi
+    [ -n "$PREFERRED_IP" ] || [ -n "$PREFERRED_IPV6" ] || err '至少需要填写一个 VLESS WS TLS 优选地址。'
+
+    msg '重要：TLS 证书域名必须是你自己拥有/获准管理的域名，例如 node.example.com。'
+    msg '不要填写 www.bing.com、www.microsoft.com 等第三方网站域名；它们只可作为 Reality SNI 示例。'
+    ask_value 'TLS 证书域名 / AnyTLS 与 WS 的 SNI（填写你自己的域名）' ''
     TLS_DOMAIN=$REPLY
-    valid_domain "$TLS_DOMAIN" || err '请输入有效的完整域名，例如 node.example.com。'
+    valid_cert_domain "$TLS_DOMAIN" || err '请输入有效的完整 DNS 域名，例如 node.example.com；不能填写 IP 地址。'
+    confirm_domain_control "$TLS_DOMAIN" || err '未确认域名所有权，已停止证书申请。'
 
     ask_value 'VLESS WS Host 域名' "$TLS_DOMAIN"
     WS_HOST=$REPLY
     valid_domain "$WS_HOST" || err '请输入有效的 Host 域名。'
 
-    ask_value 'Reality SNI / 握手目标域名' 'www.microsoft.com'
+    ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'
     REALITY_SNI=$REPLY
     valid_domain "$REALITY_SNI" || err 'Reality SNI 必须是有效域名。'
 
-    choose_random_ports
+    choose_random_ports "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT"
 
-    msg '证书方式：输入 Cloudflare DNS API Token 可自动申请证书并自动续期；不使用 Cloudflare 则选择手动证书。'
-    ask_value 'Cloudflare API Token（留空表示手动证书）' ''
-    cf_token=$REPLY
-    if [ -n "$cf_token" ]; then
-        printf '%s' "$cf_token" > "$CF_TOKEN_FILE"
-        chmod 0600 "$CF_TOKEN_FILE"
-        chown root:root "$CF_TOKEN_FILE"
-        CERT_MODE=cloudflare
-        ask_value '证书账户邮箱（可留空）' ''
-        cert_email=$REPLY
-        rm -f "$CF_ZONE_ID_FILE"
-        ask_value 'Cloudflare Zone ID（可选；填写后 Token 只需 Zone:DNS:Edit 权限）' ''
-        zone_id=$REPLY
-        if [ -n "$zone_id" ]; then
-            case "$zone_id" in *[!A-Fa-f0-9]*|'') err 'Zone ID 必须是 32 位十六进制字符串。' ;; esac
-            [ "${#zone_id}" -eq 32 ] || err 'Zone ID 必须是 32 位十六进制字符串。'
-            printf '%s' "$zone_id" > "$CF_ZONE_ID_FILE"
-            chmod 0600 "$CF_ZONE_ID_FILE"
-        fi
-        install_acme "$cert_email"
-        issue_cloudflare_cert "$TLS_DOMAIN"
-    else
-        CERT_MODE=manual
-        install_manual_cert "$TLS_DOMAIN"
-    fi
+    msg '证书方式：'
+    printf '  1. Cloudflare DNS-01：需要 API Token，可自动签发和续期。\n'
+    printf '  2. HTTP-01：不需要 Token，但域名必须解析到本机，公网 TCP 80 必须可访问且空闲。\n'
+    printf '  3. 手动导入已有证书。\n'
+    ask_value '请选择证书方式（1/2/3）' '2'
+    cert_choice=$REPLY
+    case "$cert_choice" in
+        1)
+            msg '请填写 Cloudflare 中实际管理的 DNS 区域主域名，例如 example.com。'
+            msg 'TLS 证书域名必须等于该域名或属于其子域名，例如 node.example.com。'
+            ask_value 'Cloudflare DNS 区域主域名（必须是你管理的域名）' ''
+            CF_ZONE_NAME=$REPLY
+            valid_cert_domain "$CF_ZONE_NAME" || err 'Cloudflare 区域主域名格式无效；请填写你在 Cloudflare 中管理的 DNS 域名。'
+            domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" || err "证书域名 $TLS_DOMAIN 不属于 Cloudflare 区域 $CF_ZONE_NAME；请检查是否把 Reality SNI 填成了证书域名。"
+            ask_value 'Cloudflare API Token' ''
+            cf_token=$REPLY
+            [ -n "$cf_token" ] || err 'Cloudflare Token 不能为空。'
+            printf '%s' "$cf_token" > "$CF_TOKEN_FILE"
+            chmod 0600 "$CF_TOKEN_FILE"
+            chown root:root "$CF_TOKEN_FILE"
+            CERT_MODE=cloudflare
+            ask_value '证书账户邮箱（可留空）' ''
+            cert_email=$REPLY
+            rm -f "$CF_ZONE_ID_FILE"
+            ask_value 'Cloudflare Zone ID（可选；填写后 Token 只需 Zone:DNS:Edit；留空则还需要 Zone:Zone:Read）' ''
+            zone_id=$REPLY
+            if [ -n "$zone_id" ]; then
+                case "$zone_id" in *[!A-Fa-f0-9]*|'') err 'Zone ID 必须是 32 位十六进制字符串。' ;; esac
+                [ "${#zone_id}" -eq 32 ] || err 'Zone ID 必须是 32 位十六进制字符串。'
+                printf '%s' "$zone_id" > "$CF_ZONE_ID_FILE"
+                chmod 0600 "$CF_ZONE_ID_FILE"
+            fi
+            install_acme "$cert_email"
+            issue_cloudflare_cert "$TLS_DOMAIN" || err 'Cloudflare DNS-01 证书申请失败。请检查证书域名、Cloudflare 区域主域名、Zone ID 和 Token 权限。'
+            ;;
+        2)
+            CERT_MODE=standalone
+            CF_ZONE_NAME=""
+            rm -f "$CF_TOKEN_FILE" "$CF_ZONE_ID_FILE"
+            issue_http_cert "$TLS_DOMAIN" || err 'HTTP-01 证书申请失败。请确认域名 A/AAAA 记录、TCP 80 入站和端口占用情况。'
+            ;;
+        3)
+            CERT_MODE=manual
+            CF_ZONE_NAME=""
+            rm -f "$CF_TOKEN_FILE" "$CF_ZONE_ID_FILE"
+            install_manual_cert "$TLS_DOMAIN"
+            ;;
+        *) err '证书方式只能选择 1、2 或 3。' ;;
+    esac
 
     ANYTLS_PASSWORD=$(openssl rand -hex 24)
     WS_UUID=$("$SB_BIN" generate uuid)
@@ -598,7 +732,7 @@ install_wizard() {
     REALITY_SID=$("$SB_BIN" generate rand --hex 8)
     WS_PATH="/ws-$(openssl rand -hex 8)"
 
-    build_config
+    build_config || err '配置未能成功应用，请检查 sing-box 日志。'
     save_state
     msg '安装完成。正在显示三个节点……'
     show_nodes
@@ -608,40 +742,200 @@ install_wizard() {
 }
 
 change_tls_sni() {
-    ask_value '新的 TLS SNI 域名（AnyTLS + VLESS WS TLS）' "$TLS_DOMAIN"
+    ask_value '新的 TLS 证书域名 / AnyTLS 与 WS SNI' "$TLS_DOMAIN"
     new_domain=$REPLY
-    valid_domain "$new_domain" || { warn '域名格式无效。'; return; }
+    valid_cert_domain "$new_domain" || { warn 'TLS 证书域名格式无效；请输入你管理的 DNS 域名，不能填写 IP。'; return 0; }
+    if [ "$CERT_MODE" = cloudflare ]; then
+        [ -n "$CF_ZONE_NAME" ] || { warn '缺少 Cloudflare 区域主域名，请先使用菜单 6 设置 Cloudflare 绑定区域。'; return 0; }
+        domain_belongs_to_zone "$new_domain" "$CF_ZONE_NAME" || { warn "新域名必须属于 Cloudflare 区域 $CF_ZONE_NAME。"; return 0; }
+    fi
+    confirm_domain_control "$new_domain" || { warn '未确认域名所有权，未修改 TLS 域名。'; return 0; }
+
     old_domain=$TLS_DOMAIN
+    backup_dir=$(mktemp -d) || { warn '无法创建临时证书备份目录。'; return 0; }
+    cp -p "$CERT_FILE" "$backup_dir/fullchain.pem" 2>/dev/null || true
+    cp -p "$KEY_FILE" "$backup_dir/privkey.pem" 2>/dev/null || true
     TLS_DOMAIN=$new_domain
+
     if [ "$CERT_MODE" = cloudflare ] && [ -s "$CF_TOKEN_FILE" ]; then
         if ! issue_cloudflare_cert "$TLS_DOMAIN"; then
             TLS_DOMAIN=$old_domain
-            warn '证书签发失败，SNI 未修改。请检查 Cloudflare Token 权限和 DNS 区域。'
+            [ ! -s "$backup_dir/fullchain.pem" ] || cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"
+            [ ! -s "$backup_dir/privkey.pem" ] || cp -p "$backup_dir/privkey.pem" "$KEY_FILE"
+            chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
+            chmod 0644 "$CERT_FILE" 2>/dev/null || true
+            chmod 0640 "$KEY_FILE" 2>/dev/null || true
+            service_restart || true
+            rm -rf "$backup_dir"
+            warn '证书签发失败，已恢复旧证书和旧 SNI。请检查 Cloudflare Token 权限、Zone ID 和 DNS。'
+            return 0
+        fi
+    elif [ "$CERT_MODE" = standalone ]; then
+        if ! issue_http_cert "$TLS_DOMAIN"; then
+            TLS_DOMAIN=$old_domain
+            [ ! -s "$backup_dir/fullchain.pem" ] || cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"
+            [ ! -s "$backup_dir/privkey.pem" ] || cp -p "$backup_dir/privkey.pem" "$KEY_FILE"
+            chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
+            chmod 0644 "$CERT_FILE" 2>/dev/null || true
+            chmod 0640 "$KEY_FILE" 2>/dev/null || true
+            service_restart || true
+            rm -rf "$backup_dir"
+            warn 'HTTP-01 证书签发失败，已恢复旧证书和旧 SNI。请检查域名解析和 TCP 80 端口。'
             return 0
         fi
     else
         if ! openssl x509 -in "$CERT_FILE" -noout -checkhost "$TLS_DOMAIN" >/dev/null 2>&1; then
             TLS_DOMAIN=$old_domain
-            warn '现有证书不包含这个域名。请先更换证书，或使用 Cloudflare DNS-01 自动签发。'
+            rm -rf "$backup_dir"
+            warn '现有证书不包含这个域名。请先更换证书，或使用 Cloudflare / HTTP 自动证书签发。'
             return 0
         fi
     fi
-    build_config
+
+    if ! build_config; then
+        TLS_DOMAIN=$old_domain
+        [ ! -s "$backup_dir/fullchain.pem" ] || cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"
+        [ ! -s "$backup_dir/privkey.pem" ] || cp -p "$backup_dir/privkey.pem" "$KEY_FILE"
+        chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
+        chmod 0644 "$CERT_FILE" 2>/dev/null || true
+        chmod 0640 "$KEY_FILE" 2>/dev/null || true
+        service_restart || true
+        rm -rf "$backup_dir"
+        warn '新 TLS 配置应用失败，已恢复旧证书和旧域名。'
+        return 0
+    fi
+    rm -rf "$backup_dir"
+}
+
+change_cloudflare_zone() {
+    if [ "$CERT_MODE" != cloudflare ]; then
+        warn '当前证书模式不是 Cloudflare DNS-01。请先使用 Cloudflare DNS-01 申请证书，才能修改 Cloudflare 绑定区域。'
+        return 0
+    fi
+    [ -s "$CF_TOKEN_FILE" ] || { warn 'Cloudflare Token 文件不存在，请重新配置 Cloudflare DNS-01。'; return 0; }
+
+    msg '修改 Cloudflare 绑定域名会重新申请 TLS 证书。脚本只管理 ACME 验证 TXT 记录，不会自动修改 A/AAAA 解析记录。'
+    msg 'Token 必须具有新区域的 Zone:DNS:Edit 权限；若 Token 只授权旧区域，申请会失败。'
+    ask_value '新的 Cloudflare DNS 区域主域名（例如 example.com）' "$CF_ZONE_NAME"
+    new_zone=$REPLY
+    valid_cert_domain "$new_zone" || { warn 'Cloudflare 区域域名无效。'; return 0; }
+
+    if domain_belongs_to_zone "$TLS_DOMAIN" "$new_zone"; then
+        cert_default=$TLS_DOMAIN
+    else
+        cert_default="node.$new_zone"
+    fi
+    ask_value '新的 TLS 证书域名 / AnyTLS 与 WS SNI' "$cert_default"
+    new_cert_domain=$REPLY
+    valid_cert_domain "$new_cert_domain" || { warn 'TLS 证书域名无效；不能填写 IP。'; return 0; }
+    domain_belongs_to_zone "$new_cert_domain" "$new_zone" || {
+        warn "证书域名 $new_cert_domain 不属于 Cloudflare 区域 $new_zone。"
+        return 0
+    }
+
+    if domain_belongs_to_zone "$WS_HOST" "$new_zone"; then
+        host_default=$WS_HOST
+    else
+        host_default=$new_cert_domain
+    fi
+    ask_value '新的 VLESS WS Host 域名' "$host_default"
+    new_ws_host=$REPLY
+    valid_domain "$new_ws_host" || { warn 'VLESS WS Host 域名无效。'; return 0; }
+
+    if [ "$new_zone" = "$CF_ZONE_NAME" ]; then
+        current_zone_id=$(cat "$CF_ZONE_ID_FILE" 2>/dev/null || true)
+    else
+        current_zone_id=""
+    fi
+    ask_value '新 Cloudflare Zone ID（建议填写；更换区域时必须填写）' "$current_zone_id"
+    new_zone_id=$REPLY
+    case "$new_zone_id" in
+        ''|*[!A-Fa-f0-9]*) warn 'Zone ID 必须是 32 位十六进制字符串。'; return 0 ;;
+    esac
+    [ "${#new_zone_id}" -eq 32 ] || { warn 'Zone ID 必须是 32 位十六进制字符串。'; return 0; }
+
+    confirm_domain_control "$new_cert_domain" || { warn '未确认域名所有权，未修改 Cloudflare 配置。'; return 0; }
+
+    backup_dir=$(mktemp -d) || { warn '无法创建临时备份目录。'; return 0; }
+    cp -p "$CERT_FILE" "$backup_dir/fullchain.pem" 2>/dev/null || true
+    cp -p "$KEY_FILE" "$backup_dir/privkey.pem" 2>/dev/null || true
+    cp -p "$CF_ZONE_ID_FILE" "$backup_dir/zone-id" 2>/dev/null || true
+
+    old_zone=$CF_ZONE_NAME
+    old_tls_domain=$TLS_DOMAIN
+    old_ws_host=$WS_HOST
+
+    printf '%s' "$new_zone_id" > "$CF_ZONE_ID_FILE"
+    chmod 0600 "$CF_ZONE_ID_FILE"
+    chown root:root "$CF_ZONE_ID_FILE"
+    CF_ZONE_NAME=$new_zone
+    TLS_DOMAIN=$new_cert_domain
+    WS_HOST=$new_ws_host
+
+    if ! issue_cloudflare_cert "$TLS_DOMAIN"; then
+        CF_ZONE_NAME=$old_zone
+        TLS_DOMAIN=$old_tls_domain
+        WS_HOST=$old_ws_host
+        if [ -s "$backup_dir/fullchain.pem" ]; then cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"; fi
+        if [ -s "$backup_dir/privkey.pem" ]; then cp -p "$backup_dir/privkey.pem" "$KEY_FILE"; fi
+        if [ -s "$backup_dir/zone-id" ]; then cp -p "$backup_dir/zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+        chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
+        chmod 0644 "$CERT_FILE" 2>/dev/null || true
+        chmod 0640 "$KEY_FILE" 2>/dev/null || true
+        service_restart || true
+        rm -rf "$backup_dir"
+        warn 'Cloudflare 区域/域名修改失败，已恢复原证书和原设置。请检查 Token 是否授权新区域、Zone ID 是否正确、DNS 是否托管在 Cloudflare。'
+        return 0
+    fi
+
+    if ! build_config; then
+        CF_ZONE_NAME=$old_zone
+        TLS_DOMAIN=$old_tls_domain
+        WS_HOST=$old_ws_host
+        if [ -s "$backup_dir/fullchain.pem" ]; then cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"; fi
+        if [ -s "$backup_dir/privkey.pem" ]; then cp -p "$backup_dir/privkey.pem" "$KEY_FILE"; fi
+        if [ -s "$backup_dir/zone-id" ]; then cp -p "$backup_dir/zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+        chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
+        chmod 0644 "$CERT_FILE" 2>/dev/null || true
+        chmod 0640 "$KEY_FILE" 2>/dev/null || true
+        service_restart || true
+        rm -rf "$backup_dir"
+        warn '新配置未能应用，已恢复原 Cloudflare 区域、证书和节点设置。'
+        return 0
+    fi
+    rm -rf "$backup_dir"
+    show_nodes
+    msg 'Cloudflare 绑定区域、TLS 证书域名和 WS Host 已更新。'
 }
 
 change_reality_sni() {
     ask_value '新的 Reality SNI / 握手目标域名' "$REALITY_SNI"
     new_sni=$REPLY
     valid_domain "$new_sni" || { warn '域名格式无效。'; return; }
+    old_sni=$REALITY_SNI
     REALITY_SNI=$new_sni
-    build_config
+    if ! build_config; then
+        REALITY_SNI=$old_sni
+        return 0
+    fi
 }
 
 change_preferred_ip() {
-    ask_value '新的 VLESS WS TLS 优选 IP / 地址' "$PREFERRED_IP"
+    ask_value '新的 VLESS WS TLS 主地址（IPv4 / 域名；输入 - 清空）' "$PREFERRED_IP"
     new_ip=$REPLY
-    valid_host "$new_ip" || { warn '地址格式无效。'; return; }
+    [ "$new_ip" = "-" ] && new_ip=""
+    if [ -n "$new_ip" ]; then valid_main_address "$new_ip" || { warn 'IPv4 地址 / 域名格式无效。'; return; }; fi
+
+    ask_value '新的 VLESS WS TLS IPv6 地址（输入 - 清空）' "$PREFERRED_IPV6"
+    new_ipv6=$REPLY
+    [ "$new_ipv6" = "-" ] && new_ipv6=""
+    if [ -n "$new_ipv6" ]; then
+        ipv6_kernel_enabled || { warn '系统内核未启用 IPv6。'; return; }
+        valid_ipv6_address "$new_ipv6" || { warn 'IPv6 地址格式无效，或服务器没有到该地址的 IPv6 路由。'; return; }
+    fi
+    [ -n "$new_ip" ] || [ -n "$new_ipv6" ] || { warn '至少保留一个优选地址。'; return; }
     PREFERRED_IP=$new_ip
+    PREFERRED_IPV6=$new_ipv6
     save_state
     show_nodes
 }
@@ -655,15 +949,94 @@ change_ws_host() {
     show_nodes
 }
 
-randomize_ports() {
-    msg '正在为三个节点重新随机分配端口……'
-    # 排除当前端口，保证每次重新分配后都与上一组不同。
-    PREVIOUS_PORTS="$ANYTLS_PORT $WS_PORT $REALITY_PORT"
-    choose_random_ports
-    build_config
+change_ports() {
+    msg '随机更换三个节点端口；新端口会避开当前端口、上一轮端口和正在监听的 TCP 端口。'
+    printf '当前端口：AnyTLS=%s, WS+TLS=%s, Reality=%s\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT"
+    old_anytls=$ANYTLS_PORT
+    old_ws=$WS_PORT
+    old_reality=$REALITY_PORT
+    choose_random_ports "$old_anytls" "$old_ws" "$old_reality"
+    if ! build_config; then
+        ANYTLS_PORT=$old_anytls
+        WS_PORT=$old_ws
+        REALITY_PORT=$old_reality
+        return 0
+    fi
     show_nodes
-    msg '请同步更新云厂商安全组和系统防火墙中的 TCP 端口规则。'
+    msg '请同步修改云安全组和系统防火墙规则。'
 }
+
+confirm_uninstall() {
+    if [ "${1:-}" = "--yes" ] || [ "${1:-}" = "-y" ]; then
+        return 0
+    fi
+    printf '\n即将卸载 sing-box，并删除本脚本的配置、证书副本和节点信息。\n'
+    printf '同时会尝试卸载 sing-box 软件包；不会删除系统防火墙规则、云安全组、其他 cron 任务或 /root/.acme.sh。\n'
+    printf '确认卸载请输入大写 YES：'
+    IFS= read -r answer || answer=""
+    [ "$answer" = "YES" ] || {
+        msg '已取消卸载。'
+        return 1
+    }
+    return 0
+}
+
+remove_acme_cron_entry() {
+    command -v crontab >/dev/null 2>&1 || return 0
+    current_cron=$(crontab -l 2>/dev/null || true)
+    filtered_cron=$(printf '%s\n' "$current_cron" | grep -vF '/root/.acme.sh/acme.sh --cron --home /root/.acme.sh' || true)
+    if [ -n "$filtered_cron" ]; then
+        printf '%s\n' "$filtered_cron" | crontab - || warn '无法更新 root crontab；请手动检查 acme.sh 续期任务。'
+    else
+        crontab -r >/dev/null 2>&1 || true
+    fi
+}
+
+uninstall_manager() {
+    need_root
+    confirm_uninstall "${1:-}" || return 0
+
+    msg '正在停止 sing-box 服务……'
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now sing-box >/dev/null 2>&1 || true
+        rm -f /etc/systemd/system/sing-box.service
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl reset-failed sing-box >/dev/null 2>&1 || true
+    elif command -v rc-service >/dev/null 2>&1; then
+        rc-service sing-box stop >/dev/null 2>&1 || true
+        rc-update del sing-box default >/dev/null 2>&1 || true
+        rm -f /etc/init.d/sing-box
+    fi
+
+    remove_acme_cron_entry
+
+    msg '正在删除 sing-box 配置、证书副本和管理脚本……'
+    rm -f "$RELOAD_HOOK"
+    rm -rf "$APP_DIR"
+    rm -f /usr/local/sbin/sb-manager
+
+    if [ -f /etc/alpine-release ]; then
+        if command -v apk >/dev/null 2>&1 && apk info -e sing-box >/dev/null 2>&1; then
+            apk del sing-box || warn 'sing-box apk 软件包卸载失败，请检查 apk 日志。'
+        fi
+        # The script's Alpine fallback release binary is installed at this path.
+        rm -f /usr/local/bin/sing-box
+        rm -f /etc/init.d/sing-box
+    elif [ -f /etc/debian_version ]; then
+        if command -v dpkg-query >/dev/null 2>&1 && dpkg-query -W -f='${Status}' sing-box 2>/dev/null | grep -q 'install ok installed'; then
+            DEBIAN_FRONTEND=noninteractive apt-get purge -y sing-box || warn 'sing-box apt 软件包卸载失败，请手动执行 apt-get purge sing-box。'
+        fi
+        rm -f /etc/systemd/system/sing-box.service
+        rm -f /etc/apt/sources.list.d/sagernet.sources
+        rm -f /etc/apt/keyrings/sagernet.asc
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    msg '卸载流程已完成。'
+    printf '%s\n' '保留说明：未删除 /root/.acme.sh、系统依赖包、sing-box 系统用户/组、系统防火墙规则或云厂商安全组。'
+    printf '%s\n' '如需恢复服务，需要重新运行安装命令。'
+}
+
 show_logs() {
     if [ "$SERVICE_KIND" = systemd ]; then
         journalctl -u sing-box -n 80 --no-pager || true
@@ -678,19 +1051,22 @@ menu() {
     load_state
     while :; do
         printf '\n========== sing-box 节点管理 ==========' 
-        printf '\n源站：%s | 优选 IP：%s' "$ORIGIN_ADDR" "$PREFERRED_IP"
+        printf '\n源站 IPv4/域名：%s | 源站 IPv6：%s' "${ORIGIN_ADDR:-未设置}" "${ORIGIN_IPV6:-未设置}"
+        printf '\nWS 优选 IPv4/域名：%s | WS 优选 IPv6：%s' "${PREFERRED_IP:-未设置}" "${PREFERRED_IPV6:-未设置}"
         printf '\nTLS SNI：%s | WS Host：%s | Reality SNI：%s' "$TLS_DOMAIN" "$WS_HOST" "$REALITY_SNI"
         printf '\n端口：AnyTLS %s | WS TLS %s | Reality %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT"
         printf '\n---------------------------------------\n'
-        printf '1. 查看/重新生成三个节点\n'
-        printf '2. 修改 AnyTLS + WS TLS 的 SNI（自动检查/更新证书）\n'
-        printf '3. 修改 Reality SNI\n'
-        printf '4. 修改 VLESS WS TLS 优选 IP\n'
+        printf '1. 查看三个协议的 IPv4/IPv6 节点链接\n'
+        printf '2. 修改 TLS 证书域名 / AnyTLS + WS SNI（自动检查/更新证书）\n'
+        printf '3. 修改 Reality SNI（新安装默认 www.bing.com）\n'
+        printf '4. 修改 VLESS WS TLS 优选 IP/域名（IPv4/IPv6）\n'
         printf '5. 修改绑定到优选 IP 的 WS Host 域名\n'
-        printf '6. 重新随机分配三个节点端口（与当前端口不同）\n'
-        printf '7. 重启 sing-box\n'
-        printf '8. 查看服务状态\n'
-        printf '9. 查看最近日志\n'
+        printf '6. 修改 Cloudflare 绑定域名 / DNS 区域 / TLS 证书域名\n'
+        printf '7. 随机更换三个节点端口（自动避开占用端口）\n'
+        printf '8. 重启 sing-box\n'
+        printf '9. 查看服务状态\n'
+        printf '10. 查看最近日志\n'
+        printf '11. 卸载 sing-box 和本脚本配置\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -700,10 +1076,12 @@ menu() {
             3) change_reality_sni ;;
             4) change_preferred_ip ;;
             5) change_ws_host ;;
-            6) randomize_ports ;;
-            7) service_restart && msg '服务已重启。' ;;
-            8) service_status ;;
-            9) show_logs ;;
+            6) change_cloudflare_zone ;;
+            7) change_ports ;;
+            8) service_restart && msg '服务已重启。' ;;
+            9) service_status ;;
+            10) show_logs ;;
+            11) uninstall_manager || true; exit 0 ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac
@@ -712,7 +1090,12 @@ menu() {
 
 install_manager_command() {
     case "$0" in
-        /dev/*|/proc/*) return 0 ;;
+        /dev/*|/proc/*|sh|/bin/sh|/usr/bin/sh) return 0 ;;
+    esac
+    script_name=${0##*/}
+    case "$script_name" in
+        sb-manager|sb-manager-debian-alpine.sh) ;;
+        *) return 0 ;;
     esac
     if [ "$0" != /usr/local/sbin/sb-manager ] && [ -f "$0" ]; then
         install -m 0700 "$0" /usr/local/sbin/sb-manager
@@ -721,6 +1104,10 @@ install_manager_command() {
 
 main() {
     need_root
+    if [ "${1:-}" = uninstall ] || [ "${1:-}" = remove ]; then
+        uninstall_manager "${2:-}"
+        return 0
+    fi
     install_manager_command
     if [ -f "$STATE_FILE" ]; then
         load_state
