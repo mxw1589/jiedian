@@ -1,8 +1,8 @@
 #!/bin/sh
 # sing-box multi-protocol manager for Debian + Alpine
-# AnyTLS + VLESS/WS/TLS + VLESS/Reality
+# AnyTLS + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
-# Randomized collision-checked ports; Cloudflare DNS-01, HTTP-01, or manual TLS certs
+# Randomized collision-checked TCP ports; Cloudflare DNS-01, HTTP-01, or manual TLS certs
 # Overlay install reuses saved state, credentials, certificates, keys, and node IDs
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
@@ -17,6 +17,9 @@ CF_TOKEN_FILE="$APP_DIR/cloudflare.token"
 CF_ZONE_ID_FILE="$APP_DIR/cloudflare-zone-id"
 CF_ZONE_NAME=""
 NODE_LABEL=""
+NAIVE_PORT=""
+NAIVE_USERNAME=""
+NAIVE_PASSWORD=""
 BBR_SYSCTL_FILE=/etc/sysctl.d/99-sb-manager-bbr.conf
 BBR_MODULES_FILE=/etc/modules-load.d/sb-manager-bbr.conf
 BBR_BACKUP_FILE="$APP_DIR/bbr-previous.conf"
@@ -402,23 +405,29 @@ choose_random_ports() {
     previous_anytls=${1-}
     previous_ws=${2-}
     previous_reality=${3-}
+    previous_naive=${4-}
 
     new_anytls=$(pick_random_range_port 10000 65535 \
-        "$previous_anytls" "$previous_ws" "$previous_reality") ||
+        "$previous_anytls" "$previous_ws" "$previous_reality" "$previous_naive") ||
         err '无法找到可用的 AnyTLS 随机端口。'
 
     new_ws=$(pick_random_ws_port \
-        "$previous_anytls" "$previous_ws" "$previous_reality" "$new_anytls") ||
+        "$previous_anytls" "$previous_ws" "$previous_reality" "$previous_naive" "$new_anytls") ||
         err 'Cloudflare 兼容的 WS TLS 端口均被占用，无法分配新端口。'
 
     new_reality=$(pick_random_range_port 10000 65535 \
-        "$previous_anytls" "$previous_ws" "$previous_reality" "$new_anytls" "$new_ws") ||
+        "$previous_anytls" "$previous_ws" "$previous_reality" "$previous_naive" "$new_anytls" "$new_ws") ||
         err '无法找到可用的 Reality 随机端口。'
+
+    new_naive=$(pick_random_range_port 10000 65535 \
+        "$previous_anytls" "$previous_ws" "$previous_reality" "$previous_naive" "$new_anytls" "$new_ws" "$new_reality") ||
+        err '无法找到可用的 NaiveProxy 随机 TCP 端口。'
 
     ANYTLS_PORT=$new_anytls
     WS_PORT=$new_ws
     REALITY_PORT=$new_reality
-    msg "随机端口分配完成：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，Reality=$REALITY_PORT"
+    NAIVE_PORT=$new_naive
+    msg "随机端口分配完成：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，Reality=$REALITY_PORT，NaiveProxy=$NAIVE_PORT"
 }
 
 ipv6_kernel_enabled() {
@@ -513,6 +522,20 @@ APT_EOF
     command -v sing-box >/dev/null 2>&1 || err 'sing-box 安装失败。请确认系统仓库可用。'
     SB_BIN="$(command -v sing-box)"
     "$SB_BIN" version | head -n 1 || true
+    require_naive_version
+}
+
+require_naive_version() {
+    version_line=$("$SB_BIN" version 2>/dev/null | head -n 1 || true)
+    version=$(printf '%s\n' "$version_line" | sed -n 's/.*version[[:space:]]*v\{0,1\}\([0-9][0-9.]*\).*/\1/p')
+    [ -n "$version" ] || err '无法读取 sing-box 版本，无法确认 Naive 入站兼容性。'
+    awk -v v="$version" 'BEGIN {
+        split(v, a, ".");
+        major = a[1] + 0;
+        minor = a[2] + 0;
+        if (major > 1 || (major == 1 && minor >= 13)) exit 0;
+        exit 1;
+    }' || err "当前 sing-box 版本 $version 过旧；NaiveProxy 入站需要 sing-box 1.13.0 或更新版本。"
 }
 
 ensure_service_account() {
@@ -842,6 +865,9 @@ save_state() {
       --arg anytls_port "$ANYTLS_PORT" \
       --arg ws_port "$WS_PORT" \
       --arg reality_port "$REALITY_PORT" \
+      --arg naive_port "$NAIVE_PORT" \
+      --arg naive_username "$NAIVE_USERNAME" \
+      --arg naive_password "$NAIVE_PASSWORD" \
       --arg anytls_password "$ANYTLS_PASSWORD" \
       --arg ws_uuid "$WS_UUID" \
       --arg reality_uuid "$REALITY_UUID" \
@@ -854,7 +880,7 @@ save_state() {
       --arg cert_mode "$CERT_MODE" \
       --arg cf_zone_name "$CF_ZONE_NAME" \
       --arg node_label "$NODE_LABEL" \
-      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,anytls_port:($anytls_port|tonumber),ws_port:($ws_port|tonumber),reality_port:($reality_port|tonumber),anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"
+      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,anytls_port:($anytls_port|tonumber),ws_port:($ws_port|tonumber),reality_port:($reality_port|tonumber),naive_port:($naive_port|tonumber),naive_username:$naive_username,naive_password:$naive_password,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"
     chmod 0600 "$tmp"
     chown root:root "$tmp"
     mv "$tmp" "$STATE_FILE"
@@ -872,6 +898,9 @@ load_state() {
     ANYTLS_PORT=$(jq -r '.anytls_port' "$STATE_FILE")
     WS_PORT=$(jq -r '.ws_port' "$STATE_FILE")
     REALITY_PORT=$(jq -r '.reality_port' "$STATE_FILE")
+    NAIVE_PORT=$(jq -r '.naive_port // ""' "$STATE_FILE")
+    NAIVE_USERNAME=$(jq -r '.naive_username // ""' "$STATE_FILE")
+    NAIVE_PASSWORD=$(jq -r '.naive_password // ""' "$STATE_FILE")
     ANYTLS_PASSWORD=$(jq -r '.anytls_password' "$STATE_FILE")
     WS_UUID=$(jq -r '.ws_uuid' "$STATE_FILE")
     REALITY_UUID=$(jq -r '.reality_uuid' "$STATE_FILE")
@@ -913,10 +942,14 @@ build_config() {
       --arg anytls_port "$ANYTLS_PORT" \
       --arg ws_port "$WS_PORT" \
       --arg reality_port "$REALITY_PORT" \
+      --arg naive_port "$NAIVE_PORT" \
+      --arg naive_username "$NAIVE_USERNAME" \
+      --arg naive_password "$NAIVE_PASSWORD" \
       '{log:{level:"info",timestamp:true},inbounds:[
         {type:"anytls",tag:"anytls-in",listen:$listen_addr,listen_port:($anytls_port|tonumber),users:[{name:"primary",password:$anytls_password}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file}},
         {type:"vless",tag:"vless-ws-tls-in",listen:$listen_addr,listen_port:($ws_port|tonumber),users:[{uuid:$ws_uuid}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file},transport:{type:"ws",path:$ws_path}},
-        {type:"vless",tag:"vless-reality-in",listen:$listen_addr,listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}}
+        {type:"vless",tag:"vless-reality-in",listen:$listen_addr,listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}},
+        {type:"naive",tag:"naive-in",network:"tcp",listen:$listen_addr,listen_port:($naive_port|tonumber),users:[{username:$naive_username,password:$naive_password}],tls:{enabled:true,certificate_path:$cert_file,key_path:$key_file}}
       ],outbounds:[{type:"direct",tag:"direct"}]}' > "$tmp"
     if ! "$SB_BIN" check -c "$tmp"; then
         rm -f "$tmp"
@@ -995,6 +1028,14 @@ show_nodes() {
             printf '[%s] VLESS + WebSocket + TLS | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$PREFERRED_IP" "$WS_PORT" "$WS_LINK"
         fi
 
+        if [ -n "$ORIGIN_ADDR" ]; then
+            origin_uri=$(uri_host "$ORIGIN_ADDR")
+            tag=$(node_tag IPv4 NaiveProxy)
+            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            NAIVE_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+            printf '[%s] NaiveProxy | 地址：%s | TCP 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$NAIVE_PORT" "$NAIVE_LINK"
+        fi
+
         if [ -n "$ORIGIN_IPV6" ]; then
             origin6_uri=$(uri_host "$ORIGIN_IPV6")
             tag=$(node_tag IPv6 AnyTLS)
@@ -1014,6 +1055,14 @@ show_nodes() {
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             WS6_LINK="vless://${WS_UUID}@${preferred6_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag_uri}"
             printf '[%s] VLESS + WebSocket + TLS | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$PREFERRED_IPV6" "$WS_PORT" "$WS6_LINK"
+        fi
+
+        if [ -n "$ORIGIN_IPV6" ]; then
+            origin6_uri=$(uri_host "$ORIGIN_IPV6")
+            tag=$(node_tag IPv6 NaiveProxy)
+            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            NAIVE6_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin6_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+            printf '[%s] NaiveProxy | 地址：[%s] | TCP 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$NAIVE_PORT" "$NAIVE6_LINK"
         fi
     } > "$nodes_tmp"
     chmod 0600 "$nodes_tmp"
@@ -1050,10 +1099,6 @@ overlay_install() {
         err '现有 Reality short ID 或 WS 路径缺失，不能安全覆盖安装。'
     valid_port "$ANYTLS_PORT" && valid_ws_port "$WS_PORT" && valid_port "$REALITY_PORT" ||
         err '已保存的端口配置无效，不能安全覆盖安装。'
-    [ "$ANYTLS_PORT" != "$WS_PORT" ] &&
-    [ "$ANYTLS_PORT" != "$REALITY_PORT" ] &&
-    [ "$WS_PORT" != "$REALITY_PORT" ] ||
-        err '已保存的三个协议端口存在重复，不能安全覆盖安装。'
     [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] ||
         err '已保存的源站地址为空，不能安全覆盖安装。'
     [ -n "$PREFERRED_IP" ] || [ -n "$PREFERRED_IPV6" ] ||
@@ -1081,7 +1126,7 @@ overlay_install() {
         *) err "不支持的已保存证书模式：$CERT_MODE" ;;
     esac
 
-    msg '检测到已有安装：将保留原域名、SNI、WS Host、Cloudflare Token、Zone ID、证书、UUID、密码、Reality 密钥、端口和节点路径。'
+    msg '检测到已有安装：将保留原域名、SNI、WS Host、Cloudflare Token、Zone ID、证书、UUID、密码、Reality 密钥、端口和节点路径；自动新增 NaiveProxy。'
     msg "TLS 域名：$TLS_DOMAIN"
     msg "Reality SNI：$REALITY_SNI"
     msg "Cloudflare 区域：${CF_ZONE_NAME:-不适用}"
@@ -1090,6 +1135,30 @@ overlay_install() {
     install_dependencies_and_core
     ensure_service_account
     enable_bbr
+
+    # Migrate installations created before NaiveProxy support.
+    # Keep every existing protocol setting intact; create only missing Naive data.
+    if [ -z "$NAIVE_PORT" ]; then
+        NAIVE_PORT=$(pick_random_range_port 10000 65535 "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT") ||
+            err '无法为新增 NaiveProxy 分配随机 TCP 端口。'
+        msg "已为 NaiveProxy 分配新随机 TCP 端口：$NAIVE_PORT"
+    fi
+    if [ -z "$NAIVE_USERNAME" ] || [ -z "$NAIVE_PASSWORD" ]; then
+        NAIVE_USERNAME="naive-$(openssl rand -hex 6)"
+        NAIVE_PASSWORD=$(openssl rand -hex 24)
+        msg '已为 NaiveProxy 自动生成独立用户名和密码。'
+    fi
+    valid_port "$NAIVE_PORT" || err 'NaiveProxy 端口无效。'
+    [ -n "$NAIVE_USERNAME" ] && [ -n "$NAIVE_PASSWORD" ] ||
+        err 'NaiveProxy 用户名或密码为空，无法安全启用。'
+    [ "$NAIVE_PORT" != "$ANYTLS_PORT" ] &&
+    [ "$NAIVE_PORT" != "$WS_PORT" ] &&
+    [ "$NAIVE_PORT" != "$REALITY_PORT" ] &&
+    [ "$ANYTLS_PORT" != "$WS_PORT" ] &&
+    [ "$ANYTLS_PORT" != "$REALITY_PORT" ] &&
+    [ "$WS_PORT" != "$REALITY_PORT" ] ||
+        err '四个协议的已保存端口存在重复，覆盖安装已停止。'
+
     create_service
     setup_reload_hook
 
@@ -1122,10 +1191,11 @@ overlay_install() {
     build_config || err '覆盖安装未能应用原有配置。旧配置已按构建流程尝试回滚，请检查服务日志。'
 
     msg '========== 覆盖安装完成 =========='
-    msg '所有原有节点参数已保留。现在显示全部可用节点：'
+    msg '原有节点参数已保留；NaiveProxy 已使用独立随机 TCP 端口并复用现有 TLS 证书。'
+    msg '现在显示全部可用节点：'
     show_nodes
     msg '请确认云厂商安全组和系统防火墙仍放行以下 TCP 端口：'
-    printf '  %s/tcp\n  %s/tcp\n  %s/tcp\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT"
+    printf '  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT"
     msg '管理命令：/usr/local/sbin/sb-manager'
     msg '节点文件：/etc/sing-box/nodes.txt'
 }
@@ -1135,13 +1205,14 @@ install_wizard() {
     PREVIOUS_ANYTLS_PORT=${ANYTLS_PORT:-}
     PREVIOUS_WS_PORT=${WS_PORT:-}
     PREVIOUS_REALITY_PORT=${REALITY_PORT:-}
+    PREVIOUS_NAIVE_PORT=${NAIVE_PORT:-}
     install_dependencies_and_core
     ensure_service_account
     enable_bbr
     create_service
     setup_reload_hook
 
-    msg '========== sing-box 一键安装向导（IPv4 + IPv6 双栈） =========='
+    msg '========== sing-box 一键安装向导（IPv4 + IPv6 双栈，四协议） =========='
     detected_ip=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
     detected_ipv6=""
     if ipv6_kernel_enabled; then
@@ -1200,7 +1271,7 @@ install_wizard() {
     REALITY_SNI=$REPLY
     valid_domain "$REALITY_SNI" || err 'Reality SNI 必须是有效域名。'
 
-    choose_random_ports "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT"
+    choose_random_ports "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT"
 
     msg '证书方式：'
     printf '  1. Cloudflare DNS-01：需要 API Token，可自动签发和续期。\n'
@@ -1267,13 +1338,15 @@ install_wizard() {
     [ -n "$REALITY_PRIVATE" ] && [ -n "$REALITY_PUBLIC" ] || err 'Reality 密钥生成失败。'
     REALITY_SID=$("$SB_BIN" generate rand --hex 8)
     WS_PATH="/ws-$(openssl rand -hex 8)"
+    NAIVE_USERNAME="naive-$(openssl rand -hex 6)"
+    NAIVE_PASSWORD=$(openssl rand -hex 24)
 
     build_config || err '配置未能成功应用，请检查 sing-box 日志。'
     save_state
-    msg '安装完成。正在显示三个节点……'
+    msg '安装完成。正在显示全部四种协议节点……'
     show_nodes
-    msg '请在云厂商安全组和系统防火墙放行以下 TCP 端口：'
-    printf '  %s/tcp\n  %s/tcp\n  %s/tcp\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT"
+    msg '请在云厂商安全组和系统防火墙放行以下 TCP 端口（含 NaiveProxy）：'
+    printf '  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT"
     msg '管理命令：/usr/local/sbin/sb-manager'
 }
 
@@ -1504,16 +1577,18 @@ change_ws_host() {
 }
 
 change_ports() {
-    msg '随机更换三个节点端口；新端口会避开当前端口、上一轮端口和正在监听的 TCP 端口。'
-    printf '当前端口：AnyTLS=%s, WS+TLS=%s, Reality=%s\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT"
+    msg '随机更换四个协议端口；新端口会避开当前端口、上一轮端口和正在监听的 TCP 端口。'
+    printf '当前端口：AnyTLS=%s, WS+TLS=%s, Reality=%s, NaiveProxy=%s\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT"
     old_anytls=$ANYTLS_PORT
     old_ws=$WS_PORT
     old_reality=$REALITY_PORT
-    choose_random_ports "$old_anytls" "$old_ws" "$old_reality"
+    old_naive=$NAIVE_PORT
+    choose_random_ports "$old_anytls" "$old_ws" "$old_reality" "$old_naive"
     if ! build_config; then
         ANYTLS_PORT=$old_anytls
         WS_PORT=$old_ws
         REALITY_PORT=$old_reality
+        NAIVE_PORT=$old_naive
         return 0
     fi
     show_nodes
@@ -1613,15 +1688,15 @@ menu() {
         printf '\nWS HTTP Host（不是 SNI，默认跟随 TLS 证书域名）：%s' "$WS_HOST"
         printf '\nReality SNI（新装默认 www.bing.com）：%s' "$REALITY_SNI" 
         printf '\n节点辨识符：%s' "${NODE_LABEL:-未设置}"
-        printf '\n端口：AnyTLS %s | WS TLS %s | Reality %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT"
+        printf '\n端口：AnyTLS %s | WS TLS %s | Reality %s | NaiveProxy %s/TCP' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT"
         printf '\n---------------------------------------\n'
-        printf '1. 查看三个协议的 IPv4/IPv6 节点链接\n'
+        printf '1. 查看四个协议的 IPv4/IPv6 节点链接\n'
         printf '2. 修改 TLS 证书域名 / TLS SNI（AnyTLS + WS TLS；必须是自己的域名）\n'
         printf '3. 修改 Reality SNI（新安装默认 www.bing.com）\n'
         printf '4. 修改 VLESS WS TLS 优选地址（IPv4/IPv6）\n'
         printf '5. 修改 VLESS WS HTTP Host（不是 SNI；默认跟随 TLS 域名）\n'
         printf '6. 修改 Cloudflare DNS 区域 / TLS 证书域名（WS Host 自动跟随）\n'
-        printf '7. 随机更换三个节点端口（自动避开占用端口）\n'
+        printf '7. 随机更换四个协议端口（自动避开占用端口）\n'
         printf '8. 重启 sing-box\n'
         printf '9. 查看服务状态\n'
         printf '10. 查看最近日志\n'
