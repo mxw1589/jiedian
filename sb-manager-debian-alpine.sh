@@ -2,8 +2,8 @@
 # sing-box multi-protocol manager for Debian + Alpine
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
-# Randomized collision-checked TCP ports; Cloudflare DNS-01, HTTP-01, or manual TLS certs
-# Overlay install reuses saved state, credentials, certificates, keys, and node IDs
+# User-selected collision-checked TCP ports (1024-65535); Cloudflare DNS-01 or HTTP-01
+# WEB_CONFIG_MODE=1; supports single/multi-VPS deployment; overlay install preserves existing settings
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -334,7 +334,7 @@ valid_ipv6_address() {
 valid_port() {
     p=$1
     case "$p" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$p" -ge 10000 ] 2>/dev/null && [ "$p" -le 65535 ] 2>/dev/null
+    [ "$p" -ge 1024 ] 2>/dev/null && [ "$p" -le 65535 ] 2>/dev/null
 }
 
 valid_ws_port() {
@@ -435,6 +435,62 @@ choose_random_ports() {
     NAIVE_PORT=$new_naive
     ANYREALITY_PORT=$new_anyreality
     msg "随机端口分配完成：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，VLESS Reality=$REALITY_PORT，NaiveProxy=$NAIVE_PORT，AnyTLS Reality=$ANYREALITY_PORT"
+}
+
+manual_port_available() {
+    candidate=$1
+    shift
+    if port_listening "$candidate"; then
+        for old_port in "$@"; do
+            [ -n "$old_port" ] || continue
+            [ "$candidate" = "$old_port" ] && return 0
+        done
+        return 1
+    fi
+    return 0
+}
+
+ask_manual_ports() {
+    old_ports="${PREVIOUS_ANYTLS_PORT:-} ${PREVIOUS_WS_PORT:-} ${PREVIOUS_REALITY_PORT:-} ${PREVIOUS_NAIVE_PORT:-} ${PREVIOUS_ANYREALITY_PORT:-}"
+    msg '请为五种协议分别指定 TCP 监听端口（1024–65535）。'
+    msg 'NAT VPS 模式：这里填写服务商允许你直接绑定的 VPS 端口；节点连接端口与监听端口相同。'
+    msg '五个端口必须互不相同，并且不能被其他程序占用。WS TLS 也允许自定义端口，不再限制为 Cloudflare 常见代理端口。'
+
+    ask_value 'AnyTLS TCP 端口' "${PREVIOUS_ANYTLS_PORT:-}"
+    ANYTLS_PORT=$REPLY
+    ask_value 'VLESS WS TLS TCP 端口' "${PREVIOUS_WS_PORT:-}"
+    WS_PORT=$REPLY
+    ask_value 'VLESS Reality TCP 端口' "${PREVIOUS_REALITY_PORT:-}"
+    REALITY_PORT=$REPLY
+    ask_value 'NaiveProxy TCP 端口' "${PREVIOUS_NAIVE_PORT:-}"
+    NAIVE_PORT=$REPLY
+    ask_value 'AnyTLS + Reality TCP 端口' "${PREVIOUS_ANYREALITY_PORT:-}"
+    ANYREALITY_PORT=$REPLY
+
+    for item in "AnyTLS:$ANYTLS_PORT" "VLESS WS TLS:$WS_PORT" "VLESS Reality:$REALITY_PORT" "NaiveProxy:$NAIVE_PORT" "AnyTLS + Reality:$ANYREALITY_PORT"; do
+        item_name=${item%%:*}
+        item_port=${item#*:}
+        valid_port "$item_port" || err "$item_name 端口无效：$item_port。端口必须是 1024–65535 的整数。"
+    done
+
+    [ "$ANYTLS_PORT" != "$WS_PORT" ] &&
+    [ "$ANYTLS_PORT" != "$REALITY_PORT" ] &&
+    [ "$ANYTLS_PORT" != "$NAIVE_PORT" ] &&
+    [ "$ANYTLS_PORT" != "$ANYREALITY_PORT" ] &&
+    [ "$WS_PORT" != "$REALITY_PORT" ] &&
+    [ "$WS_PORT" != "$NAIVE_PORT" ] &&
+    [ "$WS_PORT" != "$ANYREALITY_PORT" ] &&
+    [ "$REALITY_PORT" != "$NAIVE_PORT" ] &&
+    [ "$REALITY_PORT" != "$ANYREALITY_PORT" ] &&
+    [ "$NAIVE_PORT" != "$ANYREALITY_PORT" ] ||
+        err '五种协议的端口不能重复。'
+
+    for item_port in "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"; do
+        manual_port_available "$item_port" $old_ports ||
+            err "TCP 端口 $item_port 已被其他程序占用。请更换端口后重试。"
+    done
+
+    msg "手动端口设置完成：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，VLESS Reality=$REALITY_PORT，NaiveProxy=$NAIVE_PORT，AnyTLS Reality=$ANYREALITY_PORT"
 }
 
 ipv6_kernel_enabled() {
@@ -1000,27 +1056,33 @@ build_config() {
 
 node_tag() {
     family=$1
-    protocol=$2
-    if [ -n "$NODE_LABEL" ]; then
-        printf '%s-%s-%s' "$family" "$NODE_LABEL" "$protocol"
-    else
-        printf '%s-%s' "$family" "$protocol"
+    address=$2
+    protocol=$3
+    family_lc=$(printf '%s' "$family" | tr '[:upper:]' '[:lower:]')
+    if [ "$family_lc" = ipv4 ]; then
+        case "$address" in *[!0-9.]*) family_lc=domain ;; esac
     fi
+    tag="${family_lc}-${address}"
+    [ -z "$NODE_LABEL" ] || tag="${tag}-${NODE_LABEL}"
+    printf '%s-%s' "$tag" "$protocol"
 }
 
 node_tag_single() {
     protocol=$1
-    if [ -n "$NODE_LABEL" ]; then
-        printf '%s-%s' "$NODE_LABEL" "$protocol"
-    else
-        printf '%s' "$protocol"
-    fi
+    case "$WS_SERVER" in
+        *:*) family_lc=ipv6 ;;
+        *[!0-9.]*) family_lc=domain ;;
+        *) family_lc=ipv4 ;;
+    esac
+    tag="${family_lc}-${WS_SERVER}"
+    [ -z "$NODE_LABEL" ] || tag="${tag}-${NODE_LABEL}"
+    printf '%s-%s' "$tag" "$protocol"
 }
 
 change_node_label() {
     printf '\n当前节点辨识符：%s\n' "${NODE_LABEL:-（未设置）}"
-    msg '该辨识符会添加到协议节点名称前面；WS TLS 节点只有一个，不再加 IPv4 / IPv6 前缀。'
-    msg '示例：填写 KC 后，节点名称变为 IPv4-KC-AnyTLS、IPv6-KC-AnyTLS、KC-VLESS-WS-TLS。'
+    msg '该辨识符会添加到地址之后、协议名称之前；WS TLS 仍只有一个节点。'
+    msg '示例：填写 KC 后，节点名称变为 ipv4-23.147.232.192-KC-anytls、ipv6-2602:...-KC-anytls、ipv4-23.147.232.192-KC-vless+ws+tls。'
     msg '支持中文、英文字母和数字，可使用点、下划线、短横线；最多 20 个 Unicode 字符。'
     msg '示例：香港、东京、日本01、KC、LAX-01。留空可清除辨识符。'
     ask_value '新的节点辨识符（留空清除）' ''
@@ -1073,21 +1135,21 @@ show_nodes() {
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
     nodes_tmp="$APP_DIR/nodes.txt.tmp.$$"
     {
-        printf 'sing-box 节点信息（WS TLS 仅输出一个节点；其他双栈协议分别输出）\n辨识符：%s\n\n' "${NODE_LABEL:-未设置}"
+        printf 'sing-box 节点信息（节点名包含地址与协议；WS TLS 仅输出一个节点）\n辨识符：%s\n\n' "${NODE_LABEL:-未设置}"
 
         if [ -n "$ORIGIN_ADDR" ]; then
             origin_uri=$(uri_host "$ORIGIN_ADDR")
-            tag=$(node_tag IPv4 AnyTLS)
+            tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls)
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
             printf '[%s] AnyTLS | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYTLS_PORT" "$ANYTLS_LINK"
 
-            tag=$(node_tag IPv4 AnyTLS-Reality)
+            tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls+reality)
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             ANYREALITY_LINK="anytls://${ANYREALITY_PASSWORD}@${origin_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
             printf '[%s] AnyTLS + Reality | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYREALITY_PORT" "$ANYREALITY_LINK"
 
-            tag=$(node_tag IPv4 VLESS-Reality)
+            tag=$(node_tag IPv4 "$ORIGIN_ADDR" vless+reality)
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
             printf '[%s] VLESS + Reality | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
@@ -1096,7 +1158,7 @@ show_nodes() {
         # Exactly one WS TLS node, using the saved endpoint regardless of address family.
         if [ -n "$WS_SERVER" ]; then
             ws_server_uri=$(uri_host "$WS_SERVER")
-            tag=$(node_tag_single VLESS-WS-TLS)
+            tag=$(node_tag_single vless+ws+tls)
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             WS_LINK="vless://${WS_UUID}@${ws_server_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag_uri}"
             printf '[%s] VLESS + WebSocket + TLS | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$WS_SERVER" "$WS_PORT" "$WS_LINK"
@@ -1104,7 +1166,7 @@ show_nodes() {
 
         if [ -n "$ORIGIN_ADDR" ]; then
             origin_uri=$(uri_host "$ORIGIN_ADDR")
-            tag=$(node_tag IPv4 NaiveProxy)
+            tag=$(node_tag IPv4 "$ORIGIN_ADDR" naiveproxy)
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             NAIVE_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
             printf '[%s] NaiveProxy | 地址：%s | TCP 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$NAIVE_PORT" "$NAIVE_LINK"
@@ -1112,22 +1174,22 @@ show_nodes() {
 
         if [ -n "$ORIGIN_IPV6" ]; then
             origin6_uri=$(uri_host "$ORIGIN_IPV6")
-            tag=$(node_tag IPv6 AnyTLS)
+            tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls)
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
             printf '[%s] AnyTLS | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYTLS_PORT" "$ANYTLS6_LINK"
 
-            tag=$(node_tag IPv6 AnyTLS-Reality)
+            tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls+reality)
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             ANYREALITY6_LINK="anytls://${ANYREALITY_PASSWORD}@${origin6_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
             printf '[%s] AnyTLS + Reality | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYREALITY_PORT" "$ANYREALITY6_LINK"
 
-            tag=$(node_tag IPv6 VLESS-Reality)
+            tag=$(node_tag IPv6 "$ORIGIN_IPV6" vless+reality)
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
             printf '[%s] VLESS + Reality | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$REALITY_PORT" "$REALITY6_LINK"
 
-            tag=$(node_tag IPv6 NaiveProxy)
+            tag=$(node_tag IPv6 "$ORIGIN_IPV6" naiveproxy)
             tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             NAIVE6_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin6_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
             printf '[%s] NaiveProxy | 地址：[%s] | TCP 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$NAIVE_PORT" "$NAIVE6_LINK"
@@ -1171,7 +1233,7 @@ overlay_install() {
         err '现有 Reality 密钥缺失，不能安全覆盖安装。'
     [ -n "$REALITY_SID" ] && [ -n "$WS_PATH" ] ||
         err '现有 Reality short ID 或 WS 路径缺失，不能安全覆盖安装。'
-    valid_port "$ANYTLS_PORT" && valid_ws_port "$WS_PORT" && valid_port "$REALITY_PORT" ||
+    valid_port "$ANYTLS_PORT" && valid_port "$WS_PORT" && valid_port "$REALITY_PORT" ||
         err '已保存的端口配置无效，不能安全覆盖安装。'
     [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] ||
         err '已保存的源站地址为空，不能安全覆盖安装。'
@@ -1200,7 +1262,7 @@ overlay_install() {
         *) err "不支持的已保存证书模式：$CERT_MODE" ;;
     esac
 
-    msg '检测到已有安装：将保留原域名、SNI、WS Host、Cloudflare Token、Zone ID、证书、UUID、密码、Reality 密钥、端口和节点路径；自动新增 NaiveProxy 和 AnyTLS + Reality。'
+    msg '检测到已有安装：将保留原域名、SNI、WS Host、Cloudflare Token、Zone ID、证书、UUID、密码、Reality 密钥、手动端口和节点路径；自动补齐缺失协议。'
     msg "TLS 域名：$TLS_DOMAIN"
     msg "Reality SNI：$REALITY_SNI"
     msg "Cloudflare 区域：${CF_ZONE_NAME:-不适用}"
@@ -1368,17 +1430,38 @@ install_wizard() {
     msg 'VLESS Reality 和 AnyTLS + Reality 共用 Reality SNI，默认：www.bing.com（可在管理菜单 3 修改）'
     msg '不要把 www.bing.com 填入 TLS 证书域名：公共 CA 不会为你签发第三方域名证书。AnyTLS + Reality 不使用这张证书。'
 
-    # By default, the WebSocket HTTP Host follows the certificate hostname.
-    # It is not a TLS SNI field. Advanced users can change it later from menu 5.
-    WS_HOST=$TLS_DOMAIN
-    msg "VLESS WS HTTP Host 默认跟随 TLS 证书域名：$WS_HOST"
-    msg '注意：WS Host 是 HTTP Host，不是 SNI；如需自定义，可在安装后使用管理菜单 5 修改。'
+    # WS Host is an HTTP header value, not the TLS SNI.
+    ask_value 'VLESS WS HTTP Host（默认跟随 TLS 证书域名）' "$TLS_DOMAIN"
+    WS_HOST=$REPLY
+    valid_domain "$WS_HOST" || err 'WS HTTP Host 必须是有效域名。'
 
     ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'
     REALITY_SNI=$REPLY
     valid_domain "$REALITY_SNI" || err 'Reality SNI 必须是有效域名。'
 
-    choose_random_ports "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT"
+    ask_value '节点辨识符（支持中文；可留空）' ''
+    NODE_LABEL=$REPLY
+    if [ -n "$NODE_LABEL" ]; then
+        label_length=$(jq -nr --arg label "$NODE_LABEL" '$label | length')
+        [ "$label_length" -le 20 ] || err '节点辨识符最多 20 个字符。'
+        jq -ne --arg label "$NODE_LABEL" '$label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
+            err '节点辨识符仅支持中文、英文字母、数字、点、下划线和短横线。'
+    fi
+
+    msg '端口分配方式：'
+    printf '  1. 随机端口（自动避开当前监听端口）\n'
+    printf '  2. 手动端口（适合 NAT / 端口受限 VPS；五种协议分别输入）\n'
+    ask_value '请选择端口方式（1/2）' '1'
+    port_choice=$REPLY
+    case "$port_choice" in
+        1)
+            choose_random_ports "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT"
+            ;;
+        2)
+            ask_manual_ports
+            ;;
+        *) err '端口方式只能选择 1 或 2。' ;;
+    esac
 
     msg '证书方式：'
     printf '  1. Cloudflare DNS-01：需要 API Token，可自动签发和续期。\n'
@@ -1459,9 +1542,115 @@ install_wizard() {
     save_state
     msg '安装完成。正在显示全部五种协议节点……'
     show_nodes
-    msg '请在云厂商安全组和系统防火墙放行以下 TCP 端口（含 NaiveProxy 和 AnyTLS + Reality）：'
+    msg '请在云厂商安全组和系统防火墙放行你指定的以下 TCP 端口（含 NaiveProxy 和 AnyTLS + Reality）：'
     printf '  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
     msg '管理命令：/usr/local/sbin/sb-manager'
+}
+
+
+install_web_config() {
+    need_root
+    web_cfg=${1:-}
+    [ -n "$web_cfg" ] && [ -s "$web_cfg" ] || err '请提供网页生成的 JSON 配置文件。'
+    [ ! -e "$STATE_FILE" ] || err '此 VPS 已有 sing-box 管理配置。为避免覆盖现有节点，请先备份并使用管理菜单修改，或在确认后单独卸载再部署。'
+
+    if ! command -v jq >/dev/null 2>&1; then
+        if [ -f /etc/alpine-release ]; then
+            apk add --no-cache jq
+        elif [ -f /etc/debian_version ]; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y jq
+        else
+            err '网页配置安装仅支持 Debian/Ubuntu 和 Alpine。'
+        fi
+    fi
+
+    jq -e 'type == "object" and
+      (.origin_ipv4 | type == "string") and
+      (.origin_ipv6 | type == "string") and
+      (.ws_server | type == "string") and
+      (.tls_domain | type == "string") and
+      (.reality_sni | type == "string") and
+      (.ports | type == "object") and
+      (.ports.anytls != null) and
+      (.ports.ws_tls != null) and
+      (.ports.vless_reality != null) and
+      (.ports.naive != null) and
+      (.ports.anytls_reality != null) and
+      ([.origin_ipv4,.origin_ipv6,.ws_server,.tls_domain,(.ws_host // ""),.reality_sni,(.node_label // ""),(.cf_zone_name // ""),(.cf_token // ""),(.cf_email // ""),(.cf_zone_id // "")] | all(type == "string" and (contains("\n")|not) and (contains("\r")|not)))' \
+      "$web_cfg" >/dev/null 2>&1 ||
+        err '网页配置 JSON 格式不正确或字段包含非法换行。请从网页重新生成配置。'
+
+    origin_ipv4=$(jq -r '.origin_ipv4' "$web_cfg")
+    origin_ipv6=$(jq -r '.origin_ipv6' "$web_cfg")
+    ws_server=$(jq -r '.ws_server' "$web_cfg")
+    tls_domain=$(jq -r '.tls_domain' "$web_cfg")
+    ws_host=$(jq -r '.ws_host // .tls_domain' "$web_cfg")
+    reality_sni=$(jq -r '.reality_sni // "www.bing.com"' "$web_cfg")
+    node_label=$(jq -r '.node_label // ""' "$web_cfg")
+    anytls_port=$(jq -r '.ports.anytls' "$web_cfg")
+    ws_port=$(jq -r '.ports.ws_tls' "$web_cfg")
+    reality_port=$(jq -r '.ports.vless_reality' "$web_cfg")
+    naive_port=$(jq -r '.ports.naive' "$web_cfg")
+    anyreality_port=$(jq -r '.ports.anytls_reality' "$web_cfg")
+    cert_mode=$(jq -r '.cert_mode // "cloudflare"' "$web_cfg")
+    cf_zone_name=$(jq -r '.cf_zone_name // ""' "$web_cfg")
+    cf_token=$(jq -r '.cf_token // ""' "$web_cfg")
+    cf_email=$(jq -r '.cf_email // ""' "$web_cfg")
+    cf_zone_id=$(jq -r '.cf_zone_id // ""' "$web_cfg")
+
+    case "$cert_mode" in
+        cloudflare) cert_choice=1 ;;
+        http01) cert_choice=2 ;;
+        *) err '网页批量部署目前支持 Cloudflare DNS-01 或 HTTP-01 证书方式。' ;;
+    esac
+
+    if [ "$cert_mode" = cloudflare ] && [ -z "$cf_token" ]; then
+        ask_secret 'Cloudflare API Token（输入时不会显示）'
+        cf_token=$REPLY
+    fi
+    if [ "$cert_mode" = cloudflare ] && [ -z "$cf_token" ]; then
+        err 'Cloudflare API Token 不能为空。'
+    fi
+
+    answers=$(mktemp)
+    chmod 0600 "$answers"
+    trap 'rm -f "$answers"' EXIT
+    {
+        printf '%s\n' "${origin_ipv4:--}"
+        printf '%s\n' "${origin_ipv6:--}"
+        printf '%s\n' "$ws_server"
+        printf '%s\n' "$tls_domain"
+        printf '%s\n' 'YES'
+        printf '%s\n' "$ws_host"
+        printf '%s\n' "$reality_sni"
+        printf '%s\n' "$node_label"
+        printf '%s\n' '2'
+        printf '%s\n' "$anytls_port"
+        printf '%s\n' "$ws_port"
+        printf '%s\n' "$reality_port"
+        printf '%s\n' "$naive_port"
+        printf '%s\n' "$anyreality_port"
+        printf '%s\n' "$cert_choice"
+        if [ "$cert_mode" = cloudflare ]; then
+            printf '%s\n' "$cf_zone_name"
+            printf '%s\n' "$cf_token"
+            printf '%s\n' "$cf_email"
+            printf '%s\n' "$cf_zone_id"
+        fi
+    } > "$answers"
+
+    msg '正在使用网页配置启动 sing-box 安装流程……'
+    if install_wizard < "$answers"; then
+        rm -f "$answers"
+        trap - EXIT
+        return 0
+    else
+        status=$?
+        rm -f "$answers"
+        trap - EXIT
+        return "$status"
+    fi
 }
 
 change_tls_sni() {
@@ -1698,14 +1887,19 @@ change_ws_host() {
 }
 
 change_ports() {
-    msg '随机更换五个协议端口；新端口会避开当前端口、上一轮端口和正在监听的 TCP 端口。'
+    msg '手动修改五种协议的 TCP 监听端口。新端口必须互不相同且未被其他程序占用。'
     printf '当前端口：AnyTLS=%s, WS+TLS=%s, VLESS Reality=%s, NaiveProxy=%s, AnyTLS Reality=%s\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
     old_anytls=$ANYTLS_PORT
     old_ws=$WS_PORT
     old_reality=$REALITY_PORT
     old_naive=$NAIVE_PORT
     old_anyreality=$ANYREALITY_PORT
-    choose_random_ports "$old_anytls" "$old_ws" "$old_reality" "$old_naive" "$old_anyreality"
+    PREVIOUS_ANYTLS_PORT=$old_anytls
+    PREVIOUS_WS_PORT=$old_ws
+    PREVIOUS_REALITY_PORT=$old_reality
+    PREVIOUS_NAIVE_PORT=$old_naive
+    PREVIOUS_ANYREALITY_PORT=$old_anyreality
+    ask_manual_ports
     if ! build_config; then
         ANYTLS_PORT=$old_anytls
         WS_PORT=$old_ws
@@ -1855,7 +2049,7 @@ menu() {
         printf '4. 修改 VLESS WS TLS 单一连接地址（IPv4/IPv6/域名）\n'
         printf '5. 修改 VLESS WS HTTP Host（不是 SNI；默认跟随 TLS 域名）\n'
         printf '6. 修改 Cloudflare DNS 区域 / TLS 证书域名（WS Host 自动跟随）\n'
-        printf '7. 随机更换五个协议端口（自动避开占用端口）\n'
+        printf '7. 手动修改五个协议端口（自动检查重复和占用）\n'
         printf '8. 重启 sing-box\n'
         printf '9. 查看服务状态\n'
         printf '10. 查看最近日志\n'
@@ -1922,6 +2116,16 @@ main() {
     fi
     if [ "${1:-}" = uninstall ] || [ "${1:-}" = remove ]; then
         uninstall_manager "${2:-}"
+        return 0
+    fi
+    if [ "${1:-}" = install-web-config ]; then
+        [ "$#" -eq 2 ] || err '用法：sb-manager install-web-config /path/to/config.json'
+        install_web_config "$2"
+        return 0
+    fi
+    if [ "${1:-}" = nodes ]; then
+        load_state
+        show_nodes
         return 0
     fi
     install_manager_command
