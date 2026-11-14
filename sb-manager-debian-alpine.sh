@@ -1548,7 +1548,7 @@ install_web_config() {
     need_root
     web_cfg=${1:-}
     [ -n "$web_cfg" ] && [ -s "$web_cfg" ] || err '请提供网页生成的 JSON 配置文件。'
-    [ ! -e "$STATE_FILE" ] || err '此 VPS 已有 sing-box 管理配置。为避免覆盖现有节点，请先备份并使用管理菜单修改，或在确认后单独卸载再部署。'
+    [ ! -e "$STATE_FILE" ] || err '此 VPS 已有 sing-box 管理配置。运行 /usr/local/sbin/sb-manager nodes 查看现有节点。若要用网页配置替换，请先备份现有配置，再运行 /usr/local/sbin/sb-manager uninstall --yes，然后重新执行网页安装命令。'
 
     if ! command -v jq >/dev/null 2>&1; then
         if [ -f /etc/alpine-release ]; then
