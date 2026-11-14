@@ -15,6 +15,7 @@ KEY_FILE="$CERT_DIR/privkey.pem"
 CF_TOKEN_FILE="$APP_DIR/cloudflare.token"
 CF_ZONE_ID_FILE="$APP_DIR/cloudflare-zone-id"
 CF_ZONE_NAME=""
+NODE_LABEL=""
 BBR_SYSCTL_FILE=/etc/sysctl.d/99-sb-manager-bbr.conf
 BBR_MODULES_FILE=/etc/modules-load.d/sb-manager-bbr.conf
 BBR_BACKUP_FILE="$APP_DIR/bbr-previous.conf"
@@ -851,7 +852,8 @@ save_state() {
       --arg key_file "$KEY_FILE" \
       --arg cert_mode "$CERT_MODE" \
       --arg cf_zone_name "$CF_ZONE_NAME" \
-      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,anytls_port:($anytls_port|tonumber),ws_port:($ws_port|tonumber),reality_port:($reality_port|tonumber),anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name}' > "$tmp"
+      --arg node_label "$NODE_LABEL" \
+      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,anytls_port:($anytls_port|tonumber),ws_port:($ws_port|tonumber),reality_port:($reality_port|tonumber),anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"
     chmod 0600 "$tmp"
     chown root:root "$tmp"
     mv "$tmp" "$STATE_FILE"
@@ -880,6 +882,7 @@ load_state() {
     KEY_FILE=$(jq -r '.key_file' "$STATE_FILE")
     CERT_MODE=$(jq -r '.cert_mode' "$STATE_FILE")
     CF_ZONE_NAME=$(jq -r '.cf_zone_name // ""' "$STATE_FILE")
+    NODE_LABEL=$(jq -r '.node_label // ""' "$STATE_FILE")
 }
 
 build_config() {
@@ -934,40 +937,74 @@ build_config() {
     msg '配置已检查并应用，sing-box 已重启。'
 }
 
+node_tag() {
+    family=$1
+    protocol=$2
+    if [ -n "$NODE_LABEL" ]; then
+        printf '%s-%s-%s' "$family" "$NODE_LABEL" "$protocol"
+    else
+        printf '%s-%s' "$family" "$protocol"
+    fi
+}
+
+change_node_label() {
+    printf '\n当前节点辨识符：%s\n' "${NODE_LABEL:-（未设置）}"
+    msg '该辨识符会同时添加到 IPv4- 和 IPv6- 后面。'
+    msg '示例：填写 KC 后，节点名称变为 IPv4-KC-AnyTLS、IPv6-KC-AnyTLS。'
+    msg '允许 1–20 个字符：英文字母、数字、点、下划线、短横线。留空可清除辨识符。'
+    ask_value '新的节点辨识符（留空清除）' ''
+    new_label=$REPLY
+    if [ -n "$new_label" ]; then
+        [ "${#new_label}" -le 20 ] || { warn '辨识符最长为 20 个字符。'; return 0; }
+        printf '%s\n' "$new_label" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]*$' ||
+            { warn '格式无效。请使用英文字母、数字、点、下划线或短横线，且首字符必须是字母或数字。'; return 0; }
+    fi
+    NODE_LABEL=$new_label
+    save_state
+    msg "节点辨识符已保存：${NODE_LABEL:-（未设置）}"
+    show_nodes
+}
+
 show_nodes() {
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
     nodes_tmp="$APP_DIR/nodes.txt.tmp.$$"
     {
-        printf 'sing-box 节点信息（节点名称以 IPv4- / IPv6- 明确区分地址族）\n\n'
+        printf 'sing-box 节点信息（地址族前缀 + 自定义辨识符 + 协议）\n辨识符：%s\n\n' "${NODE_LABEL:-未设置}"
 
         if [ -n "$ORIGIN_ADDR" ]; then
             origin_uri=$(uri_host "$ORIGIN_ADDR")
-            ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#IPv4-AnyTLS"
-            printf '[IPv4-AnyTLS] AnyTLS | 地址：%s | 端口：%s\n%s\n\n' "$ORIGIN_ADDR" "$ANYTLS_PORT" "$ANYTLS_LINK"
+            tag=$(node_tag IPv4 AnyTLS)
+            ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag}"
+            printf '[%s] AnyTLS | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYTLS_PORT" "$ANYTLS_LINK"
 
-            REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#IPv4-VLESS-Reality"
-            printf '[IPv4-VLESS-Reality] VLESS + Reality | 地址：%s | 端口：%s\n%s\n\n' "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
+            tag=$(node_tag IPv4 VLESS-Reality)
+            REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag}"
+            printf '[%s] VLESS + Reality | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
         fi
 
         if [ -n "$PREFERRED_IP" ]; then
             preferred_uri=$(uri_host "$PREFERRED_IP")
-            WS_LINK="vless://${WS_UUID}@${preferred_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#IPv4-VLESS-WS-TLS"
-            printf '[IPv4-VLESS-WS-TLS] VLESS + WebSocket + TLS | 地址：%s | 端口：%s\n%s\n\n' "$PREFERRED_IP" "$WS_PORT" "$WS_LINK"
+            tag=$(node_tag IPv4 VLESS-WS-TLS)
+            WS_LINK="vless://${WS_UUID}@${preferred_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag}"
+            printf '[%s] VLESS + WebSocket + TLS | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$PREFERRED_IP" "$WS_PORT" "$WS_LINK"
         fi
 
         if [ -n "$ORIGIN_IPV6" ]; then
             origin6_uri=$(uri_host "$ORIGIN_IPV6")
-            ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#IPv6-AnyTLS"
-            printf '[IPv6-AnyTLS] AnyTLS | 地址：[%s] | 端口：%s\n%s\n\n' "$ORIGIN_IPV6" "$ANYTLS_PORT" "$ANYTLS6_LINK"
+            tag=$(node_tag IPv6 AnyTLS)
+            ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag}"
+            printf '[%s] AnyTLS | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYTLS_PORT" "$ANYTLS6_LINK"
 
-            REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#IPv6-VLESS-Reality"
-            printf '[IPv6-VLESS-Reality] VLESS + Reality | 地址：[%s] | 端口：%s\n%s\n\n' "$ORIGIN_IPV6" "$REALITY_PORT" "$REALITY6_LINK"
+            tag=$(node_tag IPv6 VLESS-Reality)
+            REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag}"
+            printf '[%s] VLESS + Reality | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$REALITY_PORT" "$REALITY6_LINK"
         fi
 
         if [ -n "$PREFERRED_IPV6" ]; then
             preferred6_uri=$(uri_host "$PREFERRED_IPV6")
-            WS6_LINK="vless://${WS_UUID}@${preferred6_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#IPv6-VLESS-WS-TLS"
-            printf '[IPv6-VLESS-WS-TLS] VLESS + WebSocket + TLS | 地址：[%s] | 端口：%s\n%s\n\n' "$PREFERRED_IPV6" "$WS_PORT" "$WS6_LINK"
+            tag=$(node_tag IPv6 VLESS-WS-TLS)
+            WS6_LINK="vless://${WS_UUID}@${preferred6_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag}"
+            printf '[%s] VLESS + WebSocket + TLS | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$PREFERRED_IPV6" "$WS_PORT" "$WS6_LINK"
         fi
     } > "$nodes_tmp"
     chmod 0600 "$nodes_tmp"
@@ -1566,6 +1603,7 @@ menu() {
         printf '\nTLS 证书域名 / TLS SNI（AnyTLS + WS TLS，必须是自己的域名）：%s' "$TLS_DOMAIN"
         printf '\nWS HTTP Host（不是 SNI，默认跟随 TLS 证书域名）：%s' "$WS_HOST"
         printf '\nReality SNI（新装默认 www.bing.com）：%s' "$REALITY_SNI" 
+        printf '\n节点辨识符：%s' "${NODE_LABEL:-未设置}"
         printf '\n端口：AnyTLS %s | WS TLS %s | Reality %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT"
         printf '\n---------------------------------------\n'
         printf '1. 查看三个协议的 IPv4/IPv6 节点链接\n'
@@ -1580,6 +1618,7 @@ menu() {
         printf '10. 查看最近日志\n'
         printf '11. 卸载 sing-box 和本脚本配置\n'
         printf '12. 查看 TCP BBR 加速状态\n'
+        printf '13. 自定义节点辨识符（添加在 IPv4- / IPv6- 后面）\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -1596,6 +1635,7 @@ menu() {
             10) show_logs ;;
             11) uninstall_manager || true; exit 0 ;;
             12) show_bbr_status ;;
+            13) change_node_label ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac
