@@ -574,30 +574,36 @@ show_nodes() {
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
     nodes_tmp="$APP_DIR/nodes.txt.tmp.$$"
     {
-        printf 'sing-box 节点信息\n\n'
+        printf 'sing-box 节点信息（节点名称以 IPv4- / IPv6- 明确区分地址族）\n\n'
+
         if [ -n "$ORIGIN_ADDR" ]; then
             origin_uri=$(uri_host "$ORIGIN_ADDR")
-            ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#AnyTLS-Main"
-            REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#VLESS-Reality-Main"
-            printf '[1] AnyTLS（主地址 / IPv4 / 域名）\n%s\n\n' "$ANYTLS_LINK"
-            printf '[4] VLESS + Reality（主地址 / IPv4 / 域名）\n%s\n\n' "$REALITY_LINK"
+            ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#IPv4-AnyTLS"
+            printf '[IPv4-AnyTLS] AnyTLS | 地址：%s | 端口：%s\n%s\n\n' "$ORIGIN_ADDR" "$ANYTLS_PORT" "$ANYTLS_LINK"
+
+            REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#IPv4-VLESS-Reality"
+            printf '[IPv4-VLESS-Reality] VLESS + Reality | 地址：%s | 端口：%s\n%s\n\n' "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
         fi
-        if [ -n "$ORIGIN_IPV6" ]; then
-            origin6_uri=$(uri_host "$ORIGIN_IPV6")
-            ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#AnyTLS-IPv6"
-            REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#VLESS-Reality-IPv6"
-            printf '[2] AnyTLS（IPv6）\n%s\n\n' "$ANYTLS6_LINK"
-            printf '[5] VLESS + Reality（IPv6）\n%s\n\n' "$REALITY6_LINK"
-        fi
+
         if [ -n "$PREFERRED_IP" ]; then
             preferred_uri=$(uri_host "$PREFERRED_IP")
-            WS_LINK="vless://${WS_UUID}@${preferred_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#VLESS-WS-TLS-Main"
-            printf '[3] VLESS + WebSocket + TLS（主地址 / IPv4 / 域名）\n%s\n\n' "$WS_LINK"
+            WS_LINK="vless://${WS_UUID}@${preferred_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#IPv4-VLESS-WS-TLS"
+            printf '[IPv4-VLESS-WS-TLS] VLESS + WebSocket + TLS | 地址：%s | 端口：%s\n%s\n\n' "$PREFERRED_IP" "$WS_PORT" "$WS_LINK"
         fi
+
+        if [ -n "$ORIGIN_IPV6" ]; then
+            origin6_uri=$(uri_host "$ORIGIN_IPV6")
+            ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#IPv6-AnyTLS"
+            printf '[IPv6-AnyTLS] AnyTLS | 地址：[%s] | 端口：%s\n%s\n\n' "$ORIGIN_IPV6" "$ANYTLS_PORT" "$ANYTLS6_LINK"
+
+            REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#IPv6-VLESS-Reality"
+            printf '[IPv6-VLESS-Reality] VLESS + Reality | 地址：[%s] | 端口：%s\n%s\n\n' "$ORIGIN_IPV6" "$REALITY_PORT" "$REALITY6_LINK"
+        fi
+
         if [ -n "$PREFERRED_IPV6" ]; then
             preferred6_uri=$(uri_host "$PREFERRED_IPV6")
-            WS6_LINK="vless://${WS_UUID}@${preferred6_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#VLESS-WS-TLS-IPv6"
-            printf '[6] VLESS + WebSocket + TLS（IPv6）\n%s\n\n' "$WS6_LINK"
+            WS6_LINK="vless://${WS_UUID}@${preferred6_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#IPv6-VLESS-WS-TLS"
+            printf '[IPv6-VLESS-WS-TLS] VLESS + WebSocket + TLS | 地址：[%s] | 端口：%s\n%s\n\n' "$PREFERRED_IPV6" "$WS_PORT" "$WS6_LINK"
         fi
     } > "$nodes_tmp"
     chmod 0600 "$nodes_tmp"
@@ -655,16 +661,23 @@ install_wizard() {
     fi
     [ -n "$PREFERRED_IP" ] || [ -n "$PREFERRED_IPV6" ] || err '至少需要填写一个 VLESS WS TLS 优选地址。'
 
-    msg '重要：TLS 证书域名必须是你自己拥有/获准管理的域名，例如 node.example.com。'
-    msg '不要填写 www.bing.com、www.microsoft.com 等第三方网站域名；它们只可作为 Reality SNI 示例。'
-    ask_value 'TLS 证书域名 / AnyTLS 与 WS 的 SNI（填写你自己的域名）' ''
+    msg '重要：这里只填写你自己拥有/获准管理的 TLS 证书域名，例如 node.example.com。'
+    msg '不要填写 www.bing.com；它是 Reality SNI 默认值，不是 TLS 证书域名。'
+    ask_value '你的 TLS 证书域名（AnyTLS + WS TLS 共用；必须是自己的域名）' ''
     TLS_DOMAIN=$REPLY
     valid_cert_domain "$TLS_DOMAIN" || err '请输入有效的完整 DNS 域名，例如 node.example.com；不能填写 IP 地址。'
     confirm_domain_control "$TLS_DOMAIN" || err '未确认域名所有权，已停止证书申请。'
 
-    ask_value 'VLESS WS Host 域名' "$TLS_DOMAIN"
-    WS_HOST=$REPLY
-    valid_domain "$WS_HOST" || err '请输入有效的 Host 域名。'
+    msg "AnyTLS + VLESS WS TLS 的 TLS 证书域名 / TLS SNI 将统一使用：$TLS_DOMAIN"
+    msg "VLESS WS HTTP Host 将自动使用：$TLS_DOMAIN（它是 HTTP Host，不是 SNI）"
+    msg '只有 VLESS Reality SNI 默认使用：www.bing.com（可在管理菜单 3 修改）'
+    msg '不要把 www.bing.com 填入 TLS 证书域名：公共 CA 不会为你签发第三方域名证书。'
+
+    # By default, the WebSocket HTTP Host follows the certificate hostname.
+    # It is not a TLS SNI field. Advanced users can change it later from menu 5.
+    WS_HOST=$TLS_DOMAIN
+    msg "VLESS WS HTTP Host 默认跟随 TLS 证书域名：$WS_HOST"
+    msg '注意：WS Host 是 HTTP Host，不是 SNI；如需自定义，可在安装后使用管理菜单 5 修改。'
 
     ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'
     REALITY_SNI=$REPLY
@@ -742,9 +755,11 @@ install_wizard() {
 }
 
 change_tls_sni() {
-    ask_value '新的 TLS 证书域名 / AnyTLS 与 WS SNI' "$TLS_DOMAIN"
+    msg '此域名用于 AnyTLS 和 VLESS + WS + TLS 的 TLS SNI，必须是你拥有/获准管理且有匹配证书的域名。'
+    msg 'www.bing.com 只作为 Reality SNI 默认值；不能用它申请 AnyTLS / WS TLS 证书。'
+    ask_value '新的 TLS 证书域名 / TLS SNI（自己的域名）' "$TLS_DOMAIN"
     new_domain=$REPLY
-    valid_cert_domain "$new_domain" || { warn 'TLS 证书域名格式无效；请输入你管理的 DNS 域名，不能填写 IP。'; return 0; }
+    valid_cert_domain "$new_domain" || { warn 'TLS 证书域名格式无效；请输入你管理的 DNS 域名，不能填写 IP 或第三方域名。'; return 0; }
     if [ "$CERT_MODE" = cloudflare ]; then
         [ -n "$CF_ZONE_NAME" ] || { warn '缺少 Cloudflare 区域主域名，请先使用菜单 6 设置 Cloudflare 绑定区域。'; return 0; }
         domain_belongs_to_zone "$new_domain" "$CF_ZONE_NAME" || { warn "新域名必须属于 Cloudflare 区域 $CF_ZONE_NAME。"; return 0; }
@@ -752,14 +767,22 @@ change_tls_sni() {
     confirm_domain_control "$new_domain" || { warn '未确认域名所有权，未修改 TLS 域名。'; return 0; }
 
     old_domain=$TLS_DOMAIN
+    old_ws_host=$WS_HOST
     backup_dir=$(mktemp -d) || { warn '无法创建临时证书备份目录。'; return 0; }
     cp -p "$CERT_FILE" "$backup_dir/fullchain.pem" 2>/dev/null || true
     cp -p "$KEY_FILE" "$backup_dir/privkey.pem" 2>/dev/null || true
+
     TLS_DOMAIN=$new_domain
+    # If WS Host was following the old TLS domain, keep the two synchronized.
+    # Preserve a deliberately customized Host value.
+    if [ "$WS_HOST" = "$old_domain" ]; then
+        WS_HOST=$new_domain
+    fi
 
     if [ "$CERT_MODE" = cloudflare ] && [ -s "$CF_TOKEN_FILE" ]; then
         if ! issue_cloudflare_cert "$TLS_DOMAIN"; then
             TLS_DOMAIN=$old_domain
+            WS_HOST=$old_ws_host
             [ ! -s "$backup_dir/fullchain.pem" ] || cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"
             [ ! -s "$backup_dir/privkey.pem" ] || cp -p "$backup_dir/privkey.pem" "$KEY_FILE"
             chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
@@ -767,12 +790,13 @@ change_tls_sni() {
             chmod 0640 "$KEY_FILE" 2>/dev/null || true
             service_restart || true
             rm -rf "$backup_dir"
-            warn '证书签发失败，已恢复旧证书和旧 SNI。请检查 Cloudflare Token 权限、Zone ID 和 DNS。'
+            warn '证书签发失败，已恢复旧证书、TLS 域名和 WS Host。请检查 Cloudflare Token 权限、Zone ID 和 DNS。'
             return 0
         fi
     elif [ "$CERT_MODE" = standalone ]; then
         if ! issue_http_cert "$TLS_DOMAIN"; then
             TLS_DOMAIN=$old_domain
+            WS_HOST=$old_ws_host
             [ ! -s "$backup_dir/fullchain.pem" ] || cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"
             [ ! -s "$backup_dir/privkey.pem" ] || cp -p "$backup_dir/privkey.pem" "$KEY_FILE"
             chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
@@ -780,12 +804,13 @@ change_tls_sni() {
             chmod 0640 "$KEY_FILE" 2>/dev/null || true
             service_restart || true
             rm -rf "$backup_dir"
-            warn 'HTTP-01 证书签发失败，已恢复旧证书和旧 SNI。请检查域名解析和 TCP 80 端口。'
+            warn 'HTTP-01 证书签发失败，已恢复旧证书、TLS 域名和 WS Host。请检查域名解析和 TCP 80 端口。'
             return 0
         fi
     else
         if ! openssl x509 -in "$CERT_FILE" -noout -checkhost "$TLS_DOMAIN" >/dev/null 2>&1; then
             TLS_DOMAIN=$old_domain
+            WS_HOST=$old_ws_host
             rm -rf "$backup_dir"
             warn '现有证书不包含这个域名。请先更换证书，或使用 Cloudflare / HTTP 自动证书签发。'
             return 0
@@ -794,6 +819,7 @@ change_tls_sni() {
 
     if ! build_config; then
         TLS_DOMAIN=$old_domain
+        WS_HOST=$old_ws_host
         [ ! -s "$backup_dir/fullchain.pem" ] || cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"
         [ ! -s "$backup_dir/privkey.pem" ] || cp -p "$backup_dir/privkey.pem" "$KEY_FILE"
         chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
@@ -801,10 +827,12 @@ change_tls_sni() {
         chmod 0640 "$KEY_FILE" 2>/dev/null || true
         service_restart || true
         rm -rf "$backup_dir"
-        warn '新 TLS 配置应用失败，已恢复旧证书和旧域名。'
+        warn '新 TLS 配置应用失败，已恢复旧证书、TLS 域名和 WS Host。'
         return 0
     fi
     rm -rf "$backup_dir"
+    msg "TLS SNI 已更新为：$TLS_DOMAIN"
+    msg "WS HTTP Host 当前为：$WS_HOST（若原来跟随 TLS 域名，已自动同步）"
 }
 
 change_cloudflare_zone() {
@@ -825,7 +853,7 @@ change_cloudflare_zone() {
     else
         cert_default="node.$new_zone"
     fi
-    ask_value '新的 TLS 证书域名 / AnyTLS 与 WS SNI' "$cert_default"
+    ask_value '新的 TLS 证书域名 / TLS SNI（必须属于新 Cloudflare 区域）' "$cert_default"
     new_cert_domain=$REPLY
     valid_cert_domain "$new_cert_domain" || { warn 'TLS 证书域名无效；不能填写 IP。'; return 0; }
     domain_belongs_to_zone "$new_cert_domain" "$new_zone" || {
@@ -833,14 +861,16 @@ change_cloudflare_zone() {
         return 0
     }
 
-    if domain_belongs_to_zone "$WS_HOST" "$new_zone"; then
-        host_default=$WS_HOST
+    # Keep a custom WS Host only if it remains within the new zone.
+    # If it was following the old TLS hostname (or falls outside the new zone),
+    # automatically follow the new TLS certificate hostname.
+    if [ "$WS_HOST" = "$TLS_DOMAIN" ] || ! domain_belongs_to_zone "$WS_HOST" "$new_zone"; then
+        new_ws_host=$new_cert_domain
     else
-        host_default=$new_cert_domain
+        new_ws_host=$WS_HOST
     fi
-    ask_value '新的 VLESS WS Host 域名' "$host_default"
-    new_ws_host=$REPLY
-    valid_domain "$new_ws_host" || { warn 'VLESS WS Host 域名无效。'; return 0; }
+    msg "新的 WS HTTP Host 将设置为：$new_ws_host"
+    msg 'WS Host 是 HTTP Host，不是 SNI；如需自定义，可在管理菜单 5 修改。'
 
     if [ "$new_zone" = "$CF_ZONE_NAME" ]; then
         current_zone_id=$(cat "$CF_ZONE_ID_FILE" 2>/dev/null || true)
@@ -941,7 +971,8 @@ change_preferred_ip() {
 }
 
 change_ws_host() {
-    ask_value '新的 VLESS WS Host 域名（需在 DNS/CDN 中正确配置）' "$WS_HOST"
+    msg 'WS HTTP Host 是 WebSocket HTTP 请求头，不是 TLS SNI。默认建议与 TLS 证书域名相同。'
+    ask_value '新的 VLESS WS HTTP Host（不是 SNI）' "$WS_HOST"
     new_host=$REPLY
     valid_domain "$new_host" || { warn '域名格式无效。'; return; }
     WS_HOST=$new_host
@@ -1053,15 +1084,17 @@ menu() {
         printf '\n========== sing-box 节点管理 ==========' 
         printf '\n源站 IPv4/域名：%s | 源站 IPv6：%s' "${ORIGIN_ADDR:-未设置}" "${ORIGIN_IPV6:-未设置}"
         printf '\nWS 优选 IPv4/域名：%s | WS 优选 IPv6：%s' "${PREFERRED_IP:-未设置}" "${PREFERRED_IPV6:-未设置}"
-        printf '\nTLS SNI：%s | WS Host：%s | Reality SNI：%s' "$TLS_DOMAIN" "$WS_HOST" "$REALITY_SNI"
+        printf '\nTLS 证书域名 / TLS SNI（AnyTLS + WS TLS，必须是自己的域名）：%s' "$TLS_DOMAIN"
+        printf '\nWS HTTP Host（不是 SNI，默认跟随 TLS 证书域名）：%s' "$WS_HOST"
+        printf '\nReality SNI（新装默认 www.bing.com）：%s' "$REALITY_SNI" 
         printf '\n端口：AnyTLS %s | WS TLS %s | Reality %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT"
         printf '\n---------------------------------------\n'
         printf '1. 查看三个协议的 IPv4/IPv6 节点链接\n'
-        printf '2. 修改 TLS 证书域名 / AnyTLS + WS SNI（自动检查/更新证书）\n'
+        printf '2. 修改 TLS 证书域名 / TLS SNI（AnyTLS + WS TLS；必须是自己的域名）\n'
         printf '3. 修改 Reality SNI（新安装默认 www.bing.com）\n'
-        printf '4. 修改 VLESS WS TLS 优选 IP/域名（IPv4/IPv6）\n'
-        printf '5. 修改绑定到优选 IP 的 WS Host 域名\n'
-        printf '6. 修改 Cloudflare 绑定域名 / DNS 区域 / TLS 证书域名\n'
+        printf '4. 修改 VLESS WS TLS 优选地址（IPv4/IPv6）\n'
+        printf '5. 修改 VLESS WS HTTP Host（不是 SNI；默认跟随 TLS 域名）\n'
+        printf '6. 修改 Cloudflare DNS 区域 / TLS 证书域名（WS Host 自动跟随）\n'
         printf '7. 随机更换三个节点端口（自动避开占用端口）\n'
         printf '8. 重启 sing-box\n'
         printf '9. 查看服务状态\n'
