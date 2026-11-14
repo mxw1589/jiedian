@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b1020">
+<title>sing-box 多 VPS 可视化部署</title>
+<style>
+:root{--bg:#0b1020;--panel:#151d32;--panel2:#10182d;--line:#273657;--text:#e8eefb;--muted:#95a4c2;--blue:#3d78f6;--blue2:#245bd1;--green:#35c98a;--red:#ff6b78;--input:#0d1630;--shadow:0 16px 38px #0004}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -20%,#1a2a50 0,#0b1020 48%);color:var(--text);font:14px/1.55 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+a{color:#79a7ff;text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:1500px;margin:auto;padding:26px 28px 60px}
+header{text-align:center;padding:12px 0 24px}h1{font-size:clamp(24px,3vw,36px);margin:0 0 6px;font-weight:800;letter-spacing:-.5px}.sub{color:var(--muted);font-size:13px}.sub a{margin:0 7px}
+.topnote{display:inline-flex;gap:8px;align-items:center;margin-top:12px;padding:6px 12px;border:1px solid #28436e;border-radius:999px;background:#142344;color:#b8cdf5;font-size:12px}
+.grid{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(360px,1fr);gap:16px;align-items:start}
+.panel{background:linear-gradient(160deg,#171f34,#131a2d);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--shadow)}
+.panel h2{font-size:16px;margin:0 0 14px}.panel h3{font-size:14px;margin:16px 0 9px;color:#dce7fb}
+.panelhead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.badge{font-size:11px;color:#9fbcff;background:#1a2c52;border:1px solid #2c4678;border-radius:99px;padding:2px 8px;white-space:nowrap}
+.muted{color:var(--muted)}.small{font-size:12px;color:var(--muted)}
+.field{display:grid;grid-template-columns:145px minmax(0,1fr);align-items:center;gap:10px;margin:8px 0}
+.field label{color:#cbd6eb;font-size:13px}.field input,.field select,.field textarea{width:100%;min-width:0;background:var(--input);border:1px solid #26385f;color:var(--text);border-radius:9px;padding:10px 11px;font:inherit;outline:none}
+.field input:focus,.field select:focus{border-color:#5b8fff;box-shadow:0 0 0 3px #3d78f622}
+.field input::placeholder{color:#5d6d8d}.field select{cursor:pointer}
+input[type=number]{font-variant-numeric:tabular-nums}
+.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:10px 0 16px}
+.protocol{border:1px solid #293858;border-radius:10px;padding:10px 11px;background:#111a30;display:flex;align-items:center;gap:9px}
+.protocol b{font-size:13px}.protocol span{display:block;color:var(--muted);font-size:11px}
+.pill{font-size:10px;color:#8fb3ff;border:1px solid #344d7a;border-radius:99px;padding:1px 6px;margin-left:auto}
+.serverlist{display:grid;gap:12px}
+.server{border:1px solid #2b3a5c;border-radius:12px;background:#10182c;padding:14px}
+.server-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}.server-title strong{font-size:14px}
+.server-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.server .field{grid-template-columns:105px minmax(0,1fr);margin:6px 0}
+.server .field label{font-size:12px}
+.portgrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:8px}
+.portbox{background:#121d35;border:1px solid #283a60;border-radius:9px;padding:8px}
+.portbox label{display:block;font-size:11px;color:#aebcda;margin-bottom:5px}
+.portbox input{width:100%;background:#0b142a;border:1px solid #2c3d64;border-radius:7px;color:white;padding:8px 7px;min-width:0}
+.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
+button{border:1px solid #3a67bd;background:linear-gradient(180deg,#477ef4,#2863db);color:white;border-radius:9px;padding:10px 14px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 5px 14px #1b58d633}
+button:hover{filter:brightness(1.08)}button.secondary{background:#1a2745;border-color:#31466f;color:#dce7fa;box-shadow:none}button.ghost{background:transparent;border-color:#354667;color:#c5d3ee;box-shadow:none}button.danger{background:#3a1e30;border-color:#774052;color:#ffc0c7;box-shadow:none}button:disabled{opacity:.45;cursor:not-allowed}
+.full{width:100%}
+.divider{height:1px;background:#283653;margin:15px 0}
+.bottom{margin-top:16px}
+.commandbox{width:100%;min-height:160px;resize:vertical;background:#091329;color:#b9d0ff;border:1px solid #304b7e;border-radius:11px;padding:13px;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre}
+.preview{background:#0c152a;border:1px solid #273a60;border-radius:11px;padding:12px;max-height:330px;overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.statrow{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}.stat{background:#101a31;border:1px solid #2a3a5d;border-radius:9px;padding:8px 11px}.stat strong{font-size:17px;display:block}.stat span{font-size:11px;color:var(--muted)}
+.notice{border:1px solid #66542c;background:#2a2417;color:#e8d5a4;padding:11px 13px;border-radius:10px;font-size:12px;margin-top:12px}
+.ok{border-color:#285d4d;background:#102a26;color:#a8e8d0}
+.hidden{display:none!important}
+.footer{color:#7183a6;font-size:12px;text-align:center;padding-top:24px}
+@media(max-width:950px){.grid{grid-template-columns:1fr}.wrap{padding:18px 14px 40px}.portgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.field{grid-template-columns:1fr;gap:4px}.server-grid{grid-template-columns:1fr}.server .field{grid-template-columns:1fr;gap:3px}.protocols{grid-template-columns:1fr}.portgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.panel{padding:14px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>⚡ sing-box 多 VPS 可视化部署</h1>
+  <div class="sub">基于自有脚本 · IPv4 / IPv6 · 五协议 · NAT 手动端口 · 多服务器批量部署</div>
+  <div class="topnote">🔒 静态网页 · 配置仅在当前浏览器生成，不会上传到网页服务器</div>
+</header>
+
+<div class="grid">
+  <section class="panel">
+    <div class="panelhead"><h2>🖥️ VPS 服务器配置</h2><span class="badge">每台 VPS 独立端口</span></div>
+    <div class="small">每台服务器填写 SSH 登录地址、公网地址和五个监听端口。端口必须在该 VPS 上可绑定、互不重复。</div>
+    <div id="servers" class="serverlist"></div>
+    <div class="actions">
+      <button id="addServer" class="secondary">＋ 添加 VPS</button>
+      <button id="previewNodes" class="ghost">预览全部节点名称</button>
+    </div>
+    <div class="divider"></div>
+    <h3>协议清单（五种全部启用）</h3>
+    <div class="protocols">
+      <div class="protocol"><div>🔐</div><div><b>AnyTLS</b><span>标准 TLS 入站</span></div><i class="pill">anytls</i></div>
+      <div class="protocol"><div>🌀</div><div><b>AnyTLS + Reality</b><span>Reality 握手配置</span></div><i class="pill">anytls+reality</i></div>
+      <div class="protocol"><div>🌐</div><div><b>VLESS + WS + TLS</b><span>只生成一个节点，不拆分双栈</span></div><i class="pill">vless+ws+tls</i></div>
+      <div class="protocol"><div>⚡</div><div><b>VLESS + Reality</b><span>TCP + Reality</span></div><i class="pill">vless+reality</i></div>
+      <div class="protocol"><div>🛡️</div><div><b>NaiveProxy</b><span>TLS / HTTP/2</span></div><i class="pill">naiveproxy</i></div>
+    </div>
+    <div class="notice">端口范围：1024–65535。当前脚本以 sing-box 非 root 用户运行，因此不接受 1–1023 的特权端口。网页只能检查填写值是否重复，最终是否被占用由 VPS 安装时再次检查。若 WS TLS 使用 Cloudflare 橙云，非 Cloudflare 支持的 HTTPS 代理端口通常需改为 DNS Only。</div>
+  </section>
+
+  <section class="panel">
+    <div class="panelhead"><h2>⚙️ 全局配置</h2><span class="badge">多台 VPS 共用</span></div>
+    <div class="field"><label for="tlsDomain">全局默认 TLS 证书域名</label><input id="tlsDomain" placeholder="node.example.com"></div>
+    <div class="field"><label for="wsHost">全局默认 WS HTTP Host</label><input id="wsHost" placeholder="默认跟随 TLS 证书域名"></div>
+    <div class="field"><label for="realitySni">Reality SNI</label><input id="realitySni" value="www.bing.com"></div>
+    <div class="field"><label for="certMode">证书方式</label><select id="certMode"><option value="cloudflare">Cloudflare DNS-01（推荐，多 VPS）</option><option value="http01">HTTP-01（每台 VPS 都需独立解析到本机，TCP 80 可访问）</option></select></div>
+    <div id="cfFields">
+      <div class="field"><label for="cfZone">Cloudflare DNS 区域</label><input id="cfZone" placeholder="example.com"></div>
+      <div class="field"><label for="cfZoneId">Cloudflare Zone ID</label><input id="cfZoneId" placeholder="可选：32 位十六进制"></div>
+      <div class="field"><label for="cfEmail">证书账户邮箱</label><input id="cfEmail" type="email" placeholder="可留空"></div>
+      <div class="notice ok">多 VPS 建议给每台服务器配置不同的 TLS 子域名（例如 vps1.example.com、vps2.example.com），在 VPS 卡片的“TLS 域名覆盖”中填写；全局 TLS 域名仅作默认值。这样可避免多台机器反复为同一个域名申请重复证书。API Token 不在网页中填写。单机命令会在 VPS 上安全提示输入；批量部署脚本只在你本机运行时提示一次，并通过 SSH 输入流传送，不会写入 GitHub Pages。</div>
+    </div>
+    <div id="httpNotice" class="notice hidden">HTTP-01 不需要 Cloudflare Token，但每台 VPS 都必须能通过同一证书域名完成 HTTP 验证。多 VPS 使用同一域名时更建议 Cloudflare DNS-01。</div>
+    <div class="divider"></div>
+    <h3>部署方式</h3>
+    <div class="small">单机：复制命令到目标 VPS 的 root SSH 终端。批量：下载生成的 deploy-multi.sh，在你自己的 Linux / macOS / WSL 电脑运行，并使用 SSH 密钥登录每台 VPS。</div>
+    <div class="actions">
+      <button id="singleCommand">生成单机安装命令</button>
+      <button id="batchScript" class="secondary">生成多 VPS 部署脚本</button>
+      <button id="exportConfigs" class="ghost">导出配置 JSON</button>
+    </div>
+  </section>
+</div>
+
+<section class="panel bottom">
+  <div class="panelhead"><h2>📋 节点名称预览</h2><span class="badge" id="nodeCount">尚未生成</span></div>
+  <div class="small">这是节点名称和地址预览。真实分享链接（UUID、密码、Reality 公钥等）由每台 VPS 安装时安全生成，部署后会自动汇总到 all-nodes.txt。</div>
+  <div id="nodePreview" class="preview">点击“预览全部节点名称”，查看每台 VPS 将生成的节点名称。</div>
+</section>
+
+<section class="panel bottom">
+  <div class="panelhead"><h2>⌨️ 单机安装命令 / 批量部署说明</h2><span class="badge">GitHub Raw</span></div>
+  <div class="small">脚本地址：<a href="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh" target="_blank" rel="noopener">sb-manager-debian-alpine.sh</a></div>
+  <textarea id="commandOutput" class="commandbox" readonly placeholder="生成命令后会显示在这里；点击右侧复制按钮即可。"></textarea>
+  <div class="actions">
+    <button id="copyOutput" class="secondary">复制内容</button>
+    <button id="downloadOutput" class="ghost">下载当前内容</button>
+    <button id="clearOutput" class="ghost">清空</button>
+  </div>
+  <div class="notice">安全提醒：不要把包含 Cloudflare Token、证书私钥或 SSH 私钥的文件上传到公开 GitHub 仓库。批量脚本不包含 Cloudflare Token；执行时会在本机提示输入一次。</div>
+</section>
+<div class="footer">本工具为静态前端配置生成器，不托管、不保存 VPS 密码或 SSH 私钥。实际部署结果以 VPS 上 sing-box 配置检查和服务状态为准。</div>
+</div>
+
+<template id="serverTemplate">
+<div class="server">
+  <div class="server-title"><strong>VPS <span class="server-number"></span></strong><div class="actions" style="margin:0"><button type="button" class="secondary oneCommand">单机命令</button><button type="button" class="danger removeServer">删除</button></div></div>
+  <div class="server-grid">
+    <div class="field"><label>节点辨识符</label><input data-k="label" placeholder="例如：东京01（可中文）"></div>
+    <div class="field"><label>SSH 登录目标</label><input data-k="sshTarget" placeholder="root@23.147.232.192"></div>
+    <div class="field"><label>SSH 端口</label><input data-k="sshPort" type="number" min="1" max="65535" value="22"></div>
+    <div class="field"><label>源站 IPv4</label><input data-k="ipv4" placeholder="23.147.232.192"></div>
+    <div class="field"><label>源站 IPv6</label><input data-k="ipv6" placeholder="2602:...（可留空）"></div>
+    <div class="field"><label>WS 单一连接地址</label><input data-k="wsServer" placeholder="IPv4 / IPv6 / 域名"></div>
+    <div class="field"><label>TLS 域名覆盖（可选）</label><input data-k="tlsDomainOverride" placeholder="留空使用右侧全局默认域名"></div>
+    <div class="field"><label>WS Host 覆盖（可选）</label><input data-k="wsHostOverride" placeholder="留空使用全局默认 Host"></div>
+  </div>
+  <h3>五种协议手动 TCP 端口</h3>
+  <div class="portgrid">
+    <div class="portbox"><label>AnyTLS</label><input data-p="anytls" type="number" min="1024" max="65535" placeholder="15432"></div>
+    <div class="portbox"><label>WS + TLS</label><input data-p="ws_tls" type="number" min="1024" max="65535" placeholder="15433"></div>
+    <div class="portbox"><label>VLESS Reality</label><input data-p="vless_reality" type="number" min="1024" max="65535" placeholder="15434"></div>
+    <div class="portbox"><label>NaiveProxy</label><input data-p="naive" type="number" min="1024" max="65535" placeholder="15435"></div>
+    <div class="portbox"><label>AnyTLS Reality</label><input data-p="anytls_reality" type="number" min="1024" max="65535" placeholder="15436"></div>
+  </div>
+</div>
+</template>
+
+<script>
+"use strict";
+const RAW_URL = "https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
+let serverSeq = 0;
+const $ = (id) => document.getElementById(id);
+function addServer(data={}) {
+  serverSeq++;
+  const node = $("serverTemplate").content.firstElementChild.cloneNode(true);
+  node.dataset.id = String(serverSeq);
+  node.querySelector(".server-number").textContent = serverSeq;
+  for (const [k,v] of Object.entries(data)) {
+    const el = node.querySelector(`[data-k="${k}"],[data-p="${k}"]`);
+    if (el) el.value = v;
+  }
+  node.querySelector(".removeServer").addEventListener("click", () => {
+    if ($("servers").children.length <= 1) return alert("至少保留一台 VPS。");
+    node.remove(); renumber();
+  });
+  node.querySelector(".oneCommand").addEventListener("click", () => generateSingle(node));
+  $("servers").appendChild(node);
+  renumber();
+}
+function renumber() {
+  [...$("servers").children].forEach((el,i)=>el.querySelector(".server-number").textContent=i+1);
+}
+function val(root, selector) { return root.querySelector(selector)?.value.trim() || ""; }
+function getServer(card) {
+  return {
+    label: val(card,'[data-k="label"]'),
+    ssh_target: val(card,'[data-k="sshTarget"]'),
+    ssh_port: val(card,'[data-k="sshPort"]') || "22",
+    origin_ipv4: val(card,'[data-k="ipv4"]'),
+    origin_ipv6: val(card,'[data-k="ipv6"]'),
+    ws_server: val(card,'[data-k="wsServer"]'),
+    tls_domain_override: val(card,'[data-k="tlsDomainOverride"]'),
+    ws_host_override: val(card,'[data-k="wsHostOverride"]'),
+    ports: {
+      anytls: val(card,'[data-p="anytls"]'),
+      ws_tls: val(card,'[data-p="ws_tls"]'),
+      vless_reality: val(card,'[data-p="vless_reality"]'),
+      naive: val(card,'[data-p="naive"]'),
+      anytls_reality: val(card,'[data-p="anytls_reality"]')
+    }
+  };
+}
+function getGlobal() {
+  const tls = $("tlsDomain").value.trim();
+  return {
+    tls_domain: tls,
+    ws_host: $("wsHost").value.trim() || tls,
+    reality_sni: $("realitySni").value.trim() || "www.bing.com",
+    cert_mode: $("certMode").value,
+    cf_zone_name: $("cfZone").value.trim(),
+    cf_zone_id: $("cfZoneId").value.trim(),
+    cf_email: $("cfEmail").value.trim()
+  };
+}
+function configFor(s) {
+  const g=getGlobal();
+  return {
+    origin_ipv4:s.origin_ipv4,
+    origin_ipv6:s.origin_ipv6,
+    ws_server:s.ws_server,
+    tls_domain:s.tls_domain_override || g.tls_domain,
+    ws_host:s.ws_host_override || s.tls_domain_override || g.ws_host,
+    reality_sni:g.reality_sni,
+    node_label:s.label,
+    ports:s.ports,
+    cert_mode:g.cert_mode,
+    cf_zone_name:g.cf_zone_name,
+    cf_zone_id:g.cf_zone_id,
+    cf_email:g.cf_email
+  };
+}
+function validate(s, index) {
+  if (!s.ssh_target || !/^root@[^\s|]+$/.test(s.ssh_target)) throw new Error(`VPS ${index}: SSH 登录目标请填写 root@IP 或 root@域名。`);
+  if (s.ssh_target.includes("'")) throw new Error(`VPS ${index}: SSH 登录目标不能包含单引号。`);
+  if (!/^\d+$/.test(s.ssh_port) || +s.ssh_port<1 || +s.ssh_port>65535) throw new Error(`VPS ${index}: SSH 端口必须是 1–65535。`);
+  if (!s.origin_ipv4 && !s.origin_ipv6) throw new Error(`VPS ${index}: IPv4 和 IPv6 至少填写一个。`);
+  if (!s.ws_server) throw new Error(`VPS ${index}: WS 单一连接地址不能为空。`);
+  if (s.label && !/^[\p{L}\p{N}._-]{1,20}$/u.test(s.label)) throw new Error(`VPS ${index}: 节点辨识符最多 20 个字符，只允许中文、字母、数字、点、下划线和短横线。`);
+  const ps=Object.values(s.ports).map(Number);
+  if (Object.values(s.ports).some(x=>!/^\d+$/.test(x) || +x<1024 || +x>65535)) throw new Error(`VPS ${index}: 五个端口都必须填写 1024–65535 的整数。`);
+  if (new Set(ps).size!==5) throw new Error(`VPS ${index}: 五个协议端口不能重复。`);
+  const g=getGlobal();
+  const cfg=configFor(s);
+  const domainPattern=/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[A-Za-z]{2,63}$/;
+  if (!cfg.tls_domain || !domainPattern.test(cfg.tls_domain)) throw new Error(`VPS ${index}: 请填写有效的 TLS 证书域名，例如 node.example.com。`);
+  if (!domainPattern.test(cfg.ws_host)) throw new Error(`VPS ${index}: WS HTTP Host 必须是有效域名。`);
+  if (!domainPattern.test(g.reality_sni)) throw new Error("Reality SNI 必须是有效域名。");
+  if (g.cert_mode==="cloudflare") {
+    if (!g.cf_zone_name) throw new Error("Cloudflare DNS 区域主域名不能为空。");
+    if (g.cf_zone_id && !/^[a-fA-F0-9]{32}$/.test(g.cf_zone_id)) throw new Error("Cloudflare Zone ID 必须是 32 位十六进制，或留空。");
+    const d=cfg.tls_domain.toLowerCase(), z=g.cf_zone_name.toLowerCase();
+    if (!(d===z || d.endsWith("."+z))) throw new Error(`VPS ${index}: TLS 域名 ${cfg.tls_domain} 不属于 Cloudflare 区域 ${g.cf_zone_name}。`);
+  }
+  return cfg;
+}
+function b64(str) { return btoa(unescape(encodeURIComponent(str))); }
+function shellQuote(str) { return "'" + String(str).replace(/'/g, "'\\''") + "'"; }
+function download(name, text, type="text/plain;charset=utf-8") {
+  const blob=new Blob([text],{type});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=url;a.download=name;a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function output(text) { $("commandOutput").value=text; $("commandOutput").scrollTop=0; }
+function oneCommandText(cfg) {
+  const encoded=b64(JSON.stringify(cfg));
+  return `set -eu
+CFG="$(mktemp)"
+SH="$(mktemp)"
+trap 'rm -f "$CFG" "$SH"' EXIT
+printf '%s' '${encoded}' | base64 -d > "$CFG"
+chmod 600 "$CFG"
+curl -fsSL '${RAW_URL}' -o "$SH"
+head -n 1 "$SH" | grep -qx '#!/bin/sh'
+grep -q 'WEB_CONFIG_MODE=1' "$SH"
+install -m 700 "$SH" /usr/local/sbin/sb-manager
+rm -f "$SH"
+/usr/local/sbin/sb-manager install-web-config "$CFG"
+RC=$?
+rm -f "$CFG"
+exit "$RC"`;
+}
+function generateSingle(card) {
+  try {
+    const s=getServer(card), idx=[...$("servers").children].indexOf(card)+1;
+    const cfg=validate(s,idx);
+    output(`# VPS ${idx} · ${s.ssh_target}\n# 在该 VPS 的 root SSH 终端执行：\n\n${oneCommandText(cfg)}`);
+  } catch(e) { alert(e.message); }
+}
+function addressPrefix(address) {
+  if (address.includes(":")) return "ipv6";
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(address)) return "ipv4";
+  return "domain";
+}
+function previewNames(s) {
+  const label=s.label ? `-${s.label}` : "";
+  const rows=[];
+  if (s.origin_ipv4) {
+    const p=`ipv4-${s.origin_ipv4}${label}-`;
+    rows.push(`${p}anytls`,`${p}anytls+reality`,`${p}vless+reality`,`${p}naiveproxy`);
+  }
+  if (s.origin_ipv6) {
+    const p=`ipv6-${s.origin_ipv6}${label}-`;
+    rows.push(`${p}anytls`,`${p}anytls+reality`,`${p}vless+reality`,`${p}naiveproxy`);
+  }
+  const wp=`${addressPrefix(s.ws_server)}-${s.ws_server}${label}-vless+ws+tls`;
+  rows.push(wp);
+  return rows;
+}
+function previewAll() {
+  try {
+    const cards=[...$("servers").children];
+    const all=[];
+    cards.forEach((card,i)=>{
+      const s=getServer(card);validate(s,i+1);
+      all.push(`===== VPS ${i+1} · ${s.ssh_target} =====`);
+      previewNames(s).forEach(n=>all.push(n));
+      all.push("");
+    });
+    $("nodePreview").textContent=all.join("\n");
+    $("nodeCount").textContent=`${all.filter(x=>x && !x.startsWith("====")).length} 个节点名称`;
+  } catch(e) { alert(e.message); }
+}
+function generateBatch() {
+  try {
+    const cards=[...$("servers").children];
+    if (!cards.length) throw new Error("请至少添加一台 VPS。");
+    const rows=[];
+    cards.forEach((card,i)=>{
+      const s=getServer(card), cfg=validate(s,i+1);
+      rows.push({target:s.ssh_target,port:s.ssh_port,cfg});
+    });
+    const needsCF=rows.some(x=>x.cfg.cert_mode==="cloudflare");
+    const hostRows=rows.map(x=>`${x.target}|${x.port}|${b64(JSON.stringify(x.cfg))}`).join("\n");
+    const script=`#!/usr/bin/env bash
+set -u
+RAW_URL=${shellQuote(RAW_URL)}
+OUT_FILE="\${OUT_FILE:-$PWD/all-nodes.txt}"
+SSH_KEY="\${SSH_KEY:-}"
+command -v ssh >/dev/null 2>&1 || { echo "缺少 ssh 客户端"; exit 1; }
+command -v curl >/dev/null 2>&1 || { echo "缺少 curl"; exit 1; }
+command -v base64 >/dev/null 2>&1 || { echo "缺少 base64"; exit 1; }
+${needsCF ? `command -v jq >/dev/null 2>&1 || { echo "批量 Cloudflare 部署需要本机 jq"; exit 1; }
+read -r -s -p "请输入 Cloudflare API Token（只在本机输入一次，不会写入此脚本）: " CF_TOKEN
+printf '\\n'
+[ -n "$CF_TOKEN" ] || { echo "Token 不能为空"; exit 1; }` : `CF_TOKEN=""`}
+if [ -z "$SSH_KEY" ]; then
+  read -r -p "SSH 私钥路径（留空使用 ssh-agent / 默认密钥）: " SSH_KEY
+fi
+: > "$OUT_FILE"
+chmod 600 "$OUT_FILE"
+echo "开始部署 ${rows.length} 台 VPS；要求 root SSH 密钥认证。"
+while IFS='|' read -r TARGET SSH_PORT CFG_B64; do
+  [ -n "$TARGET" ] || continue
+  echo
+  echo "========== 部署 $TARGET =========="
+  TMP_CFG="$(mktemp)"
+  printf '%s' "$CFG_B64" | base64 -d > "$TMP_CFG" || { echo "配置解码失败：$TARGET"; rm -f "$TMP_CFG"; continue; }
+  chmod 600 "$TMP_CFG"
+  if [ -n "$CF_TOKEN" ]; then
+    jq --arg token "$CF_TOKEN" '.cf_token=$token' "$TMP_CFG" > "\${TMP_CFG}.new" || { echo "配置写入 Token 失败：$TARGET"; rm -f "$TMP_CFG" "\${TMP_CFG}.new"; continue; }
+    mv "\${TMP_CFG}.new" "$TMP_CFG"
+    chmod 600 "$TMP_CFG"
+  fi
+  SSH_ARGS=(-p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=12 -o ServerAliveInterval=15)
+  [ -z "$SSH_KEY" ] || SSH_ARGS+=(-i "$SSH_KEY")
+  if ! ssh "\${SSH_ARGS[@]}" "$TARGET" 'umask 077; cat > /root/.sb-manager-web-config.json' < "$TMP_CFG"; then
+    echo "传输配置失败：$TARGET（检查 root SSH 密钥、地址和 SSH 端口）"
+    rm -f "$TMP_CFG"
+    continue
+  fi
+  if ssh "\${SSH_ARGS[@]}" "$TARGET" "set +e
+    TMP_SH=\\$(mktemp) || exit 1
+    curl -fsSL '$RAW_URL' -o \\\"\\$TMP_SH\\\" || { rm -f \\\"\\$TMP_SH\\\"; exit 1; }
+    head -n 1 \\\"\\$TMP_SH\\\" | grep -qx '#!/bin/sh' || { rm -f \\\"\\$TMP_SH\\\"; echo '下载的不是 Shell 文件'; exit 1; }
+    grep -q 'WEB_CONFIG_MODE=1' \\\"\\$TMP_SH\\\" || { rm -f \\\"\\$TMP_SH\\\"; echo 'GitHub 脚本版本不支持网页配置'; exit 1; }
+    install -m 700 \\\"\\$TMP_SH\\\" /usr/local/sbin/sb-manager || exit 1
+    rm -f \\\"\\$TMP_SH\\\"
+    /usr/local/sbin/sb-manager install-web-config /root/.sb-manager-web-config.json
+    RC=\\$?
+    rm -f /root/.sb-manager-web-config.json
+    exit \\$RC"; then
+    echo "部署完成：$TARGET"
+    {
+      printf '\\n===== %s =====\\n' "$TARGET"
+      ssh "\${SSH_ARGS[@]}" "$TARGET" 'cat /etc/sing-box/nodes.txt'
+    } >> "$OUT_FILE" || echo "读取节点清单失败：$TARGET"
+  else
+    echo "部署失败：$TARGET；配置文件可能保留在服务器 /root/.sb-manager-web-config.json，请登录检查后删除。"
+  fi
+  rm -f "$TMP_CFG"
+done <<'SB_VPS_LIST'
+${hostRows}
+SB_VPS_LIST
+unset CF_TOKEN 2>/dev/null || true
+echo
+echo "批量任务结束。成功节点汇总文件：$OUT_FILE"
+echo "注意：请检查每台 VPS 的服务状态及云安全组 / 系统防火墙端口。"
+`;
+    output(script);
+    download("deploy-multi.sh",script);
+  } catch(e) { alert(e.message); }
+}
+$("addServer").addEventListener("click",()=>addServer());
+$("previewNodes").addEventListener("click",previewAll);
+$("singleCommand").addEventListener("click",()=>{
+  const card=$("servers").firstElementChild;
+  if(card) generateSingle(card);
+});
+$("batchScript").addEventListener("click",generateBatch);
+$("exportConfigs").addEventListener("click",()=>{
+  try {
+    const configs=[...$("servers").children].map((c,i)=>validate(getServer(c),i+1));
+    download("sing-box-vps-configs.json",JSON.stringify({generated_at:new Date().toISOString(),servers:configs},null,2),"application/json");
+  } catch(e){alert(e.message);}
+});
+$("copyOutput").addEventListener("click",async()=>{
+  const t=$("commandOutput").value;
+  if(!t) return alert("请先生成命令或批量部署脚本。");
+  try { await navigator.clipboard.writeText(t); alert("已复制。"); }
+  catch { $("commandOutput").select(); document.execCommand("copy"); alert("已复制。"); }
+});
+$("downloadOutput").addEventListener("click",()=>{
+  if(!$("commandOutput").value) return alert("没有可下载的内容。");
+  download("sing-box-deploy-command.txt",$("commandOutput").value);
+});
+$("clearOutput").addEventListener("click",()=>output(""));
+$("certMode").addEventListener("change",()=>{
+  const cf=$("certMode").value==="cloudflare";
+  $("cfFields").classList.toggle("hidden",!cf);
+  $("httpNotice").classList.toggle("hidden",cf);
+});
+addServer();
+</script>
+</body>
+</html>
