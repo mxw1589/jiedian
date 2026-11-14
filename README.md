@@ -3,16 +3,12 @@ sing-box 多协议节点管理脚本
 在 Debian / Alpine VPS 上以 root 身份执行：
 # 一键安装命令
 ```
-tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && grep -q 'change_cloudflare_zone' "$tmp" && grep -q "ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'" "$tmp" && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
+tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && grep -q 'change_cloudflare_zone' "$tmp" && grep -q "ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'" "$tmp" && grep -q 'IPv4-VLESS-WS-TLS' "$tmp" && grep -q 'IPv6-VLESS-WS-TLS' "$tmp" && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
 ```
 # 一键卸载命令
 ```
 /usr/local/sbin/sb-manager uninstall --yes
 ```
-sing-box 多协议节点管理脚本
-快速安装（可直接复制）
-在 Debian / Alpine VPS 上以 root 身份执行：
-tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && grep -q 'change_cloudflare_zone' "$tmp" && grep -q "ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'" "$tmp" && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
 这条命令会先下载到临时文件，并检查第一行确实是 Shell
 shebang，再安装脚本，避免把 GitHub HTML 页面误当作脚本执行。
 
@@ -127,7 +123,7 @@ https://github.com/mxw1589/jiedian/blob/main/sb-manager-debian-alpine.sh
 
 在服务器上执行以下命令。该命令使用 GitHub raw
 地址下载，并检查文件首行，防止下载到 HTML：
-tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && grep -q 'change_cloudflare_zone' "$tmp" && grep -q "ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'" "$tmp" && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
+tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && grep -q 'change_cloudflare_zone' "$tmp" && grep -q "ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'" "$tmp" && grep -q 'IPv4-VLESS-WS-TLS' "$tmp" && grep -q 'IPv6-VLESS-WS-TLS' "$tmp" && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
 blob 是 GitHub 网页查看地址，会返回 HTML；不能将它保存成 .sh
 后直接执行。请使用 raw.githubusercontent.com。
 安装向导
@@ -143,13 +139,15 @@ blob 是 GitHub 网页查看地址，会返回 HTML；不能将它保存成 .sh
    node.example.com，用于 AnyTLS 和 VLESS WS TLS 的证书及 SNI。
 6. 域名所有权确认：脚本会要求输入大写
    YES，确认你有权为该域名申请证书。
-7. VLESS WS Host 域名：写入 WS 节点链接的 Host 参数。
+7. VLESS WS HTTP Host：首次安装默认自动跟随 TLS 证书域名，不是 SNI；安装后可通过管理菜单 5 单独修改。
 8. Reality SNI：Reality 握手目标域名，新安装默认值为
    www.bing.com。这个字段只用于 VLESS Reality，不用于申请 TLS 证书。
 9. 证书申请方式：选择 Cloudflare DNS-01、HTTP-01 或手动导入。
-重要区别： www.bing.com 是新安装时 VLESS Reality 的默认
-SNI/握手目标；它不是你的 TLS 证书域名。AnyTLS 和 VLESS WS TLS
-仍必须使用你自己拥有或获准管理的证书域名。
+重要区别： 这里不是三个 SNI，而是两个 SNI 字段和一个 HTTP Host：
+- TLS 证书域名 / TLS SNI：AnyTLS 与 VLESS WS TLS 共用，必须填写你自己拥有/获准管理且证书匹配的域名。
+- WS HTTP Host：不是 SNI，首次安装默认跟随 TLS 证书域名；只有你的 CDN/反代明确要求不同 Host 时才单独修改。
+- Reality SNI：只用于 VLESS Reality，新安装默认 www.bing.com，可以在管理菜单 3 修改。
+因此不能把所有字段都默认成 www.bing.com：公共 CA 不会为你签发微软域名的证书。
 证书方式
 方式 1：Cloudflare DNS-01
 - 需要 Cloudflare API Token。
@@ -197,8 +195,22 @@ Reality 使用 Reality 密钥，不依赖这组常规 TLS 证书。
 - 执行 sing-box check 校验配置。
 - 启动或重启 sing-box 服务。
 - 按已填写的地址显示三个协议的 IPv4/主地址及 IPv6 分享链接（最多六条）。
+- 节点名称统一使用 IPv4- / IPv6- 前缀，例如 IPv4-AnyTLS、`IPv6-VLESS-Reality`，便于在客户端区分地址族。
 - 将节点链接保存到：
 /etc/sing-box/nodes.txt
+节点名称规则
+节点分享链接的名称（URL fragment）和 nodes.txt 标题都使用地址族前缀：
+节点名称	连接地址来源
+IPv4-AnyTLS	源站 IPv4 / IPv4 域名
+IPv6-AnyTLS	源站 IPv6
+IPv4-VLESS-WS-TLS	WS 优选 IPv4 / IPv4 域名
+IPv6-VLESS-WS-TLS	WS 优选 IPv6
+IPv4-VLESS-Reality	源站 IPv4 / IPv4 域名
+IPv6-VLESS-Reality	源站 IPv6
+
+
+如果没有填写某个地址族，该地址族对应的节点就不会生成。
+
 如果分别填写了 IPv4/主地址和 IPv6
 地址，文件会分别列出对应的节点链接；只填写一个地址族时，只生成该地址族的链接。若主地址使用同时配置了
 A 和 AAAA 记录的域名，也可以让客户端通过域名解析选择 IPv4 或 IPv6。
@@ -211,7 +223,7 @@ A 和 AAAA 记录的域名，也可以让客户端通过域名解析选择 IPv4 
 管理菜单：
 菜单	功能
 1	查看三个协议的 IPv4/IPv6 节点链接（最多六条）
-2	修改 TLS 证书域名 / AnyTLS + WS SNI，并重新申请或检查证书
+2	修改 TLS 证书域名 / AnyTLS + WS TLS SNI，并重新申请或检查证书
 3	修改 VLESS Reality SNI（新安装默认 www.bing.com）
 4	修改 VLESS WS TLS 优选 IPv4/IPv6 地址（可填写 IP 或域名）
 5	修改 VLESS WS Host 域名
