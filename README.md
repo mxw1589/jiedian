@@ -3,7 +3,7 @@ sing-box 多协议节点管理脚本
 在 Debian / Alpine VPS 上以 root 身份执行：
 # 一键安装命令
 ```
-curl -fsSL https://github.com/mxw1589/jiedian/blob/main/sb-manager-debian-alpine.sh -o /usr/local/sbin/sb-manager && chmod 700 /usr/local/sbin/sb-manager && /usr/local/sbin/sb-manager install
+tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
 ```
 # 一键卸载命令
 ```
