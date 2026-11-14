@@ -5,6 +5,7 @@
 # Manual or random collision-checked TCP ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; supports single/multi-VPS deployment; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=2; blank origin addresses are detected on the VPS
+# WEB_CONFIG_SCHEMA=3; node label validation supports nonempty labels
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -1073,9 +1074,9 @@ change_node_label() {
     ask_value '新的节点辨识符（留空清除）' ''
     new_label=$REPLY
     if [ -n "$new_label" ]; then
-        label_length=$(jq -nr --arg label "$new_label" '$label | length')
+        label_length=$(jq -nr --arg node_label "$new_label" '$node_label | length')
         [ "$label_length" -le 20 ] || { warn '辨识符最多 20 个字符（中文按一个字符计算）。'; return 0; }
-        jq -ne --arg label "$new_label" '$label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
+        jq -ne --arg node_label "$new_label" '$node_label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
             { warn '格式无效。支持中文、英文字母、数字、点、下划线和短横线；不支持空格及特殊符号。'; return 0; }
     fi
     NODE_LABEL=$new_label
@@ -1475,9 +1476,9 @@ install_from_config() {
     assign_ports
 
     if [ -n "$NODE_LABEL" ]; then
-        label_length=$(jq -nr --arg label "$NODE_LABEL" '$label | length')
+        label_length=$(jq -nr --arg node_label "$NODE_LABEL" '$node_label | length')
         [ "$label_length" -le 20 ] || err '节点辨识符最多 20 个字符。'
-        jq -ne --arg label "$NODE_LABEL" '$label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
+        jq -ne --arg node_label "$NODE_LABEL" '$node_label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
             err '节点辨识符仅支持中文、英文字母、数字、点、下划线和短横线。'
     fi
     ensure_service_account
