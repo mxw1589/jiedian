@@ -204,6 +204,26 @@ ask_value() {
     if [ -z "$REPLY" ]; then REPLY=$default; fi
 }
 
+valid_email() {
+    case "$1" in
+        *@*.*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+ask_secret() {
+    prompt=$1
+    printf '%s: ' "$prompt"
+    if [ -t 0 ] && command -v stty >/dev/null 2>&1; then
+        stty -echo
+        IFS= read -r REPLY || REPLY=""
+        stty echo
+        printf '\n'
+    else
+        IFS= read -r REPLY || REPLY=""
+    fi
+}
+
 install_dependencies_and_core() {
     if [ -f /etc/alpine-release ]; then
         OS_FAMILY=alpine
@@ -383,38 +403,135 @@ install_acme() {
     start_cron
 }
 
+acme_conf_value() {
+    conf_file=$1
+    conf_key=$2
+    [ -r "$conf_file" ] || return 0
+    sed -n "s/^${conf_key}='\(.*\)'$/\1/p" "$conf_file" | tail -n 1
+}
+
+acme_cf_credentials_match() {
+    check_domain=$1
+    check_token=$2
+    check_zone_id=$3
+
+    if [ -n "$check_zone_id" ]; then
+        domain_conf="/root/.acme.sh/${check_domain}_ecc/${check_domain}.conf"
+        saved_token=$(acme_conf_value "$domain_conf" CF_Token)
+        saved_zone_id=$(acme_conf_value "$domain_conf" CF_Zone_ID)
+        [ "$saved_token" = "$check_token" ] && [ "$saved_zone_id" = "$check_zone_id" ]
+    else
+        account_conf=/root/.acme.sh/account.conf
+        saved_token=$(acme_conf_value "$account_conf" SAVED_CF_Token)
+        [ -n "$saved_token" ] || saved_token=$(acme_conf_value "$account_conf" CF_Token)
+        [ "$saved_token" = "$check_token" ]
+    fi
+}
+
 issue_cloudflare_cert() {
     domain=$1
     valid_cert_domain "$domain" || { warn '证书域名格式无效；请填写你控制的 DNS 域名，不要填写 IP 地址。'; return 1; }
     [ -n "$CF_ZONE_NAME" ] || { warn '缺少 Cloudflare DNS 区域主域名；请重新运行安装向导并填写你管理的域名。'; return 1; }
     if ! domain_belongs_to_zone "$domain" "$CF_ZONE_NAME"; then
         warn "证书域名 $domain 不属于 Cloudflare 区域 $CF_ZONE_NAME。"
-        warn '请填写你自己管理的域名下的主机名，例如 node.example.com；不要把 Reality SNI（例如 www.bing.com）填到 TLS 证书域名。'
+        warn '请填写你自己管理的域名下的主机名；Reality SNI（例如 www.bing.com）不能作为 TLS 证书域名。'
         return 1
     fi
     [ -s "$CF_TOKEN_FILE" ] || { warn 'Cloudflare API Token 文件不存在。'; return 1; }
     token=$(cat "$CF_TOKEN_FILE")
-    [ -n "$token" ] || err 'Cloudflare API Token 为空。'
-    install_acme ''
-    msg "通过 Cloudflare DNS-01 为 $domain 申请/更新证书……"
+    [ -n "$token" ] || { warn 'Cloudflare API Token 为空。'; return 1; }
+
     zone_id=$(cat "$CF_ZONE_ID_FILE" 2>/dev/null || true)
     if [ -n "$zone_id" ]; then
+        case "$zone_id" in *[!A-Fa-f0-9]*) warn 'Cloudflare Zone ID 格式无效。'; return 1 ;; esac
+        [ "${#zone_id}" -eq 32 ] || { warn 'Cloudflare Zone ID 必须是 32 位十六进制字符串。'; return 1; }
+    fi
+
+    [ -x /root/.acme.sh/acme.sh ] || { warn '找不到 acme.sh，请重新运行安装向导安装 ACME 客户端。'; return 1; }
+    msg "通过 Cloudflare DNS-01 为 $domain 申请/检查证书……"
+
+    # acme.sh returns 2 (RENEW_SKIP) when a valid certificate is not due yet.
+    # That is a normal skip, but cached ACME authorizations can also prevent
+    # dns_cf_add() from running. In that case a newly rotated CF token/Zone ID
+    # would not be saved for future renewals. Compare the saved credentials;
+    # if they differ, invalidate the cached authorization and force one DNS
+    # challenge so acme.sh persists the new credentials in its domain config.
+    if [ -n "$zone_id" ]; then
         CF_Token="$token" CF_Zone_ID="$zone_id" /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null || return 1
-        CF_Token="$token" CF_Zone_ID="$zone_id" /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$domain" --keylength ec-256 || return 1
+    else
+        CF_Token="$token" /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null || return 1
+    fi
+
+    acme_issue_status=0
+    if [ -n "$zone_id" ]; then
+        CF_Token="$token" CF_Zone_ID="$zone_id" /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$domain" --keylength ec-256 || acme_issue_status=$?
+    else
+        CF_Token="$token" /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$domain" --keylength ec-256 || acme_issue_status=$?
+    fi
+
+    case "$acme_issue_status" in
+        0|2)
+            if [ "$acme_issue_status" -eq 2 ]; then
+                acme_internal_dir="/root/.acme.sh/${domain}_ecc"
+                acme_internal_cert="$acme_internal_dir/fullchain.cer"
+                acme_internal_key="$acme_internal_dir/${domain}.key"
+                if [ ! -s "$acme_internal_cert" ] || [ ! -s "$acme_internal_key" ]; then
+                    warn 'acme.sh 表示证书无需续期，但找不到完整的现有 ECC 证书/私钥文件。'
+                    warn '请检查 /root/.acme.sh 中该域名的证书目录；不要删除该目录。'
+                    return 1
+                fi
+                if ! openssl x509 -in "$acme_internal_cert" -noout -checkhost "$domain" >/dev/null 2>&1 ||
+                   ! openssl x509 -in "$acme_internal_cert" -noout -checkend 0 >/dev/null 2>&1; then
+                    warn 'acme.sh 现有证书不匹配当前域名或已经过期，拒绝安装。'
+                    return 1
+                fi
+                msg 'acme.sh 检测到证书尚未到续期时间；将检查并复用现有证书。'
+            else
+                msg 'acme.sh 已成功签发或更新证书。'
+            fi
+            ;;
+        *)
+            warn "acme.sh 证书申请失败，退出码：$acme_issue_status。"
+            warn '请检查 Cloudflare Token、Zone ID、区域权限、域名 DNS 托管状态及 acme.sh 日志。'
+            return 1
+            ;;
+    esac
+
+    if ! acme_cf_credentials_match "$domain" "$token" "$zone_id"; then
+        msg '检测到 acme.sh 尚未保存当前 Cloudflare Token / Zone ID。'
+        msg '为确保后续自动续期使用新凭据，将刷新该域名的 ACME DNS 验证状态并执行一次强制 DNS 验证。'
+        /root/.acme.sh/acme.sh --deactivate -d "$domain" --server letsencrypt >/dev/null 2>&1 || warn '未能清除旧 ACME authorization；继续尝试强制 DNS 验证。'
+        force_issue_status=0
+        if [ -n "$zone_id" ]; then
+            CF_Token="$token" CF_Zone_ID="$zone_id" /root/.acme.sh/acme.sh --issue --force --dns dns_cf -d "$domain" --keylength ec-256 || force_issue_status=$?
+        else
+            CF_Token="$token" /root/.acme.sh/acme.sh --issue --force --dns dns_cf -d "$domain" --keylength ec-256 || force_issue_status=$?
+        fi
+        [ "$force_issue_status" -eq 0 ] || {
+            warn "使用新 Cloudflare 凭据强制 DNS 验证失败，退出码：$force_issue_status。"
+            return 1
+        }
+        acme_cf_credentials_match "$domain" "$token" "$zone_id" || {
+            warn 'acme.sh 签发后仍未保存当前 Cloudflare Token / Zone ID；为避免未来自动续期失败，停止安装。'
+            return 1
+        }
+    else
+        msg 'acme.sh 中保存的 Cloudflare Token / Zone ID 与本次输入一致。'
+    fi
+
+    if [ -n "$zone_id" ]; then
         CF_Token="$token" CF_Zone_ID="$zone_id" /root/.acme.sh/acme.sh --install-cert -d "$domain" --ecc \
             --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$RELOAD_HOOK" || return 1
     else
-        CF_Token="$token" /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null || return 1
-        CF_Token="$token" /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$domain" --keylength ec-256 || return 1
         CF_Token="$token" /root/.acme.sh/acme.sh --install-cert -d "$domain" --ecc \
             --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$RELOAD_HOOK" || return 1
     fi
+
     chown root:sing-box "$CERT_FILE" "$KEY_FILE"
     chmod 0644 "$CERT_FILE"
     chmod 0640 "$KEY_FILE"
     check_cert_pair "$CERT_FILE" "$KEY_FILE" "$domain" || return 1
 }
-
 issue_http_cert() {
     domain=$1
     if port_listening 80; then
@@ -699,15 +816,21 @@ install_wizard() {
             CF_ZONE_NAME=$REPLY
             valid_cert_domain "$CF_ZONE_NAME" || err 'Cloudflare 区域主域名格式无效；请填写你在 Cloudflare 中管理的 DNS 域名。'
             domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" || err "证书域名 $TLS_DOMAIN 不属于 Cloudflare 区域 $CF_ZONE_NAME；请检查是否把 Reality SNI 填成了证书域名。"
-            ask_value 'Cloudflare API Token' ''
+            ask_secret 'Cloudflare API Token（输入时不会显示；不要填写 Zone ID）'
             cf_token=$REPLY
             [ -n "$cf_token" ] || err 'Cloudflare Token 不能为空。'
             printf '%s' "$cf_token" > "$CF_TOKEN_FILE"
             chmod 0600 "$CF_TOKEN_FILE"
             chown root:root "$CF_TOKEN_FILE"
             CERT_MODE=cloudflare
-            ask_value '证书账户邮箱（可留空）' ''
-            cert_email=$REPLY
+
+            while :; do
+                ask_value '证书账户邮箱（可直接留空；只填写真实邮箱，不能填写 Token 或 Zone ID）' ''
+                cert_email=$REPLY
+                [ -z "$cert_email" ] && break
+                valid_email "$cert_email" && break
+                warn '邮箱格式不正确。请填写真实邮箱地址，或直接按 Enter 留空。'
+            done
             rm -f "$CF_ZONE_ID_FILE"
             ask_value 'Cloudflare Zone ID（可选；填写后 Token 只需 Zone:DNS:Edit；留空则还需要 Zone:Zone:Read）' ''
             zone_id=$REPLY
@@ -718,7 +841,7 @@ install_wizard() {
                 chmod 0600 "$CF_ZONE_ID_FILE"
             fi
             install_acme "$cert_email"
-            issue_cloudflare_cert "$TLS_DOMAIN" || err 'Cloudflare DNS-01 证书申请失败。请检查证书域名、Cloudflare 区域主域名、Zone ID 和 Token 权限。'
+            issue_cloudflare_cert "$TLS_DOMAIN" || err 'Cloudflare DNS-01 证书处理失败。请检查 Token 是否有效、Zone ID 是否属于该区域、Token 是否有该区域 DNS Edit 权限，以及该域名是否真的由 Cloudflare 托管。'
             ;;
         2)
             CERT_MODE=standalone
