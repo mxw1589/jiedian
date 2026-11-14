@@ -3,7 +3,8 @@ sing-box 多协议节点管理脚本
 在 Debian / Alpine VPS 上以 root 身份执行：
 # 一键安装命令
 ```
-tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && grep -q 'change_cloudflare_zone' "$tmp" && grep -q "ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'" "$tmp" && grep -q 'IPv4-VLESS-WS-TLS' "$tmp" && grep -q 'IPv6-VLESS-WS-TLS' "$tmp" && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
+tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && grep -q 'run_with_timeout()' "$tmp" && grep -q 'run_with_timeout 90' "$tmp" && grep -q 'acme_cf_credentials_match' "$tmp" && grep -q 'IPv4-VLESS-WS-TLS' "$tmp" && grep -q 'IPv6-VLESS-WS-TLS' "$tmp" && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
+
 ```
 # 一键卸载命令
 ```
@@ -123,7 +124,7 @@ https://github.com/mxw1589/jiedian/blob/main/sb-manager-debian-alpine.sh
 
 在服务器上执行以下命令。该命令使用 GitHub raw
 地址下载，并检查文件首行，防止下载到 HTML：
-tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && grep -q 'change_cloudflare_zone' "$tmp" && grep -q "ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'" "$tmp" && grep -q 'IPv4-VLESS-WS-TLS' "$tmp" && grep -q 'IPv6-VLESS-WS-TLS' "$tmp" && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
+tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh -o "$tmp" && head -n 1 "$tmp" | grep -qx '#!/bin/sh' && grep -q 'run_with_timeout()' "$tmp" && grep -q 'run_with_timeout 90' "$tmp" && grep -q 'acme_cf_credentials_match' "$tmp" && grep -q 'IPv4-VLESS-WS-TLS' "$tmp" && grep -q 'IPv6-VLESS-WS-TLS' "$tmp" && install -m 700 "$tmp" /usr/local/sbin/sb-manager && rm -f "$tmp" && /usr/local/sbin/sb-manager install
 blob 是 GitHub 网页查看地址，会返回 HTML；不能将它保存成 .sh
 后直接执行。请使用 raw.githubusercontent.com。
 安装向导
@@ -151,6 +152,9 @@ blob 是 GitHub 网页查看地址，会返回 HTML；不能将它保存成 .sh
 证书方式
 方式 1：Cloudflare DNS-01
 - 需要 Cloudflare API Token。
+- API Token 会以隐藏输入方式读取，不会在终端回显；Token 文件权限设置为 0600。
+- 证书账户邮箱是可选项：填写真实邮箱地址，或者直接按 Enter 留空。不要把 Cloudflare Token 或 Zone ID 填到邮箱栏；脚本会检查邮箱格式。
+- 使用 Zone ID 时，必须填写 Cloudflare 控制台该 DNS 区域 Overview 页面显示的 32 位 Zone ID；DNS 区域主域名必须确实作为一个 Zone 显示在你的 Cloudflare 账户中，只有第三方 DDNS 子域名并不代表你拥有该 Cloudflare Zone。
 - 通过 Cloudflare DNS API 完成域名验证。
 - 不依赖 VPS 的 TCP 80 端口空闲。
 - 脚本配置 ACME 自动续期任务。
@@ -302,6 +306,15 @@ journalctl -u sing-box -n 80 --no-pager
 Alpine（OpenRC）
 rc-service sing-box status
 rc-service sing-box restart
+Cloudflare DNS-01 授权刷新卡住怎么办？
+当检测到 Cloudflare Token / Zone ID 与 acme.sh 保存值不一致时，脚本会先调用 Let's Encrypt 的 --deactivate 清理旧 DNS 授权，再强制执行一次 DNS-01，以确保新凭据被写入该域名的 acme.sh 配置。
+
+新版对授权清理设置了 90 秒超时，并显示 acme.sh 调试进度；强制 DNS-01 设置了 300 秒超时。如果授权清理失败或超时，脚本会停止，而不会在旧授权仍有效时假装新凭据已保存。
+
+如需排查，可在第二个 SSH 窗口查看：
+ps -ef | grep -E '[a]cme.sh|[s]b-manager'
+tail -n 80 /root/.acme.sh/acme.sh.log
+若需要停止当前卡住的旧版安装，请同时结束对应的安装父进程和 acme.sh --deactivate 子进程；不要只结束子进程后让旧版脚本继续强制签发。新版脚本会明确显示授权清理进度和超时结果。
 常见问题
 0. 为什么不能用 www.bing.com 作为 TLS 证书域名？
 Let’s Encrypt 只能为你拥有或获准管理的域名签发证书。`www.bing.com`
@@ -316,32 +329,43 @@ Let’s Encrypt 只能为你拥有或获准管理的域名签发证书。`www.bi
 example.com。脚本会检查证书域名是否为该区域或其子域名；不匹配时会在联系
 Let’s Encrypt 之前停止。后续可通过管理菜单 6 更换 Cloudflare
 区域和证书域名。
-1. 为什么还需要 Cloudflare Token？
+1. acme.sh 显示 Domains not changed. Skipping. Next renewal time is ...
+这是 acme.sh 的正常行为：它发现已有证书尚未进入续期窗口，因此跳过重新签发。acme.sh 对这种正常跳过返回退出码 2，并不代表证书申请失败。
+
+新版脚本会识别退出码 2，检查 acme.sh 内部是否存在匹配当前域名且尚未过期的 ECC 证书和私钥，然后执行 --install-cert，将现有证书复制到 sing-box 使用的证书路径。若内部证书不存在、域名不匹配或证书安装失败，脚本仍会停止并给出错误。
+
+另外，acme.sh 的 Cloudflare DNS 插件只有在实际执行 DNS 验证钩子时才会保存新的 Token / Zone ID。如果脚本检测到本次输入的凭据与 acme.sh 为该域名保存的凭据不同，会先尝试使旧 ACME authorization 失效，再强制执行一次 DNS 验证，让新凭据写入域名配置，以免当前证书安装成功、但未来自动续期仍使用旧 Token。该操作会申请一次新证书，因此不要反复运行安装向导或频繁强制签发。
+2. Cloudflare Token、邮箱和 Zone ID 分别填写什么？
+- Cloudflare API Token：粘贴新创建的 API Token；终端输入时不会回显。
+- 证书账户邮箱：真实邮箱地址，或者直接按 Enter 留空。
+- Cloudflare Zone ID：Cloudflare 域名 Overview 页面中的 32 位 Zone ID，不是邮箱、API Token、Account ID 或 VPS IP。
+如果你把 Zone ID 粘贴到了邮箱提示中，脚本会提示格式错误并要求重新输入。确认 Cloudflare 控制台中确实存在你填写的 DNS Zone；仅有第三方 DDNS 服务提供的子域名，不一定能作为 Cloudflare DNS Zone 使用。
+3. 为什么还需要 Cloudflare Token？
 并不是必须。Token 只在选择 Cloudflare DNS-01 自动验证时需要。
 
 如果不想使用 Token，可以选择：
 - HTTP-01：域名解析到 VPS，公网 TCP 80 可访问且空闲。
 - 手动证书：提供已有证书链和私钥文件。
-2. HTTP-01 证书申请失败
+4. HTTP-01 证书申请失败
 依次检查：
 - 域名 A 记录是否指向 VPS 公网 IPv4。
 - 如果配置了 AAAA 记录，IPv6 是否也能正确访问该 VPS。
 - 云安全组是否放行 TCP 80。
 - 系统防火墙是否放行 TCP 80。
 - 本机是否有其他程序监听 TCP 80。
-3. 提示随机端口无法分配
+5. 提示随机端口无法分配
 - 检查服务器上是否有大量 TCP 端口被监听。
 - WS TLS 只能从五个候选端口中选择；如果都被占用，需要先释放其中一个。
 - 确认 iproute2 已安装，且 ss 命令可用。
-4. 节点能生成但客户端无法连接
+6. 节点能生成但客户端无法连接
 - 检查三个新 TCP 端口是否已在云安全组和系统防火墙放行。
 - 确认客户端使用的是最新节点链接。
 - 检查域名、SNI、WS Host 和优选 IP 是否配置正确。
 - 使用管理菜单 9 查看服务状态，菜单 10 查看日志。
-5. 重启后端口没有变化
+7. 重启后端口没有变化
 这是预期行为。端口只在首次安装、重新运行安装向导或主动选择菜单 7
 时重新分配。普通重启不会改变端口。
-6. 执行脚本时出现 <!DOCTYPE html> 或 syntax error
+8. 执行脚本时出现 <!DOCTYPE html> 或 syntax error
 这是因为下载了 GitHub 的网页地址，例如：
 
 https://github.com/mxw1589/jiedian/blob/main/sb-manager-debian-alpine.sh
