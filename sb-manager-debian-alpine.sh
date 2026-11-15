@@ -5,7 +5,7 @@
 # Manual or random collision-checked TCP ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; supports single/multi-VPS deployment; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=2; blank origin addresses are detected on the VPS
-# WEB_CONFIG_SCHEMA=3; node label validation supports nonempty labels
+# WEB_CONFIG_SCHEMA=4; web deployment supports safe overlay upgrades and guarded first takeover
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -303,15 +303,6 @@ domain_belongs_to_zone() {
         "$zone_domain"|*."$zone_domain") return 0 ;;
         *) return 1 ;;
     esac
-}
-
-confirm_domain_control() {
-    domain_to_confirm=$1
-    printf '\n即将为域名 %s 申请 TLS 证书。\n' "$domain_to_confirm"
-    printf '请确认这是你拥有或获准管理的域名，而不是 www.bing.com / www.microsoft.com 等第三方域名。\n'
-    ask_value '确认请输入大写 YES' ''
-    [ "$REPLY" = "YES" ] || { warn '未确认域名所有权，已停止证书申请。'; return 1; }
-    return 0
 }
 
 valid_host() {
@@ -903,7 +894,7 @@ install_manual_cert() {
 
 save_state() {
     tmp="$STATE_FILE.tmp.$$"
-    jq -n \
+    if ! jq -n \
       --arg origin_addr "$ORIGIN_ADDR" \
       --arg origin_ipv6 "$ORIGIN_IPV6" \
       --arg preferred_ip "$PREFERRED_IP" \
@@ -935,10 +926,17 @@ save_state() {
       --arg cert_mode "$CERT_MODE" \
       --arg cf_zone_name "$CF_ZONE_NAME" \
       --arg node_label "$NODE_LABEL" \
-      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,anytls_port:($anytls_port|tonumber),ws_port:($ws_port|tonumber),reality_port:($reality_port|tonumber),naive_port:($naive_port|tonumber),anyreality_port:($anyreality_port|tonumber),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"
-    chmod 0600 "$tmp"
-    chown root:root "$tmp"
-    mv "$tmp" "$STATE_FILE"
+      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,anytls_port:($anytls_port|tonumber),ws_port:($ws_port|tonumber),reality_port:($reality_port|tonumber),naive_port:($naive_port|tonumber),anyreality_port:($anyreality_port|tonumber),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"; then
+        rm -f "$tmp"
+        warn '无法生成 manager.json；原有管理状态未更改。'
+        return 1
+    fi
+    if ! chmod 0600 "$tmp" || ! chown root:root "$tmp" || ! mv "$tmp" "$STATE_FILE"; then
+        rm -f "$tmp"
+        warn '无法安全写入 manager.json；原有管理状态未更改。'
+        return 1
+    fi
+    return 0
 }
 
 load_state() {
@@ -1019,24 +1017,66 @@ build_config() {
         {type:"vless",tag:"vless-reality-in",listen:$listen_addr,listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}},
         {type:"naive",tag:"naive-in",network:"tcp",listen:$listen_addr,listen_port:($naive_port|tonumber),users:[{username:$naive_username,password:$naive_password}],tls:{enabled:true,certificate_path:$cert_file,key_path:$key_file}},
         {type:"anytls",tag:"anytls-reality-in",listen:$listen_addr,listen_port:($anyreality_port|tonumber),users:[{name:"primary",password:$anyreality_password}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$anyreality_private,short_id:[$anyreality_sid]}}}
-      ],outbounds:[{type:"direct",tag:"direct"}]}' > "$tmp"
+      ],outbounds:[{type:"direct",tag:"direct"}]}' > "$tmp" || {
+        rm -f "$tmp"
+        warn '无法生成 sing-box 配置；原配置未更改。'
+        return 1
+    }
     if ! "$SB_BIN" check -c "$tmp"; then
         rm -f "$tmp"
         warn 'sing-box 配置检查失败，原配置未更改。'
         return 1
     fi
-    if [ -f "$CONFIG_FILE" ]; then cp "$CONFIG_FILE" "$CONFIG_FILE.bak"; fi
-    chown root:sing-box "$tmp"
-    chmod 0640 "$tmp"
-    mv "$tmp" "$CONFIG_FILE"
-    if ! service_restart; then
-        warn '新配置启动失败，正在回滚。'
-        if [ -f "$CONFIG_FILE.bak" ]; then cp "$CONFIG_FILE.bak" "$CONFIG_FILE"; fi
-        service_restart || true
-        warn '服务重启失败，已尝试恢复旧配置。请查看服务日志。'
+
+    config_backup="$CONFIG_FILE.rollback.$$"
+    state_backup="$STATE_FILE.rollback.$$"
+    had_config=0
+    had_state=0
+    if [ -f "$CONFIG_FILE" ]; then
+        cp -p "$CONFIG_FILE" "$config_backup" || {
+            rm -f "$tmp" "$config_backup"
+            warn '无法备份现有 config.json；原配置未更改。'
+            return 1
+        }
+        had_config=1
+    fi
+    if [ -f "$STATE_FILE" ]; then
+        cp -p "$STATE_FILE" "$state_backup" || {
+            rm -f "$tmp" "$config_backup" "$state_backup"
+            warn '无法备份现有 manager.json；原配置未更改。'
+            return 1
+        }
+        had_state=1
+    fi
+
+    if ! chown root:sing-box "$tmp" || ! chmod 0640 "$tmp" || ! mv "$tmp" "$CONFIG_FILE"; then
+        rm -f "$tmp"
+        [ "$had_config" -eq 0 ] || cp -p "$config_backup" "$CONFIG_FILE"
+        rm -f "$config_backup" "$state_backup"
+        warn '无法安全写入 config.json；原配置已保留。'
         return 1
     fi
-    save_state
+
+    if ! service_restart; then
+        warn '新配置启动失败，正在恢复旧配置和管理状态。'
+        if [ "$had_config" -eq 1 ]; then cp -p "$config_backup" "$CONFIG_FILE"; else rm -f "$CONFIG_FILE"; fi
+        if [ "$had_state" -eq 1 ]; then cp -p "$state_backup" "$STATE_FILE"; else rm -f "$STATE_FILE"; fi
+        service_restart || true
+        rm -f "$config_backup" "$state_backup"
+        warn '已尝试恢复旧配置和管理状态。请查看服务日志。'
+        return 1
+    fi
+
+    if ! save_state; then
+        warn '管理状态写入失败，正在恢复旧配置和管理状态。'
+        if [ "$had_config" -eq 1 ]; then cp -p "$config_backup" "$CONFIG_FILE"; else rm -f "$CONFIG_FILE"; fi
+        if [ "$had_state" -eq 1 ]; then cp -p "$state_backup" "$STATE_FILE"; else rm -f "$STATE_FILE"; fi
+        service_restart || true
+        rm -f "$config_backup" "$state_backup"
+        return 1
+    fi
+
+    rm -f "$config_backup" "$state_backup"
     msg '配置已检查并应用，sing-box 已重启。'
 }
 
@@ -1379,7 +1419,7 @@ install_wizard() {
     fi
     TLS_DOMAIN=$(trim_value "$REPLY")
     resolve_install_domains
-    confirm_domain_control "$TLS_DOMAIN" || err '未确认域名所有权，已停止证书申请。'
+    msg "即将为 $TLS_DOMAIN 申请 TLS 证书。请确保该域名由你拥有或获准管理，并已正确解析到本 VPS。"
 
     ask_value '优选 IP/域名（可留空，默认使用证书域名；IPv6 不加方括号）' ''
     WS_SERVER=$(trim_value "$REPLY")
@@ -1466,6 +1506,12 @@ install_from_config() {
         fi
     fi
 
+    # The interactive wizard and web-based first install share this preflight.
+    # Never overwrite an unmanaged /etc/sing-box directory without a root-only backup.
+    if [ ! -e "$STATE_FILE" ] && [ -d "$APP_DIR" ]; then
+        backup_existing_install
+    fi
+
     install_dependencies_and_core
     resolve_install_addresses
     PREVIOUS_ANYTLS_PORT=""
@@ -1544,11 +1590,58 @@ web_string() {
     trim_value "$(jq -r --arg key "$1" '.[$key] // ""' "$web_cfg")"
 }
 
+backup_existing_install() {
+    [ -d "$APP_DIR" ] || return 0
+
+    backup_root=/var/backups/sb-manager
+    backup_stamp=$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || printf unknown)
+    backup_dir="$backup_root/pre-install-$backup_stamp-$$"
+    install -d -m 0700 "$backup_root" || err "无法创建备份目录：$backup_root"
+    install -d -m 0700 "$backup_dir" || err "无法创建备份目录：$backup_dir"
+
+    if ! cp -a "$APP_DIR" "$backup_dir/sing-box"; then
+        rm -rf "$backup_dir"
+        err '备份现有 /etc/sing-box 失败；为避免覆盖数据，已停止安装。'
+    fi
+    [ ! -f /etc/systemd/system/sing-box.service ] || cp -p /etc/systemd/system/sing-box.service "$backup_dir/systemd-sing-box.service" || {
+        rm -rf "$backup_dir"
+        err '备份现有 systemd 服务文件失败；为避免覆盖数据，已停止安装。'
+    }
+    [ ! -f /etc/init.d/sing-box ] || cp -p /etc/init.d/sing-box "$backup_dir/openrc-sing-box" || {
+        rm -rf "$backup_dir"
+        err '备份现有 OpenRC 服务文件失败；为避免覆盖数据，已停止安装。'
+    }
+    [ ! -f "$RELOAD_HOOK" ] || cp -p "$RELOAD_HOOK" "$backup_dir/sing-box-cert-reload" || {
+        rm -rf "$backup_dir"
+        err '备份现有证书重载钩子失败；为避免覆盖数据，已停止安装。'
+    }
+    chmod -R go-rwx "$backup_dir" 2>/dev/null || true
+    msg "已备份原有 sing-box 数据及服务文件：$backup_dir"
+}
+
+manager_state_is_valid() {
+    [ -s "$STATE_FILE" ] || return 1
+    jq -e '
+      type == "object" and
+      (.tls_domain | type == "string" and length > 0) and
+      (.anytls_port != null) and (.ws_port != null) and (.reality_port != null) and
+      (.anytls_password | type == "string" and length > 0) and
+      (.ws_uuid | type == "string" and length > 0) and
+      (.reality_uuid | type == "string" and length > 0) and
+      (.reality_private | type == "string" and length > 0) and
+      (.reality_public | type == "string" and length > 0) and
+      (.reality_sid | type == "string" and length > 0) and
+      (.ws_path | type == "string" and length > 0) and
+      (.cert_file | type == "string" and length > 0) and
+      (.key_file | type == "string" and length > 0) and
+      (.cert_mode | type == "string" and length > 0)
+    ' "$STATE_FILE" >/dev/null 2>&1
+}
+
 install_web_config() {
     need_root
     web_cfg=${1:-}
     [ -n "$web_cfg" ] && [ -s "$web_cfg" ] || err '请提供网页生成的 JSON 配置文件。'
-    [ ! -e "$STATE_FILE" ] || err '此 VPS 已有 sing-box 管理配置。运行 /usr/local/sbin/sb-manager nodes 查看现有节点。若要用网页配置替换，请先备份现有配置，再运行 /usr/local/sbin/sb-manager uninstall --yes，然后重新执行网页安装命令。'
 
     if ! command -v jq >/dev/null 2>&1; then
         if [ -f /etc/alpine-release ]; then
@@ -1559,6 +1652,17 @@ install_web_config() {
         else
             err '网页配置安装仅支持 Debian/Ubuntu 和 Alpine。'
         fi
+    fi
+
+    if [ -e "$STATE_FILE" ]; then
+        if ! manager_state_is_valid; then
+            backup_existing_install
+            err "检测到现有 manager.json 为空或格式损坏。原数据已备份；为避免丢失节点凭据，未自动重置。请先检查备份后再决定如何恢复。"
+        fi
+        msg '检测到本脚本已有有效安装：忽略本次网页新参数，保留原节点配置并执行覆盖升级。'
+        load_state
+        overlay_install
+        return 0
     fi
 
     jq -e 'def text: type == "string" and (test("[\u0000\r\n]") | not);
@@ -1613,7 +1717,7 @@ change_tls_sni() {
         [ -n "$CF_ZONE_NAME" ] || { warn '缺少 Cloudflare 区域主域名，请先使用菜单 6 设置 Cloudflare 绑定区域。'; return 0; }
         domain_belongs_to_zone "$new_domain" "$CF_ZONE_NAME" || { warn "新域名必须属于 Cloudflare 区域 $CF_ZONE_NAME。"; return 0; }
     fi
-    confirm_domain_control "$new_domain" || { warn '未确认域名所有权，未修改 TLS 域名。'; return 0; }
+    msg "将为 $new_domain 使用 TLS 证书。请确保你拥有或获准管理该域名。"
 
     old_domain=$TLS_DOMAIN
     old_ws_host=$WS_HOST
@@ -1730,7 +1834,7 @@ change_cloudflare_zone() {
     esac
     [ "${#new_zone_id}" -eq 32 ] || { warn 'Zone ID 必须是 32 位十六进制字符串。'; return 0; }
 
-    confirm_domain_control "$new_cert_domain" || { warn '未确认域名所有权，未修改 Cloudflare 配置。'; return 0; }
+    msg "将为 $new_cert_domain 使用新的 Cloudflare DNS 区域签发 TLS 证书。请确保你拥有或获准管理该域名。"
 
     backup_dir=$(mktemp -d) || { warn '无法创建临时备份目录。'; return 0; }
     cp -p "$CERT_FILE" "$backup_dir/fullchain.pem" 2>/dev/null || true
@@ -1869,21 +1973,6 @@ change_ports() {
     msg '请同步修改云安全组和系统防火墙规则。'
 }
 
-confirm_uninstall() {
-    if [ "${1:-}" = "--yes" ] || [ "${1:-}" = "-y" ]; then
-        return 0
-    fi
-    printf '\n即将卸载 sing-box，并删除本脚本的配置、证书副本和节点信息。\n'
-    printf '同时会尝试卸载 sing-box 软件包；不会删除系统防火墙规则、云安全组、其他 cron 任务或 /root/.acme.sh。\n'
-    printf '确认卸载请输入大写 YES：'
-    IFS= read -r answer || answer=""
-    [ "$answer" = "YES" ] || {
-        msg '已取消卸载。'
-        return 1
-    }
-    return 0
-}
-
 remove_acme_cron_entry() {
     command -v crontab >/dev/null 2>&1 || return 0
     current_cron=$(crontab -l 2>/dev/null || true)
@@ -1897,8 +1986,10 @@ remove_acme_cron_entry() {
 
 uninstall_manager() {
     need_root
-    confirm_uninstall "${1:-}" || return 0
-
+    msg '========== 即将立即卸载 sing-box 管理器 =========='
+    printf '%s\n' '将删除：/etc/sing-box、/usr/local/sbin/sb-manager、sing-box 服务文件、证书重载钩子及本脚本安装的 sing-box 软件包。'
+    printf '%s\n' '不会删除：/root/.acme.sh、系统依赖包、系统防火墙规则、云厂商安全组或其他 cron 任务。'
+    printf '%s\n' '卸载将直接继续执行；请确认当前连接的是正确的 VPS。'
     msg '正在停止 sing-box 服务……'
     if command -v systemctl >/dev/null 2>&1; then
         systemctl disable --now sing-box >/dev/null 2>&1 || true
@@ -2086,7 +2177,11 @@ main() {
         return 0
     fi
     install_manager_command
-    if [ -f "$STATE_FILE" ]; then
+    if [ -e "$STATE_FILE" ]; then
+        if ! manager_state_is_valid; then
+            backup_existing_install
+            err "检测到现有 manager.json 为空或格式损坏。原数据已备份；为避免丢失节点凭据，未自动重置。请先检查备份后再决定如何恢复。"
+        fi
         load_state
         if [ -f /etc/alpine-release ]; then OS_FAMILY=alpine; SERVICE_KIND=openrc; else OS_FAMILY=debian; SERVICE_KIND=systemd; fi
         SB_BIN="$(command -v sing-box 2>/dev/null || printf /usr/bin/sing-box)"
