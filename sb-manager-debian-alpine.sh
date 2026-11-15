@@ -2192,6 +2192,6 @@ main() {
     else
         install_wizard
     fi
-}
+} 
 
 main "$@"
