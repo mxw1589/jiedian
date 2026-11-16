@@ -1,4 +1,4 @@
-[在线网页快捷跳转](https://mxw1589.github.io/jiedian/)
+# [在线网页快捷跳转](https://mxw1589.github.io/jiedian/)
 # sing-box 单 VPS 可视化安装与管理工具
 
 本项目用于在**单台 VPS** 上安装和管理 sing-box。
