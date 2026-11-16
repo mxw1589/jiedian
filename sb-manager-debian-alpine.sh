@@ -2,7 +2,7 @@
 # sing-box multi-protocol manager for Debian + Alpine
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
-# Manual or random collision-checked TCP ports; Cloudflare DNS-01 or HTTP-01
+# Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=2; blank origin addresses are detected on the VPS
 # WEB_CONFIG_SCHEMA=4; web deployment supports safe overlay upgrades and guarded first takeover
@@ -432,27 +432,73 @@ assign_ports() {
     NAIVE_PORT=$(normalize_optional_port "$NAIVE_PORT" 'NaiveProxy') || exit 1
     ANYREALITY_PORT=$(normalize_optional_port "$ANYREALITY_PORT" 'AnyTLS + Reality') || exit 1
 
-    set --
-    for item_port in "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"; do
-        [ -n "$item_port" ] || continue
-        case " $* " in *" $item_port "*) err '五种协议的端口不能重复。' ;; esac
-        manual_port_available "$item_port" "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" ||
-            err "TCP 端口 $item_port 已被其他程序占用。请更换端口后重试。"
-        set -- "$@" "$item_port"
+    # Keep manually requested ports that are free. If a requested port is
+    # already occupied by an unrelated process, clear only that protocol's
+    # request and let the protocol-specific random allocator choose a free port.
+    # During a port-change operation, the old manager ports are allowed so the
+    # operator can intentionally keep or reuse an existing listener.
+    accepted_manual_ports=""
+    PORT_FALLBACK_USED=0
+    for protocol_name in 'AnyTLS' 'VLESS WS TLS' 'VLESS Reality' 'NaiveProxy' 'AnyTLS + Reality'; do
+        case "$protocol_name" in
+            'AnyTLS') item_port=$ANYTLS_PORT ;;
+            'VLESS WS TLS') item_port=$WS_PORT ;;
+            'VLESS Reality') item_port=$REALITY_PORT ;;
+            'NaiveProxy') item_port=$NAIVE_PORT ;;
+            'AnyTLS + Reality') item_port=$ANYREALITY_PORT ;;
+        esac
+
+        if [ -n "$item_port" ]; then
+            case " $accepted_manual_ports " in
+                *" $item_port "*)
+                    warn "$protocol_name 指定端口 $item_port 与前面协议重复；将自动随机分配一个可用端口。"
+                    item_port=""
+                    PORT_FALLBACK_USED=1
+                    ;;
+                *)
+                    if ! manual_port_available "$item_port" \
+                        "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" \
+                        "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT"; then
+                        warn "$protocol_name 指定 TCP 端口 $item_port 已被其他程序占用；将自动随机分配一个可用端口。"
+                        item_port=""
+                        PORT_FALLBACK_USED=1
+                    else
+                        accepted_manual_ports="$accepted_manual_ports $item_port"
+                    fi
+                    ;;
+            esac
+        fi
+
+        case "$protocol_name" in
+            'AnyTLS') ANYTLS_PORT=$item_port ;;
+            'VLESS WS TLS') WS_PORT=$item_port ;;
+            'VLESS Reality') REALITY_PORT=$item_port ;;
+            'NaiveProxy') NAIVE_PORT=$item_port ;;
+            'AnyTLS + Reality') ANYREALITY_PORT=$item_port ;;
+        esac
     done
-    set -- "$@" "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT"
+
+    # Reserve all accepted manual ports and the old manager ports while
+    # assigning blanks/fallbacks, so the five new listeners stay distinct.
+    set -- $accepted_manual_ports \
+        "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" \
+        "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT"
 
     ANYTLS_PORT=$(requested_or_random_port "$ANYTLS_PORT" 'AnyTLS' "$@") || exit 1
     WS_PORT=$(requested_or_random_port "$WS_PORT" 'VLESS WS TLS' "$@" "$ANYTLS_PORT") || exit 1
     REALITY_PORT=$(requested_or_random_port "$REALITY_PORT" 'VLESS Reality' "$@" "$ANYTLS_PORT" "$WS_PORT") || exit 1
     NAIVE_PORT=$(requested_or_random_port "$NAIVE_PORT" 'NaiveProxy' "$@" "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT") || exit 1
     ANYREALITY_PORT=$(requested_or_random_port "$ANYREALITY_PORT" 'AnyTLS + Reality' "$@" "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT") || exit 1
+
     msg "TCP 端口：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，VLESS Reality=$REALITY_PORT，NaiveProxy=$NAIVE_PORT，AnyTLS Reality=$ANYREALITY_PORT"
+    if [ "$PORT_FALLBACK_USED" -eq 1 ]; then
+        warn '至少一个手动端口发生冲突，已自动改用空闲随机端口。请使用上面显示的新端口更新防火墙/安全组。NAT VPS 还必须在服务商面板把新公网端口映射到本机同号端口，否则外部节点无法连接。'
+    fi
 }
 
 ask_ports() {
     msg 'TCP 端口可留空随机分配；手动填写时可用范围为 1024–65535。'
-    msg 'NAT VPS 请填写服务商分配的可用端口。Cloudflare 橙云代理请为 WS TLS 填写 2053、2083、2087、2096 或 8443。'
+    msg 'NAT VPS 必须填写服务商已分配并映射的端口；随机备用端口只有同步添加公网映射后才可用。Cloudflare 橙云代理的 WS TLS 端口请使用 2053、2083、2087、2096 或 8443。'
 
     ask_value 'AnyTLS TCP 端口（留空随机选 10000–65535）' ''
     ANYTLS_PORT=$REPLY
@@ -514,28 +560,50 @@ ask_secret() {
     fi
 }
 
+install_alpine_official_release() {
+    msg 'Alpine 仓库未提供可安装的 sing-box 包，改用 sing-box 官方 Linux 发布版……'
+    tag=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r '.tag_name')
+    case "$tag" in ''|null) err '无法从 GitHub 获取 sing-box 最新版本号。' ;; esac
+    ver=${tag#v}
+    case "$(uname -m)" in
+        x86_64) rel_arch=amd64 ;;
+        aarch64) rel_arch=arm64 ;;
+        armv7l|armv7) rel_arch=armv7 ;;
+        *) err "暂不支持此 Alpine CPU 架构：$(uname -m)" ;;
+    esac
+    archive="sing-box-${ver}-linux-${rel_arch}.tar.gz"
+    unpack_dir=$(mktemp -d /tmp/sing-box-unpack.XXXXXX) || err '无法创建 sing-box 临时解压目录。'
+    if ! curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "/tmp/${archive}"; then
+        rm -rf "$unpack_dir" "/tmp/${archive}"
+        err '下载 sing-box 官方 Linux 发布版失败，请检查 GitHub 网络连接后重试。'
+    fi
+    if ! tar -xzf "/tmp/${archive}" -C "$unpack_dir"; then
+        rm -rf "$unpack_dir" "/tmp/${archive}"
+        err '解压 sing-box 官方发布版失败。'
+    fi
+    if ! install -m 0755 "$unpack_dir/sing-box-${ver}-linux-${rel_arch}/sing-box" /usr/local/bin/sing-box; then
+        rm -rf "$unpack_dir" "/tmp/${archive}"
+        err '安装 sing-box 官方二进制文件失败。'
+    fi
+    rm -rf "$unpack_dir" "/tmp/${archive}"
+}
+
 install_dependencies_and_core() {
     if [ -f /etc/alpine-release ]; then
         OS_FAMILY=alpine
         msg '检测到 Alpine Linux，安装 sing-box 和依赖……'
         apk update
         apk add --no-cache ca-certificates curl jq openssl iproute2 tar gzip kmod
-        if ! apk add --no-cache sing-box; then
-            warn '当前 Alpine 仓库没有 sing-box 包，尝试安装官方 Linux 发布版。'
-            tag=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r '.tag_name')
-            ver=${tag#v}
-            case "$(uname -m)" in
-                x86_64) rel_arch=amd64 ;;
-                aarch64) rel_arch=arm64 ;;
-                armv7l|armv7) rel_arch=armv7 ;;
-                *) err "暂不支持此 Alpine CPU 架构：$(uname -m)" ;;
-            esac
-            archive="sing-box-${ver}-linux-${rel_arch}.tar.gz"
-            curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "/tmp/${archive}"
-            mkdir -p /tmp/sing-box-unpack
-            tar -xzf "/tmp/${archive}" -C /tmp/sing-box-unpack
-            install -m 0755 "/tmp/sing-box-unpack/sing-box-${ver}-linux-${rel_arch}/sing-box" /usr/local/bin/sing-box
-            rm -rf "/tmp/${archive}" /tmp/sing-box-unpack
+        # Avoid printing apk's expected "no such package" error on Alpine
+        # releases whose repositories do not package sing-box. Probe first,
+        # then use the official upstream binary as the clean fallback.
+        if apk search -x sing-box 2>/dev/null | grep -q .; then
+            if ! apk add --no-cache sing-box; then
+                warn 'Alpine 仓库中的 sing-box 包安装失败，改用官方 Linux 发布版。'
+                install_alpine_official_release
+            fi
+        else
+            install_alpine_official_release
         fi
         update-ca-certificates 2>/dev/null || true
     elif [ -f /etc/debian_version ]; then
@@ -1913,10 +1981,20 @@ change_reality_sni() {
 }
 
 change_preferred_ip() {
-    ask_value '新的 VLESS WS TLS 单一连接地址（IPv4 / IPv6 / 域名；输入 - 清空）' "$WS_SERVER"
+    ask_value '新的 VLESS WS TLS 单一连接地址（IPv4 / IPv6 / 域名；输入 - 恢复证书域名）' "$WS_SERVER"
     new_ws_server=$REPLY
-    [ "$new_ws_server" = "-" ] && new_ws_server=""
-    [ -n "$new_ws_server" ] || { warn 'WS TLS 必须保留一个连接地址。'; return; }
+    if [ "$new_ws_server" = "-" ]; then
+        new_ws_server=""
+    fi
+    if [ -z "$new_ws_server" ]; then
+        WS_SERVER=$TLS_DOMAIN
+        PREFERRED_IP=""
+        PREFERRED_IPV6=""
+        save_state
+        show_nodes
+        msg "WS TLS 连接地址已恢复为证书域名：$TLS_DOMAIN"
+        return 0
+    fi
 
     case "$new_ws_server" in
         *:*)

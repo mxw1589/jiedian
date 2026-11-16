@@ -291,6 +291,7 @@ code{
     <div id="cfDomainField" class="field"><label for="cfBoundDomain">Cloudflare 证书域名</label><input id="cfBoundDomain" placeholder="留空使用 Cloudflare 根域名"></div>
     <div id="httpTlsField" class="field hidden"><label for="tlsDomain">TLS 证书域名</label><input id="tlsDomain" placeholder="例如 node.example.com"></div>
     <div class="field"><label id="wsServerLabel" for="wsServer">优选 IP/域名</label><input id="wsServer" placeholder="留空使用证书域名"></div>
+    <div class="small" style="margin:-3px 0 10px">此项只改变 VLESS + WS + TLS 节点的客户端连接地址；TLS 证书域名/SNI 和 WS Host 保持为上面的证书域名。使用 Cloudflare 优选 IP 时，DNS 记录必须开启橙云代理。</div>
     <div class="divider"></div>
     <h3>五种协议 TCP 端口（留空自动分配）</h3>
     <div class="portgrid">
@@ -300,8 +301,8 @@ code{
       <div class="portbox"><label for="portNaive">NaiveProxy</label><input id="portNaive" data-p="naive" type="number" min="1024" max="65535" placeholder="自动随机"></div>
       <div class="portbox"><label for="portAnyReality">AnyTLS Reality</label><input id="portAnyReality" data-p="anytls_reality" type="number" min="1024" max="65535" placeholder="自动随机"></div>
     </div>
-    <div class="notice">端口留空时由 VPS 自动分配可用端口。WS + TLS 自动从 Cloudflare 支持的 HTTPS 端口 2053、2083、2087、2096、8443 中选择；其余协议自动使用 10000–65535。手动端口可填 1024–65535，五个端口不能重复。NAT VPS 请填写服务商分配的端口。</div>
-    <div class="notice ok">随机端口会避开本机已监听的 TCP 端口。安装后还需要在云厂商安全组和 VPS 防火墙中放行实际生成的五个 TCP 端口。</div>
+    <div class="notice">端口留空时由 VPS 自动分配可用端口。WS + TLS 自动从 Cloudflare 支持的 HTTPS 端口 2053、2083、2087、2096、8443 中选择；其余协议自动使用 10000–65535。若手动端口已被其他程序占用，脚本会自动改用该协议支持范围内的空闲端口。NAT VPS 必须使用服务商已分配并映射的端口。</div>
+    <div class="notice ok">随机分配会避开本机已监听的 TCP 端口。安装后请放行最终显示的端口。NAT VPS 若自动换端口，还必须在服务商面板同步添加新公网端口到本机同号端口的映射，否则节点无法从公网访问。</div>
   </section>
 
   <section class="panel">
@@ -572,7 +573,7 @@ function syncCertMode() {
   $("httpNotice").classList.toggle("hidden", cf);
   $("httpTlsField").classList.toggle("hidden", cf);
   $("wsServerLabel").textContent = cf ? "优选 IP/域名" : "WS 连接地址";
-  $("wsServer").placeholder = cf ? "留空使用 Cloudflare 证书域名" : "留空使用 TLS 证书域名";
+  $("wsServer").placeholder = cf ? "Cloudflare 优选 IP（留空使用证书域名）" : "WS 连接地址（留空使用 TLS 证书域名）";
 }
 $("certMode").addEventListener("change", syncCertMode);
 syncCertMode();
