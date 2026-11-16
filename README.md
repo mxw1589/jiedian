@@ -23,10 +23,10 @@
 - Cloudflare DNS-01 共用一个 DNS 区域主域名。每台 VPS 的“Cloudflare 绑定 IP 的域名”留空时使用区域主域名，该域名用于 TLS 证书和 WS Host。另有“优选 IP/域名”输入框用于 WS 节点连接地址，留空时使用前述绑定域名。
 - Reality SNI 默认 `www.bing.com`。
 - 可预览各 VPS 的节点命名。源站 IP 在部署时自动检测，网页预览会显示相应提示。
-- 可生成单台 VPS 的一键安装命令：把网页生成的整段命令复制到目标 VPS 的 root 终端粘贴执行即可，不需要再逐项回答安装向导。每次生成安装命令时会同步生成该 VPS 的卸载命令，卸载命令不包含 Cloudflare Token 或安装配置。
+- 可生成单台 VPS 的一键安装命令：把网页生成的整段命令复制到目标 VPS 的 root 终端粘贴执行即可，不需要再逐项回答安装向导。
 - 网页无需填写 SSH 登录目标和端口。运行批量部署脚本时按提示输入各台 VPS 的 SSH 地址和端口。
 - Cloudflare DNS-01 模式可直接在网页填写 API Token，生成命令会携带完整配置；若填写 Zone ID，Token 只需 Zone:DNS:Edit，若不填写 Zone ID，还需 Zone:Zone:Read。
-- 可生成 `deploy-multi.sh`，从本机通过 SSH 密钥批量部署多台 VPS；同时生成对应的 `uninstall-multi.sh`，可按相同 VPS 数量逐台通过 SSH 卸载。
+- 可生成 `deploy-multi.sh`，从本机通过 SSH 密钥批量部署多台 VPS。
 - 批量部署成功后，将每台 VPS 的完整节点清单合并到 `all-nodes.txt`。
 
 ### 节点命名规则
@@ -103,22 +103,30 @@ git config --global user.email "你的 GitHub 邮箱"
 
 如使用 GitHub CLI，可先执行 `gh auth login`，再执行 `gh auth setup-git`。
 
-### GitHub 网页操作
+### GitHub 网页操作与在线打开 HTML
 
-1. 打开仓库：<https://github.com/mxw1589/jiedian>
-2. 点击 **Add file → Upload files**。如果仓库根目录已经有 `index.html`，先备份它，避免覆盖现有网站首页。
-3. 上传 `index.html`、更新后的 `sb-manager-debian-alpine.sh`、`README.md` 和 `一键push到github.bat`。
-4. 提交到 `main` 分支。
-5. 打开仓库 **Settings → Pages**。
-6. 在 **Build and deployment** 中选择 **Deploy from a branch**。
-7. Branch 选择 `main`，目录选择 `/(root)`，点击 **Save**。
-8. 等待 GitHub Pages 发布完成。
+以下步骤以本仓库 `mxw1589/jiedian`、`main` 分支和仓库根目录为例。请先登录有该仓库写入权限的 GitHub 账号。
 
-网页地址：
+1. 打开仓库：<https://github.com/mxw1589/jiedian>。
+2. 确认文件放在仓库根目录，而不是某个子文件夹。根目录应至少包含 `index.html`、`README.md` 和 `sb-manager-debian-alpine.sh`；如果仓库已有 `一键push到github.bat`，也保留它。
+3. 点击 **Add file → Upload files**，把更新后的 `index.html`、`README.md` 上传；如果同时更新了 Shell 脚本，再上传 `sb-manager-debian-alpine.sh`。若 GitHub 提示同名文件，将其替换为本次更新版本。不要上传 `all-nodes.txt`、配置 JSON、Cloudflare Token、SSH 私钥、证书私钥或其他节点凭据。
+4. 页面下方的 **Commit changes** 区域，填写提交说明，例如 `Add uninstall instructions`，选择提交到 `main` 分支，然后点击 **Commit changes**。
+5. 打开仓库顶部的 **Settings**。如果看不到 Settings，先点击仓库顶部的更多选项菜单，再选择 Settings。
+6. 在左侧 **Code and automation** 区域点击 **Pages**。
+7. 在 **Build and deployment** 区域，把 **Source** 设为 **Deploy from a branch**。
+8. 在 **Branch** 中选择 `main`；右侧文件夹选择 `/(root)`，然后点击 **Save**。
+9. 等待 GitHub Pages 构建和发布。可以在仓库的 **Actions** 页面查看 Pages 构建/部署任务；成功后回到 **Settings → Pages**，点击 **Visit site**。
+10. 本项目的在线网页地址是：<https://mxw1589.github.io/jiedian/>。以后只要把更新后的 `index.html` 提交到 `main` 根目录，GitHub Pages 就会重新发布；浏览器仍显示旧版时可按 `Ctrl + F5` 强制刷新。
 
-<https://mxw1589.github.io/jiedian/>
+**注意区分三个地址：**
 
-如果 Pages 尚未启用，或仓库权限/可见性不符合 GitHub Pages 当前计划要求，需要先在仓库 Settings 中完成相应设置。
+- 在线网页（正常打开并运行 HTML）：<https://mxw1589.github.io/jiedian/>
+- GitHub 文件页面（显示源码，不是网页运行效果）：<https://github.com/mxw1589/jiedian/blob/main/index.html>
+- Shell 原始下载地址（供网页安装命令下载脚本）：<https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh>
+
+GitHub Pages 的入口文件 `index.html` 必须位于所选发布目录的顶层。使用 `main` + `/(root)` 时，它就应直接放在仓库根目录。GitHub Pages 网站会公开在互联网上；发布前务必检查仓库和网页中没有 Token、私钥、节点订阅链接等敏感内容。
+
+如果仓库设置中没有可选的 Pages 发布项，请确认你拥有仓库的管理员/维护者权限，并检查仓库可见性及当前 GitHub 计划是否支持该发布方式。
 
 ## 单台 VPS 一键粘贴安装
 
@@ -127,8 +135,8 @@ git config --global user.email "你的 GitHub 邮箱"
 3. 选择证书方式并按需设置 Reality SNI。选择 HTTP-01 时，填写已解析到目标 VPS 的 TLS 证书域名。“优选 IP/域名”可留空，让 WS 节点使用该证书域名作为连接地址。
 4. 选择 Cloudflare DNS-01 时，填写 Cloudflare DNS 区域主域名和 API Token，Zone ID 和邮箱可按需填写。VPS 卡片上的“Cloudflare 绑定 IP 的域名”留空时使用区域主域名，例如 `example.com`。使用子域名时，填写已解析到该 VPS 的域名，例如 `vps1.example.com`。请提前在 Cloudflare 中将所用域名的 A 或 AAAA 记录指向目标 VPS。脚本只管理签发所需的 TXT 记录。
 5. 如果需要指定 WS 节点的连接地址，在该 VPS 的“优选 IP/域名”中填写一个 IP 或域名。留空时连接地址使用 Cloudflare 绑定域名或 HTTP-01 证书域名。Cloudflare 的 TLS 证书域名和 WS Host 使用绑定域名。
-6. 点击 VPS 卡片上的 **生成粘贴命令**，或点击 **生成第一台 VPS 一键安装命令**。网页会同时在“对应卸载命令”区域生成该 VPS 的卸载命令。
-7. 点击 **复制一键安装命令**，以 root 登录目标 VPS，把整段命令粘贴到终端执行。卸载时，复制“对应卸载命令”区域的内容，在同一 VPS 的 root 终端执行即可。
+6. 点击 VPS 卡片上的 **生成粘贴命令**，或点击 **生成第一台 VPS 一键安装命令**。
+7. 点击 **复制一键安装命令**，以 root 登录目标 VPS，把整段命令粘贴到终端执行。
 8. 命令会自动下载 GitHub Raw 上的 Shell 脚本、检查脚本版本、传入网页配置并启动安装。请将网页和 Shell 脚本一同发布。首次安装时，网页中已填写的参数不会再逐项询问；Cloudflare Token 也会从配置传入。安装失败时会在当前 SSH 会话中显示错误。
 9. 如果目标 VPS 已有本脚本的有效 `manager.json`，命令会自动执行覆盖升级，保留原节点参数、端口、证书、私钥和 Token；本次网页表单的新参数不会替换已有配置。要修改现有参数，请使用 VPS 管理菜单。
 10. 安装结束后，脚本会在终端显示全部节点，并保存到 `/etc/sing-box/nodes.txt`。
@@ -155,8 +163,8 @@ sudo apt install -y openssh-client curl jq coreutils
 
 1. 在网页中添加全部 VPS。
 2. 按需填写每台 VPS 的协议端口。同一 VPS 内手动端口不能重复，不同 VPS 之间可以使用相同端口。留空的端口将在各台 VPS 安装时随机分配。
-3. 点击 **生成多 VPS 部署脚本**，网页会生成 `deploy-multi.sh`，并在“对应卸载命令”区域生成同台数的 `uninstall-multi.sh`。卸载脚本不会携带安装参数、Cloudflare Token 或节点凭据。
-4. 在本机终端进入下载目录，执行部署脚本：
+3. 点击 **生成多 VPS 部署脚本**，网页会下载 `deploy-multi.sh`。
+4. 在本机终端进入下载目录，执行：
 
 ```bash
 chmod 700 deploy-multi.sh
@@ -167,15 +175,6 @@ chmod 700 deploy-multi.sh
 6. 按提示选择 SSH 私钥路径，留空则使用 ssh-agent 或默认 SSH 密钥。为每台 VPS 输入 SSH 登录目标，例如 `root@23.147.232.192`，以及 SSH 端口。端口留空使用 `22`。
 7. 脚本通过 SSH 把每台 VPS 的配置传送到远端，再下载 GitHub 上的 Shell 安装脚本并执行。
 8. 成功部署的节点链接会合并保存为当前目录下的 `all-nodes.txt`。
-
-如需批量卸载，在网页“对应卸载命令”区域点击 **下载卸载命令**，保存为 `uninstall-multi.sh`。确认目标清单无误后，再运行：
-
-```bash
-chmod 700 uninstall-multi.sh
-./uninstall-multi.sh
-```
-
-卸载脚本会逐台询问 SSH 登录目标和端口，并检查远端是否存在 `/usr/local/sbin/sb-manager`；只有输入的目标 VPS 会被执行卸载。
 
 `all-nodes.txt` 包含节点密码、UUID 和 Reality 公钥等敏感连接信息。请妥善保管，不要上传到公开仓库或发送给不可信的人。
 
@@ -210,12 +209,25 @@ chmod 700 uninstall-multi.sh
 /usr/local/sbin/sb-manager uninstall
 ```
 
-`uninstall` 会立即执行，不再要求输入大写确认文本。网页生成的单台卸载命令和批量卸载脚本均调用此入口；卸载命令本身不包含 Cloudflare Token 或安装配置。它会停止服务并删除 `/etc/sing-box` 管理数据、证书副本、管理脚本和本脚本安装的 sing-box 软件包；不会删除 `/root/.acme.sh`、系统依赖包、sing-box 系统用户/组、系统防火墙规则或云厂商安全组。请确认目标 VPS 正确后再运行。
+### 卸载 sing-box 管理器
+
+在目标 VPS 的 SSH root 终端执行：
+
+```bash
+/usr/local/sbin/sb-manager uninstall
+```
+
+该命令会立即执行，不再要求输入大写确认文本。执行前请确认当前连接的是正确的 VPS，并备份仍需保留的节点信息和配置。
+
+- **将删除：** `/etc/sing-box` 管理目录及其中的配置和证书副本、`/usr/local/sbin/sb-manager`、sing-box 服务文件、证书重载钩子，以及本脚本安装的 sing-box 软件包。脚本还会清理自己创建的 BBR 持久化配置，并尝试恢复安装前的 TCP 拥塞控制参数。
+- **不会删除：** `/root/.acme.sh`、系统依赖包、sing-box 系统用户/组、系统防火墙规则、云厂商安全组或其他 cron 任务。
+
+卸载操作不可直接撤销；如需重新使用，必须重新安装并重新配置服务。
 
 ## 安全说明
 
 - 网页是纯静态文件，表单数据不会自动发送到 GitHub Pages，也不会保存到网页服务器。
-- 单机安装命令包含 Base64 编码的 Cloudflare API Token。Base64 不是加密；任何拿到命令的人都能解码 Token。只在自己的 VPS root 终端使用，不要公开分享、截图或提交到 GitHub。单台和批量卸载命令不包含 Token、安装配置或节点凭据。
+- 单机命令包含 Base64 编码的 Cloudflare API Token。Base64 不是加密；任何拿到命令的人都能解码 Token。只在自己的 VPS root 终端使用，不要公开分享、截图或提交到 GitHub。
 - 批量部署脚本不预置 Token；运行时在本机输入一次，再通过 SSH 输入流传送给目标 VPS。
 - 如果不希望 Token 出现在生成命令中，可选择 HTTP-01 证书方式；该方式要求域名解析到目标 VPS，公网 TCP 80 可访问且空闲。
 - 不要把 Cloudflare Token、SSH 私钥、证书私钥或 `all-nodes.txt` 提交到 GitHub。Windows BAT 只暂存四个固定项目文件，但仍应检查仓库中是否存在其他敏感文件。

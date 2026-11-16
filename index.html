@@ -99,7 +99,7 @@ button:hover{filter:brightness(1.08)}button.secondary{background:#1a2745;border-
     <div id="httpNotice" class="notice hidden">HTTP-01 不需要 Cloudflare Token，但每台 VPS 都必须能通过同一证书域名完成 HTTP 验证。多 VPS 使用同一域名时更建议 Cloudflare DNS-01。</div>
     <div class="divider"></div>
     <h3>部署方式</h3>
-    <div class="small">单机一键安装：填完本页参数，点击生成并复制命令，直接粘贴到目标 VPS 的 root 终端即可。每次生成安装命令时，都会同步生成对应的卸载命令。已有管理安装会自动覆盖升级并保留现有配置；批量 SSH 部署也支持覆盖升级。</div>
+    <div class="small">单机一键安装：填完本页参数，点击生成并复制命令，直接粘贴到目标 VPS 的 root 终端即可。已有管理安装会自动覆盖升级并保留现有配置；批量 SSH 部署也支持覆盖升级。</div>
     <div class="actions">
       <button id="singleCommand">生成第一台 VPS 一键安装命令</button>
       <button id="batchScript" class="secondary">生成多 VPS 部署脚本</button>
@@ -125,19 +125,16 @@ button:hover{filter:brightness(1.08)}button.secondary{background:#1a2745;border-
   </div>
   <div class="notice">安全提醒：单机一键命令包含 Base64 编码的 Cloudflare Token（Base64 不是加密）。只在自己的 VPS root 终端使用，不要发给他人、截图公开或提交到 GitHub。批量 SSH 脚本不预置 Token；运行时在本机终端输入一次。不要把证书私钥、SSH 私钥或节点清单上传到公开仓库。</div>
 </section>
-
 <section class="panel bottom">
-  <div class="panelhead"><h2>🧹 对应卸载命令</h2><span class="badge">与最近生成的安装命令对应</span></div>
-  <div class="small">生成单台安装命令后，这里会同步显示该 VPS 的卸载命令；生成批量部署脚本后，这里会生成对应台数的批量卸载脚本。单台命令在目标 VPS 的 root 终端执行；批量脚本在本机运行并按提示输入 SSH 目标。</div>
-  <textarea id="uninstallOutput" class="commandbox" readonly placeholder="生成安装命令或批量部署脚本后，这里会自动生成对应的卸载命令。"></textarea>
-  <div class="actions">
-    <button id="copyUninstall" class="secondary">复制卸载命令</button>
-    <button id="downloadUninstall" class="ghost">下载卸载命令</button>
-    <button id="clearUninstall" class="ghost">清空</button>
-  </div>
-  <div class="notice">卸载属于破坏性操作：会停止 sing-box 服务，删除 /etc/sing-box 管理数据和证书副本、管理脚本及其安装的 sing-box 软件包。不会删除 /root/.acme.sh、系统依赖包、sing-box 系统用户/组、系统防火墙规则或云厂商安全组。执行前请确认连接的是正确的 VPS。</div>
+  <div class="panelhead"><h2>🗑️ 卸载 sing-box 管理器</h2><span class="badge">root 权限 · 立即执行</span></div>
+  <div class="small">如果要从某台 VPS 卸载本项目安装的 sing-box 服务，请先 SSH 登录那台 VPS，并在 root 终端执行以下命令：</div>
+  <pre class="preview"><code>/usr/local/sbin/sb-manager uninstall</code></pre>
+  <div class="notice">重要：该命令会立即执行卸载，不会再要求输入大写确认文本。执行前请确认当前 SSH 会话连接的是正确的 VPS，并备份仍需保留的节点信息和配置。</div>
+  <h3>卸载范围</h3>
+  <div class="small">将删除：<code>/etc/sing-box</code> 管理目录及其中的配置和证书副本、<code>/usr/local/sbin/sb-manager</code>、sing-box 服务文件、证书重载钩子，以及本脚本安装的 sing-box 软件包。脚本还会清理自己创建的 BBR 持久化配置，并尝试恢复安装前的 TCP 拥塞控制参数。</div>
+  <div class="small" style="margin-top:8px">不会删除：<code>/root/.acme.sh</code>、系统依赖包、sing-box 系统用户/组、系统防火墙规则、云厂商安全组或其他 cron 任务。</div>
 </section>
-<div class="footer">本工具为静态前端配置生成器；表单不会发送到网页服务器。Cloudflare Token 仅在本地浏览器中参与命令生成，但会被编码进单机安装命令。卸载命令不包含 Token 或安装配置。请妥善保管生成的命令。实际部署结果以 VPS 上 sing-box 配置检查和服务状态为准。</div>
+<div class="footer">本工具为静态前端配置生成器；表单不会发送到网页服务器。Cloudflare Token 仅在本地浏览器中参与命令生成，但会被编码进单机命令。请妥善保管生成的命令。实际部署结果以 VPS 上 sing-box 配置检查和服务状态为准。</div>
 </div>
 
 <template id="serverTemplate">
@@ -274,81 +271,6 @@ function download(name, text, type="text/plain;charset=utf-8") {
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function output(text) { $("commandOutput").value=text; $("commandOutput").scrollTop=0; }
-function outputUninstall(text) { $("uninstallOutput").value=text; $("uninstallOutput").scrollTop=0; }
-function oneUninstallText(index) {
-  return `# VPS ${index} 卸载命令
-# 请以 root 登录对应 VPS 后执行；该操作会停止并卸载 sing-box 管理器。
-if sh -eu <<'SB_UNINSTALL'
-[ "$(id -u)" -eq 0 ] || { echo '请以 root 用户执行此卸载命令。'; exit 1; }
-MANAGER=/usr/local/sbin/sb-manager
-[ -x "$MANAGER" ] || { echo '未找到 /usr/local/sbin/sb-manager；该 VPS 可能尚未安装或管理脚本已被删除。'; exit 1; }
-printf '%s\\n' '警告：将停止 sing-box 并删除 /etc/sing-box、管理脚本及其安装的 sing-box 软件包。'
-printf '%s\\n' '不会删除 /root/.acme.sh、系统依赖包、系统防火墙规则或云厂商安全组。'
-"$MANAGER" uninstall
-SB_UNINSTALL
-then
-  :
-else
-  echo '卸载未完成，请查看上方错误信息。' >&2
-  exit 1
-fi`;
-}
-function batchUninstallText(count) {
-  const indices=Array.from({length:count},(_,i)=>i+1).join(" ");
-  return `#!/usr/bin/env bash
-set -u
-SUCCESS_COUNT=0
-FAILED_COUNT=0
-SKIPPED_COUNT=0
-SSH_KEY="\${SSH_KEY:-}"
-command -v ssh >/dev/null 2>&1 || { echo "缺少 ssh 客户端"; exit 1; }
-if [ -z "$SSH_KEY" ]; then
-  read -r -p "SSH 私钥路径（留空使用 ssh-agent / 默认密钥）: " SSH_KEY || true
-fi
-echo "警告：将依次对输入的 ${count} 台 VPS 执行 sing-box 卸载。"
-echo "卸载会删除 /etc/sing-box、管理脚本及其安装的 sing-box 软件包。"
-echo "不会删除 /root/.acme.sh、系统依赖包、系统防火墙规则或云厂商安全组。"
-for VPS_INDEX in ${indices}; do
-  echo
-  echo "========== VPS $VPS_INDEX =========="
-  TARGET=""
-  SSH_PORT=""
-  read -r -p "SSH 登录目标（root@IP 或 root@域名）: " TARGET || true
-  if [[ ! "$TARGET" =~ ^root@[^[:space:]|]+$ ]]; then
-    echo "VPS $VPS_INDEX：SSH 登录目标格式无效，跳过。"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-    continue
-  fi
-  read -r -p "SSH 端口 [22]: " SSH_PORT || true
-  SSH_PORT=\${SSH_PORT:-22}
-  if [[ ! "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] || (( 10#$SSH_PORT < 1 || 10#$SSH_PORT > 65535 )); then
-    echo "VPS $VPS_INDEX：SSH 端口必须是 1–65535，跳过。"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-    continue
-  fi
-  SSH_PORT=$((10#$SSH_PORT))
-  SSH_ARGS=(-p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=12 -o ServerAliveInterval=15)
-  [ -z "$SSH_KEY" ] || SSH_ARGS+=(-i "$SSH_KEY")
-  echo "正在卸载：$TARGET"
-  if ssh "\${SSH_ARGS[@]}" "$TARGET" 'sh -s' <<'SB_REMOTE_UNINSTALL'
-set -eu
-[ "$(id -u)" -eq 0 ] || { echo '远端命令必须以 root 身份执行。' >&2; exit 1; }
-[ -x /usr/local/sbin/sb-manager ] || { echo '未找到 /usr/local/sbin/sb-manager；该 VPS 可能尚未安装或管理脚本已被删除。' >&2; exit 1; }
-/usr/local/sbin/sb-manager uninstall
-SB_REMOTE_UNINSTALL
-  then
-    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-    echo "卸载完成：$TARGET"
-  else
-    FAILED_COUNT=$((FAILED_COUNT + 1))
-    echo "卸载失败：$TARGET"
-  fi
-done
-echo
-echo "批量卸载结束：成功 $SUCCESS_COUNT 台，失败 $FAILED_COUNT 台，跳过 $SKIPPED_COUNT 台。"
-[ "$FAILED_COUNT" -eq 0 ]
-`;
-}
 function oneCommandText(cfg) {
   const encoded=b64(JSON.stringify(cfg));
   return `if sh -eu <<'SB_INSTALL'
@@ -371,7 +293,6 @@ fi
 head -n 1 "$SH" | grep -qx '#!/bin/sh'
 grep -q 'WEB_CONFIG_MODE=1' "$SH"
 grep -q 'WEB_CONFIG_SCHEMA=4' "$SH" || { echo '线上安装脚本版本过旧；请先同步网页和 Shell 脚本，再重新生成命令。'; exit 1; }
-install -d -m 0755 /usr/local/sbin
 install -m 700 "$SH" /usr/local/sbin/sb-manager
 rm -f "$SH"
 /usr/local/sbin/sb-manager install-web-config "$CFG"
@@ -388,7 +309,6 @@ function generateSingle(card) {
     const s=getServer(card), idx=[...$("servers").children].indexOf(card)+1;
     const cfg=validate(s,idx,{requireCfToken:true});
     output(`# VPS ${idx} 一键安装命令\n# 请以 root 登录目标 VPS，将下面整段命令完整粘贴执行。\n# Cloudflare Token 已包含在 Base64 配置中；不要公开分享这段命令。\n\n${oneCommandText(cfg)}`);
-    outputUninstall(oneUninstallText(idx));
   } catch(e) { alert(e.message); }
 }
 function addressPrefix(address) {
@@ -550,7 +470,6 @@ fi
 head -n 1 "$TMP_SH" | grep -qx '#!/bin/sh'
 grep -q 'WEB_CONFIG_MODE=1' "$TMP_SH"
 grep -q 'WEB_CONFIG_SCHEMA=4' "$TMP_SH" || { echo '线上安装脚本版本过旧，请先同步网页和 Shell 脚本' >&2; exit 1; }
-install -d -m 0755 /usr/local/sbin
 install -m 700 "$TMP_SH" /usr/local/sbin/sb-manager
 /usr/local/sbin/sb-manager install-web-config "$CONFIG_FILE"
 SB_REMOTE_INSTALL
@@ -578,8 +497,6 @@ echo "注意：请检查每台 VPS 的服务状态及云安全组 / 系统防火
 [ "$FAILED_COUNT" -eq 0 ]
 `;
     output(script);
-    const uninstallScript=batchUninstallText(rows.length);
-    outputUninstall(uninstallScript);
     download("deploy-multi.sh",script);
   } catch(e) { alert(e.message); }
 }
@@ -610,20 +527,7 @@ $("downloadOutput").addEventListener("click",()=>{
   if(!$("commandOutput").value) return alert("没有可下载的内容。");
   download("sing-box-deploy-command.txt",$("commandOutput").value);
 });
-$("clearOutput").addEventListener("click",()=>{ output(""); outputUninstall(""); });
-$("clearUninstall").addEventListener("click",()=>outputUninstall(""));
-$("copyUninstall").addEventListener("click",async()=>{
-  const t=$("uninstallOutput").value;
-  if(!t) return alert("请先生成对应的卸载命令或批量卸载脚本。");
-  try { await navigator.clipboard.writeText(t); alert("卸载命令已复制。"); }
-  catch { $("uninstallOutput").select(); document.execCommand("copy"); alert("卸载命令已复制。"); }
-});
-$("downloadUninstall").addEventListener("click",()=>{
-  const t=$("uninstallOutput").value;
-  if(!t) return alert("没有可下载的卸载命令。");
-  const isBatch=t.startsWith("#!/usr/bin/env bash");
-  download(isBatch ? "uninstall-multi.sh" : "sing-box-uninstall-command.txt",t);
-});
+$("clearOutput").addEventListener("click",()=>output(""));
 function syncServerFields(card) {
   const cf=$("certMode").value==="cloudflare";
   card.querySelector(".cf-domain-field").classList.toggle("hidden",!cf);

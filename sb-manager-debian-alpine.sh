@@ -2139,7 +2139,6 @@ install_manager_command() {
         *) return 0 ;;
     esac
     if [ "$0" != /usr/local/sbin/sb-manager ] && [ -f "$0" ]; then
-        install -d -m 0755 /usr/local/sbin
         install -m 0700 "$0" /usr/local/sbin/sb-manager
     fi
 }
