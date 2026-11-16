@@ -3,7 +3,7 @@
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # Manual or random collision-checked TCP ports; Cloudflare DNS-01 or HTTP-01
-# WEB_CONFIG_MODE=1; supports single/multi-VPS deployment; overlay install preserves existing settings
+# WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=2; blank origin addresses are detected on the VPS
 # WEB_CONFIG_SCHEMA=4; web deployment supports safe overlay upgrades and guarded first takeover
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
@@ -1695,7 +1695,7 @@ install_web_config() {
     case "${cert_mode:-cloudflare}" in
         cloudflare) CERT_MODE=cloudflare ;;
         http01) CERT_MODE=standalone ;;
-        *) err '网页批量部署目前支持 Cloudflare DNS-01 或 HTTP-01 证书方式。' ;;
+        *) err '网页配置安装目前支持 Cloudflare DNS-01 或 HTTP-01 证书方式。' ;;
     esac
 
     if [ "$CERT_MODE" = cloudflare ] && [ -z "$cf_token" ]; then
