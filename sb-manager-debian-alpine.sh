@@ -1,5 +1,5 @@
 #!/bin/sh
-# sing-box multi-protocol manager for Debian + Alpine
+# sing-box single-VPS multi-protocol manager for Debian + Alpine
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
@@ -560,10 +560,44 @@ ask_secret() {
     fi
 }
 
+sing_box_version_from() {
+    candidate_bin=$1
+    [ -x "$candidate_bin" ] || return 1
+    version_line=$("$candidate_bin" version 2>/dev/null | sed -n '1p' || true)
+    printf '%s\n' "$version_line" |
+        sed -n 's/.*version[[:space:]]*v\{0,1\}\([0-9][0-9.]*\).*/\1/p'
+}
+
+version_supports_naive() {
+    [ -n "${1:-}" ] || return 1
+    awk -v v="$1" 'BEGIN {
+        n = split(v, a, ".");
+        if (n < 2) exit 1;
+        major = a[1] + 0;
+        minor = a[2] + 0;
+        if (major > 1 || (major == 1 && minor >= 13)) exit 0;
+        exit 1;
+    }'
+}
+
+resolve_sing_box_binary() {
+    # Prefer the upstream binary installed under /usr/local/bin. On Alpine,
+    # an older APK binary may still exist under /usr/bin after fallback.
+    if [ -x /usr/local/bin/sing-box ]; then
+        printf '%s\n' /usr/local/bin/sing-box
+        return 0
+    fi
+    command -v sing-box 2>/dev/null
+}
+
 install_alpine_official_release() {
-    msg 'Alpine 仓库未提供可安装的 sing-box 包，改用 sing-box 官方 Linux 发布版……'
-    tag=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r '.tag_name')
-    case "$tag" in ''|null) err '无法从 GitHub 获取 sing-box 最新版本号。' ;; esac
+    msg 'Alpine 仓库中的 sing-box 不存在或版本低于 1.13.0，改用 sing-box 官方 Linux 发布版……'
+    if ! release_json=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest); then
+        err '无法访问 GitHub Releases API；请检查 VPS 网络后重试。'
+    fi
+    tag=$(printf '%s\n' "$release_json" | jq -r '.tag_name // empty') ||
+        err '无法解析 GitHub 最新 sing-box 版本信息。'
+    case "$tag" in ''|null) err 'GitHub 未返回 sing-box 最新版本号。' ;; esac
     ver=${tag#v}
     case "$(uname -m)" in
         x86_64) rel_arch=amd64 ;;
@@ -575,17 +609,26 @@ install_alpine_official_release() {
     unpack_dir=$(mktemp -d /tmp/sing-box-unpack.XXXXXX) || err '无法创建 sing-box 临时解压目录。'
     if ! curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "/tmp/${archive}"; then
         rm -rf "$unpack_dir" "/tmp/${archive}"
-        err '下载 sing-box 官方 Linux 发布版失败，请检查 GitHub 网络连接后重试。'
+        err "下载 sing-box 官方发布版失败（${archive}）；请检查 GitHub 网络连接后重试。"
     fi
     if ! tar -xzf "/tmp/${archive}" -C "$unpack_dir"; then
         rm -rf "$unpack_dir" "/tmp/${archive}"
         err '解压 sing-box 官方发布版失败。'
     fi
+    mkdir -p /usr/local/bin
     if ! install -m 0755 "$unpack_dir/sing-box-${ver}-linux-${rel_arch}/sing-box" /usr/local/bin/sing-box; then
         rm -rf "$unpack_dir" "/tmp/${archive}"
-        err '安装 sing-box 官方二进制文件失败。'
+        err '安装 sing-box 官方 Linux 二进制文件失败。'
     fi
     rm -rf "$unpack_dir" "/tmp/${archive}"
+
+    # Pin the manager/service to the official binary explicitly. Do not let an
+    # older /usr/bin/sing-box from Alpine's APK package shadow this version.
+    SB_BIN=/usr/local/bin/sing-box
+    release_version=$(sing_box_version_from "$SB_BIN" || true)
+    version_supports_naive "$release_version" ||
+        err "官方发布版版本检查失败（检测到：${release_version:-无法识别}）；NaiveProxy 需要 sing-box 1.13.0 或更新版本。"
+    msg "已安装官方 sing-box：$release_version（满足 NaiveProxy 最低版本要求）。"
 }
 
 install_dependencies_and_core() {
@@ -594,15 +637,33 @@ install_dependencies_and_core() {
         msg '检测到 Alpine Linux，安装 sing-box 和依赖……'
         apk update
         apk add --no-cache ca-certificates curl jq openssl iproute2 tar gzip kmod
-        # Avoid printing apk's expected "no such package" error on Alpine
-        # releases whose repositories do not package sing-box. Probe first,
-        # then use the official upstream binary as the clean fallback.
+
+        # Some Alpine repositories provide sing-box, but older branches may
+        # package a release below 1.13.0. Naive inbound requires >= 1.13.0.
+        # Install the APK when available, inspect its actual binary version,
+        # and fall back to the upstream release whenever it is absent, broken,
+        # or too old.
         if apk search -x sing-box 2>/dev/null | grep -q .; then
             if ! apk add --no-cache sing-box; then
-                warn 'Alpine 仓库中的 sing-box 包安装失败，改用官方 Linux 发布版。'
-                install_alpine_official_release
+                warn 'Alpine sing-box APK 安装失败；将尝试官方 Linux 发布版。'
             fi
+        fi
+
+        candidate_bin=$(command -v sing-box 2>/dev/null || true)
+        candidate_version=""
+        if [ -n "$candidate_bin" ]; then
+            candidate_version=$(sing_box_version_from "$candidate_bin" || true)
+        fi
+
+        if [ -n "$candidate_bin" ] && version_supports_naive "$candidate_version"; then
+            SB_BIN=$candidate_bin
+            msg "使用 Alpine 仓库 sing-box：$candidate_version（满足 NaiveProxy 最低版本要求）。"
         else
+            if [ -n "$candidate_bin" ]; then
+                warn "Alpine 仓库提供的 sing-box 版本为 ${candidate_version:-无法识别}，低于 NaiveProxy 所需的 1.13.0；自动切换到官方新版。"
+            else
+                warn 'Alpine 仓库没有可用的 sing-box 二进制；自动切换到官方新版。'
+            fi
             install_alpine_official_release
         fi
         update-ca-certificates 2>/dev/null || true
@@ -624,26 +685,22 @@ Signed-By: /etc/apt/keyrings/sagernet.asc
 APT_EOF
         apt-get update
         DEBIAN_FRONTEND=noninteractive apt-get install -y sing-box
+        SB_BIN="$(command -v sing-box 2>/dev/null || true)"
     else
         err '仅支持 Debian 和 Alpine Linux。'
     fi
-    command -v sing-box >/dev/null 2>&1 || err 'sing-box 安装失败。请确认系统仓库可用。'
-    SB_BIN="$(command -v sing-box)"
+
+    [ -n "$SB_BIN" ] && [ -x "$SB_BIN" ] ||
+        err 'sing-box 安装失败：没有找到可执行文件。请检查软件源或网络后重试。'
     "$SB_BIN" version | head -n 1 || true
     require_naive_version
 }
 
 require_naive_version() {
-    version_line=$("$SB_BIN" version 2>/dev/null | head -n 1 || true)
-    version=$(printf '%s\n' "$version_line" | sed -n 's/.*version[[:space:]]*v\{0,1\}\([0-9][0-9.]*\).*/\1/p')
+    version=$(sing_box_version_from "$SB_BIN" || true)
     [ -n "$version" ] || err '无法读取 sing-box 版本，无法确认 Naive 入站兼容性。'
-    awk -v v="$version" 'BEGIN {
-        split(v, a, ".");
-        major = a[1] + 0;
-        minor = a[2] + 0;
-        if (major > 1 || (major == 1 && minor >= 13)) exit 0;
-        exit 1;
-    }' || err "当前 sing-box 版本 $version 过旧；NaiveProxy 入站需要 sing-box 1.13.0 或更新版本。"
+    version_supports_naive "$version" ||
+        err "当前 sing-box 版本 $version 过旧；NaiveProxy 入站需要 sing-box 1.13.0 或更新版本。"
 }
 
 ensure_service_account() {
@@ -2025,6 +2082,139 @@ change_ws_host() {
     show_nodes
 }
 
+
+change_single_port() {
+    printf '\n当前协议端口：\n'
+    printf '1. AnyTLS              %s/tcp\n' "$ANYTLS_PORT"
+    printf '2. VLESS + WS + TLS    %s/tcp\n' "$WS_PORT"
+    printf '3. VLESS + Reality     %s/tcp\n' "$REALITY_PORT"
+    printf '4. NaiveProxy          %s/tcp\n' "$NAIVE_PORT"
+    printf '5. AnyTLS + Reality    %s/tcp\n' "$ANYREALITY_PORT"
+    printf '0. 返回\n'
+    printf '请选择要修改端口的单个节点：'
+    IFS= read -r selected_choice || selected_choice=0
+
+    case "$selected_choice" in
+        1)
+            selected_name='AnyTLS'
+            selected_current=$ANYTLS_PORT
+            other_ports="$WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT"
+            selected_kind=range
+            ;;
+        2)
+            selected_name='VLESS + WS + TLS'
+            selected_current=$WS_PORT
+            other_ports="$ANYTLS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT"
+            selected_kind=ws
+            ;;
+        3)
+            selected_name='VLESS + Reality'
+            selected_current=$REALITY_PORT
+            other_ports="$ANYTLS_PORT $WS_PORT $NAIVE_PORT $ANYREALITY_PORT"
+            selected_kind=range
+            ;;
+        4)
+            selected_name='NaiveProxy'
+            selected_current=$NAIVE_PORT
+            other_ports="$ANYTLS_PORT $WS_PORT $REALITY_PORT $ANYREALITY_PORT"
+            selected_kind=range
+            ;;
+        5)
+            selected_name='AnyTLS + Reality'
+            selected_current=$ANYREALITY_PORT
+            other_ports="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT"
+            selected_kind=range
+            ;;
+        0) return 0 ;;
+        *) warn '无效选择。'; return 0 ;;
+    esac
+
+    printf '\n当前 %s 端口：%s/tcp\n' "$selected_name" "$selected_current"
+    if [ "$selected_kind" = ws ]; then
+        msg 'Cloudflare 橙云代理请使用 443、2053、2083、2087、2096 或 8443。留空将从项目的五个非 443 代理端口中随机选择。'
+        ask_value '输入新端口（留空自动随机）' ''
+    else
+        ask_value '输入新端口（1024–65535；留空自动随机）' ''
+    fi
+    requested_port=$(trim_value "$REPLY")
+
+    if [ -n "$requested_port" ]; then
+        if ! valid_port "$requested_port"; then
+            warn '端口必须是 1024–65535 的整数；没有修改任何配置。'
+            return 0
+        fi
+        requested_port=$(printf '%s\n' "$requested_port" | sed 's/^0*//')
+        if [ "$requested_port" = "$selected_current" ]; then
+            msg "$selected_name 已经使用端口 $selected_current，无需修改。"
+            return 0
+        fi
+
+        case " $other_ports " in
+            *" $requested_port "*)
+                warn "端口 $requested_port 已被本脚本的其他协议使用；将为 $selected_name 自动选择备用端口。"
+                requested_port=""
+                ;;
+        esac
+    fi
+
+    if [ -n "$requested_port" ] && port_listening "$requested_port"; then
+        warn "TCP 端口 $requested_port 已被其他进程监听；将为 $selected_name 自动选择备用端口。"
+        requested_port=""
+    fi
+
+    if [ -z "$requested_port" ]; then
+        if [ "$selected_kind" = ws ]; then
+            if ! selected_new_port=$(pick_random_ws_port $other_ports "$selected_current"); then
+                warn '没有可用的 Cloudflare WS TLS 代理端口（2053、2083、2087、2096、8443）；原配置保持不变。'
+                return 0
+            fi
+        else
+            if ! selected_new_port=$(pick_random_range_port 10000 65535 $other_ports "$selected_current"); then
+                warn "无法为 $selected_name 找到空闲端口；原配置保持不变。"
+                return 0
+            fi
+        fi
+        msg "$selected_name 的新端口已自动分配：$selected_new_port/tcp"
+    else
+        selected_new_port=$requested_port
+    fi
+
+    if [ "$selected_kind" = ws ]; then
+        case " 443 2053 2083 2087 2096 8443 " in
+            *" $selected_new_port "*) ;;
+            *)
+                warn "端口 $selected_new_port 不在 Cloudflare 橙云 HTTPS 代理端口列表内；仅适合 DNS Only/直连，橙云代理可能无法连接。"
+                ;;
+        esac
+    fi
+
+    old_selected_port=$selected_current
+    case "$selected_choice" in
+        1) ANYTLS_PORT=$selected_new_port ;;
+        2) WS_PORT=$selected_new_port ;;
+        3) REALITY_PORT=$selected_new_port ;;
+        4) NAIVE_PORT=$selected_new_port ;;
+        5) ANYREALITY_PORT=$selected_new_port ;;
+    esac
+
+    msg "正在仅修改 $selected_name 端口，并检查完整 sing-box 配置……"
+    if ! build_config; then
+        case "$selected_choice" in
+            1) ANYTLS_PORT=$old_selected_port ;;
+            2) WS_PORT=$old_selected_port ;;
+            3) REALITY_PORT=$old_selected_port ;;
+            4) NAIVE_PORT=$old_selected_port ;;
+            5) ANYREALITY_PORT=$old_selected_port ;;
+        esac
+        warn "$selected_name 端口修改失败；已恢复原端口 $old_selected_port，其他节点参数未修改。"
+        return 0
+    fi
+
+    msg "$selected_name 端口修改成功：$old_selected_port → $selected_new_port"
+    show_nodes
+    msg '请同步更新该节点对应的系统防火墙、云安全组及 NAT 服务商公网端口映射。NAT 公网映射端口必须与本机监听端口一致。'
+}
+
 change_ports() {
     printf '当前端口：AnyTLS=%s, WS+TLS=%s, VLESS Reality=%s, NaiveProxy=%s, AnyTLS Reality=%s\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
     old_anytls=$ANYTLS_PORT
@@ -2175,7 +2365,7 @@ menu() {
         printf '4. 修改 VLESS WS TLS 单一连接地址（IPv4/IPv6/域名）\n'
         printf '5. 修改 VLESS WS HTTP Host（不是 SNI；默认跟随 TLS 域名）\n'
         printf '6. 修改 Cloudflare DNS 区域 / TLS 证书域名（WS Host 自动跟随）\n'
-        printf '7. 修改五个协议端口（留空随机）\n'
+        printf '7. 选择单个协议节点并修改端口（其他节点不变）\n'
         printf '8. 重启 sing-box\n'
         printf '9. 查看服务状态\n'
         printf '10. 查看最近日志\n'
@@ -2183,6 +2373,7 @@ menu() {
         printf '12. 查看 TCP BBR 加速状态\n'
         printf '13. 自定义节点辨识符\n'
         printf '14. 诊断 NaiveProxy（本机监听 / TLS 证书 / HTTP2）\n'
+        printf '15. 批量修改五个协议端口（留空随机）\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -2193,7 +2384,8 @@ menu() {
             4) change_preferred_ip ;;
             5) change_ws_host ;;
             6) change_cloudflare_zone ;;
-            7) change_ports ;;
+            7) change_single_port ;;
+            15) change_ports ;;
             8) service_restart && msg '服务已重启。' ;;
             9) service_status ;;
             10) show_logs ;;
@@ -2262,7 +2454,7 @@ main() {
         fi
         load_state
         if [ -f /etc/alpine-release ]; then OS_FAMILY=alpine; SERVICE_KIND=openrc; else OS_FAMILY=debian; SERVICE_KIND=systemd; fi
-        SB_BIN="$(command -v sing-box 2>/dev/null || printf /usr/bin/sing-box)"
+        SB_BIN="$(resolve_sing_box_binary 2>/dev/null || printf /usr/bin/sing-box)"
         case "${1:-}" in
             install|--install) overlay_install ;;
             *) menu ;;

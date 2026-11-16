@@ -38,17 +38,21 @@
 
 ### 服务端脚本
 
-- 支持 Debian / Ubuntu 和 Alpine；Alpine 仓库没有 sing-box 包时，会自动改用官方 Linux 发布版。
+- 支持 Debian / Ubuntu 和 Alpine；Alpine 仓库没有 sing-box 包，或仓库版本低于 NaiveProxy 所需的 `1.13.0` 时，会自动改用并验证 sing-box 官方 Linux 发布版。
 - 支持 IPv4 / IPv6 双栈监听。
 - 支持 Cloudflare DNS-01 自动申请和续期、HTTP-01 证书，以及 Shell 交互式安装中的手动导入证书。
 - 自动尝试启用 TCP BBR。
 - 自动生成五种协议节点链接。
-- 支持修改节点辨识符、WS Host、TLS 域名、Reality SNI 和端口。
+- 支持修改节点辨识符、WS Host、TLS 域名、Reality SNI 和端口；管理菜单可先选择单个协议节点再单独修改端口，其他四个节点端口保持不变，仍保留批量修改入口。
 - 支持 NaiveProxy 本机监听、TLS 证书及 HTTP/2 诊断。
 - 覆盖升级保留已有配置、证书、密钥、Cloudflare Token、Zone ID、UUID、密码、节点路径和端口。
 - 覆盖升级前检查新配置；启动或状态写入失败时会尝试恢复旧配置与旧管理状态。
 - 首次接管已有 `/etc/sing-box` 目录、但没有本脚本 `manager.json` 的 VPS 时，会先备份原目录，再继续安装。
 - 提供服务状态、日志、重启和卸载功能。
+
+### Alpine 版本兼容说明
+
+Alpine 仓库即使存在 `sing-box` 包，也不代表版本满足本项目要求。NaiveProxy 入站需要 sing-box `1.13.0` 或更新版本。安装脚本现在会在安装 APK 后读取实际版本：如果版本低于 `1.13.0`（例如 Alpine 仓库中的 `1.12.12-r6`），会自动下载 sing-box 官方 Linux 发布版，并将服务及后续管理菜单明确指向 `/usr/local/bin/sing-box`，避免旧版 `/usr/bin/sing-box` 抢占执行路径。下载或版本验证失败时会给出明确错误，不会继续生成不兼容配置。
 
 ## 一、不通过 HTML 直接安装
 
@@ -137,6 +141,12 @@ Cloudflare 默认代理的 HTTPS 端口包括 `443`、`2053`、`2083`、`2087`�
 - **适用：** VLESS + WS + TLS，且 DNS 记录为 Cloudflare Proxied（橙云），WS 端口为 Cloudflare 支持的 HTTPS 端口。
 - **不适用：** 仅填写优选 IP 并不会让 AnyTLS、VLESS Reality、AnyTLS + Reality、NaiveProxy 通过 Cloudflare 普通橙云代理。它们应使用 NAT 服务商实际分配的公网 IP/端口直连，或使用专门支持 TCP 代理的服务。
 - **域名参数不要混淆：** 优选 IP = 客户端连接目标；TLS 域名/SNI = 证书域名；WS Host = HTTP WebSocket Host。对本项目默认配置，这三个概念中后两者通常都是 `node.example.com`。
+
+### 单独修改一个节点的端口
+
+运行 `/usr/local/sbin/sb-manager` 进入管理菜单，选择 `7. 选择单个协议节点并修改端口`，再选择 AnyTLS、VLESS + WS + TLS、VLESS + Reality、NaiveProxy 或 AnyTLS + Reality 中的一个。输入新端口后，脚本只更改所选协议的端口，其余四个协议端口保持不变；留空则自动分配该协议支持范围内的空闲端口。如果手动端口被其他进程占用或与其他协议端口重复，脚本会自动改选可用端口。修改前会检查端口范围和冲突，随后验证完整 sing-box 配置并重启服务；若检查、重启或状态保存失败，会恢复原配置和原端口。VLESS + WS + TLS 留空时从 `2053`、`2083`、`2087`、`2096`、`8443` 中选择；手动输入其他端口时会提示该端口不适用于 Cloudflare 橙云代理。修改成功后必须同步更新系统防火墙、云安全组及 NAT 公网端口映射。
+
+批量修改五个协议端口仍可从管理菜单 `15` 进入。
 
 ## 四、服务端管理命令
 
