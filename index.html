@@ -31,11 +31,12 @@
   <div id="selectionHint" class="notice ok">默认选择 VLESS + WebSocket，并使用 Argo Tunnel。你可以取消或增加其他协议。</div>
   <div class="divider"></div>
   <div class="panelhead"><h2>② WS 接入方式</h2><span class="badge">仅 WS 协议启用时需要</span></div>
-  <div class="field"><label for="wsMode">VLESS + WS 接入</label><select id="wsMode"><option value="argo">Cloudflare Tunnel（Argo，推荐 NAT VPS）</option><option value="direct">直连 TLS（需要可用公网端口）</option></select></div>
+  <div class="field"><label for="wsMode">VLESS + WS 接入</label><select id="wsMode"><option value="argo">Cloudflare 固定 Tunnel（Argo，推荐 NAT VPS）</option><option value="direct">直连 TLS（需要可用公网端口）</option></select></div>
   <div id="argoFields">
-    <div class="field"><label for="argoHost">Argo 公网主机名</label><input id="argoHost" placeholder="例如 ws.example.com" autocomplete="off"></div>
-    <div class="field"><label for="argoToken">Cloudflare Tunnel Token</label><input id="argoToken" type="password" placeholder="粘贴 Zero Trust Tunnel 的 eyJ... Token" autocomplete="off"></div>
-    <div class="small">先在 Cloudflare Zero Trust → Networks → Tunnels 创建/选择一个远程管理 Tunnel，并添加 Public Hostname。Token 用于 VPS 上 cloudflared 连接该 Tunnel。</div>
+    <div class="field"><label for="argoHost">固定 Tunnel 公网主机名</label><input id="argoHost" placeholder="例如 ws.example.com" autocomplete="off"></div>
+    <div class="field"><label for="argoTunnelName">Tunnel 备注名（可选）</label><input id="argoTunnelName" placeholder="例如 racknerd-nat01" autocomplete="off" maxlength="64"></div>
+    <div class="field"><label for="argoToken">Cloudflare Tunnel Token</label><input id="argoToken" type="password" placeholder="粘贴 Add a replica 中完整的 eyJ... Token" autocomplete="off"></div>
+    <div class="small">使用 Cloudflare Zero Trust → Networks → Tunnels 中创建的 remotely-managed 固定 Tunnel；不要使用临时 Quick Tunnel（trycloudflare.com）。备注名仅在 VPS 管理菜单中显示，不是 Tunnel ID。Token 绑定实际 Tunnel 身份，VPS 重启后会继续连接同一个 Tunnel。</div>
   </div>
   <div id="directWsFields" class="hidden">
     <div class="field"><label for="directWsHost">WS HTTP Host / TLS 域名</label><input id="directWsHost" placeholder="例如 node.example.com"></div>
@@ -93,18 +94,18 @@
     <button id="downloadOutput" class="ghost" disabled>下载命令 TXT</button>
     <button id="exportConfig" class="ghost" disabled>导出配置 JSON（不含 Token）</button>
   </div>
-  <div class="notice">安全提醒：安装命令会包含 Base64 编码的 Token；Base64 不是加密。不要公开分享命令，不要把 Argo Token、DNS API Token、节点链接或证书私钥提交到 GitHub。</div>
+  <div class="notice">安全提醒：安装命令会包含 Base64 编码的 Tunnel Token；Base64 不是加密。不要公开分享命令，不要把 Tunnel Token、DNS API Token、节点链接或证书私钥提交到 GitHub。已安装的 VPS 可在管理菜单使用 17 更换固定 Tunnel Token。</div>
 </section>
 
 <section class="panel bottom">
   <div class="panelhead"><h2>⑤ Cloudflare Tunnel（Argo）必须完成的路由设置</h2><span class="badge">Argo 模式</span></div>
   <ol class="small">
-    <li>Cloudflare Zero Trust → Networks → Tunnels，创建或选择一个 remotely-managed Tunnel。</li>
+    <li>Cloudflare Zero Trust → Networks → Tunnels，创建或选择一个 remotely-managed 固定 Tunnel（不是临时 Quick Tunnel）。</li>
     <li>在 Tunnel → Public Hostnames / Routes 添加主机名，Service Type 选 HTTP，Service URL 填写安装后终端显示的 <code>http://127.0.0.1:本机WS端口</code>。</li>
-    <li>从 Tunnel 的 Add a replica 安装命令中复制 <code>eyJ...</code> Token，粘贴到上面的 Tunnel Token 输入框。</li>
+    <li>从 Tunnel 的 Add a replica 安装命令中只复制 <code>eyJ...</code> Token，粘贴到上面的 Tunnel Token 输入框；不要复制整条安装命令。</li>
     <li>确认 Tunnel 状态为 Healthy。Cloudflare 会将 HTTPS/WS 流量经 Tunnel 转发到 VPS 的本机 HTTP WebSocket 入站。</li>
   </ol>
-  <div class="notice ok">Argo 模式不需要 NAT 服务商提供公网入站端口，也不需要 VPS 为 WS 节点申请证书；Cloudflare 边缘负责客户端 TLS，cloudflared 通过出站连接回源。确保 VPS 可以访问 Cloudflare Tunnel 所需的出站网络（默认连接端口 7844）。</div>
+  <div class="notice ok">固定 Tunnel 模式不需要 NAT 服务商提供公网入站端口，也不需要 VPS 为 WS 节点申请证书；Cloudflare 边缘负责客户端 TLS，cloudflared 通过出站连接回源。Token 指向一个固定的 remotely-managed Tunnel，服务开机自启并持续使用该身份。确保 VPS 可以访问 Cloudflare Tunnel 所需的出站网络（默认连接端口 7844）。</div>
   <div class="small" style="margin-top:8px">官方文档：<a href="https://developers.cloudflare.com/tunnel/get-started/" target="_blank" rel="noopener">创建 Tunnel 与发布应用</a> · <a href="https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/" target="_blank" rel="noopener">Tunnel Token</a> · <a href="https://developers.cloudflare.com/tunnel/reference/run-parameters/" target="_blank" rel="noopener">Tunnel 运行参数</a> · <a href="https://developers.cloudflare.com/tunnel/concepts/routing/" target="_blank" rel="noopener">Tunnel 路由</a></div>
 </section>
 
@@ -136,7 +137,7 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
 "use strict";
 const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
 const $=id=>document.getElementById(id);
-const ids=["pAnytls","pWs","pReality","pNaive","pAnyReality","wsMode","argoHost","argoToken","directWsHost","wsServer","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portReality","portNaive","portAnyReality"];
+const ids=["pAnytls","pWs","pReality","pNaive","pAnyReality","wsMode","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portReality","portNaive","portAnyReality"];
 const v=id=>$(id).value.trim();
 function selected(){return {anytls:$("pAnytls").checked,ws_tls:$("pWs").checked,vless_reality:$("pReality").checked,naive:$("pNaive").checked,anytls_reality:$("pAnyReality").checked};}
 function needsCert(p,mode){return p.anytls||p.naive||(p.ws_tls&&mode==="direct");}
@@ -151,6 +152,7 @@ function cfgFromForm(){
   const wsServer=p.ws_tls?(v("wsServer")||(mode==="argo"?argoHost:(v("directWsHost")||tlsDomain))):"";
   return {
     schema:5,protocols:p,ws_mode:p.ws_tls?mode:"none",argo_host:argoHost,
+    argo_tunnel_name:p.ws_tls&&mode==="argo"?v("argoTunnelName"):"",
     argo_token:p.ws_tls&&mode==="argo"?v("argoToken"):"",
     origin_ipv4:needsOrigin(p,mode)?v("originIPv4"):"",
     origin_ipv6:needsOrigin(p,mode)?v("originIPv6"):"",
@@ -176,8 +178,9 @@ function validate(c){
   const portNums=activePorts.map(([,x])=>+x);if(new Set(portNums).size!==portNums.length)throw Error("已启用协议的端口不能重复。");
   if(p.ws_tls){
     if(mode==="argo"){
-      if(!domainRe.test(c.argo_host))throw Error("请填写有效的 Argo 公网主机名，例如 ws.example.com。");
-      if(!c.argo_token||!/^eyJ\S+$/.test(c.argo_token))throw Error("请填写 Cloudflare Tunnel Token（通常以 eyJ 开头）。");
+      if(!domainRe.test(c.argo_host))throw Error("请填写有效的固定 Tunnel 公网主机名，例如 ws.example.com。");
+      if(c.argo_tunnel_name&&!/^[\p{L}\p{N} ._-]{1,64}$/u.test(c.argo_tunnel_name))throw Error("Tunnel 备注名最多 64 个字符，只允许中文、字母、数字、空格、点、下划线和短横线。");
+      if(!c.argo_token||!/^eyJ[A-Za-z0-9+/=_-]{37,8191}$/.test(c.argo_token))throw Error("请填写完整的 Cloudflare Tunnel Token（通常以 eyJ 开头），不要粘贴整个安装命令。");
     }else if(mode!=="direct")throw Error("请选择 WS 接入方式。");
     if(mode==="direct"&&!domainRe.test(c.ws_host))throw Error("直连 WS 的 HTTP Host 必须是有效域名。");
     if(c.ws_server&&!domainRe.test(c.ws_server)&&!isIPv4(c.ws_server)&&!isIPv6(c.ws_server))throw Error("客户端连接地址格式无效；请填写域名、IPv4 或 IPv6。");
@@ -231,7 +234,7 @@ function setEnabled(id,on){$(id).disabled=!on;}
 function syncUI(){
   const p=selected(),ws=p.ws_tls,mode=v("wsMode"),cert=needsCert(p,mode),origin=needsOrigin(p,mode),reality=p.vless_reality||p.anytls_reality;
   setEnabled("wsMode",ws);$("argoFields").classList.toggle("hidden",!ws||mode!=="argo");$("directWsFields").classList.toggle("hidden",!ws||mode!=="direct");
-  setEnabled("argoHost",ws&&mode==="argo");setEnabled("argoToken",ws&&mode==="argo");setEnabled("directWsHost",ws&&mode==="direct");setEnabled("wsServer",ws);
+  setEnabled("argoHost",ws&&mode==="argo");setEnabled("argoTunnelName",ws&&mode==="argo");setEnabled("argoToken",ws&&mode==="argo");setEnabled("directWsHost",ws&&mode==="direct");setEnabled("wsServer",ws);
   $("originFields").classList.toggle("hidden",!origin);setEnabled("originIPv4",origin);setEnabled("originIPv6",origin);
   $("realityFields").classList.toggle("hidden",!reality);setEnabled("realitySni",reality);
   $("certFields").classList.toggle("hidden",!cert);setEnabled("certMode",cert);setEnabled("tlsDomain",cert);
@@ -249,7 +252,7 @@ function render(){
   try{const c=validate(cfgFromForm());out.value="# 配置变化时自动更新；请以 root 登录目标 VPS 执行。\n# 命令含敏感 Token，请勿公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="配置完整，安装命令已自动生成。";[copy,down,exp].forEach(b=>b.disabled=false);updatePreview(c);}
   catch(e){out.value="";status.className="status error";status.textContent=e.message;[copy,down,exp].forEach(b=>b.disabled=true);updatePreview(null);}
 }
-function updatePreview(c){const p=selected(),rows=[];if(!Object.values(p).some(Boolean)){ $("nodePreview")&&($("nodePreview").textContent="尚未选择协议。");return;}if(p.anytls)rows.push("AnyTLS");if(p.ws_tls)rows.push(v("wsMode")==="argo"?`VLESS WS TLS → ${v("argoHost")||"Argo 主机名待填写"}:443`:`VLESS WS TLS → ${v("directWsHost")||v("tlsDomain")||"TLS 域名待填写"}`);if(p.vless_reality)rows.push("VLESS Reality");if(p.naive)rows.push("NaiveProxy");if(p.anytls_reality)rows.push("AnyTLS + Reality");const el=$("nodePreview");if(el)el.textContent=rows.join("\n");}
+function updatePreview(c){const p=selected(),rows=[];if(!Object.values(p).some(Boolean)){ $("nodePreview")&&($("nodePreview").textContent="尚未选择协议。");return;}if(p.anytls)rows.push("AnyTLS");if(p.ws_tls)rows.push(v("wsMode")==="argo"?`VLESS WS 固定 Tunnel → ${v("argoHost")||"Public Hostname 待填写"}:443${v("argoTunnelName")?`（${v("argoTunnelName")}）`:""}`:`VLESS WS TLS → ${v("directWsHost")||v("tlsDomain")||"TLS 域名待填写"}`);if(p.vless_reality)rows.push("VLESS Reality");if(p.naive)rows.push("NaiveProxy");if(p.anytls_reality)rows.push("AnyTLS + Reality");const el=$("nodePreview");if(el)el.textContent=rows.join("\n");}
 async function copyText(t){try{await navigator.clipboard.writeText(t);alert("已复制到剪贴板。");}catch{const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();const ok=document.execCommand("copy");a.remove();alert(ok?"已复制。":"复制失败，请手动复制。");}}
 function download(name,text,type="text/plain;charset=utf-8"){const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
 ids.forEach(id=>{$(id).addEventListener("input",render);$(id).addEventListener("change",render);});

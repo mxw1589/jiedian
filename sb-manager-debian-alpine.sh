@@ -30,6 +30,7 @@ ENABLE_NAIVE=1
 ENABLE_ANYTLS_REALITY=1
 WS_MODE=direct
 ARGO_HOST=""
+ARGO_TUNNEL_NAME=""
 ARGO_TOKEN=""
 ARGO_TOKEN_FILE="$APP_DIR/cloudflared.token"
 CLOUDFLARED_BIN=/usr/local/libexec/sb-manager/cloudflared
@@ -284,6 +285,14 @@ restore_bbr() {
     msg 'BBR 持久化配置已移除；已尝试恢复原有运行时参数。'
 }
 
+
+valid_argo_token() {
+    token_value=$1
+    [ "${#token_value}" -ge 40 ] && [ "${#token_value}" -le 8192 ] || return 1
+    case "$token_value" in eyJ*) ;; *) return 1 ;; esac
+    case "$token_value" in *[!A-Za-z0-9+/=_-]*) return 1 ;; esac
+    return 0
+}
 
 valid_domain() {
     v=$1
@@ -610,6 +619,31 @@ ask_secret() {
     else
         IFS= read -r REPLY || REPLY=""
     fi
+}
+
+write_argo_token_file() {
+    token_value=$1
+    valid_argo_token "$token_value" || return 1
+    [ -d "$APP_DIR" ] || return 1
+    grep -q '^sing-box:' /etc/group 2>/dev/null || return 1
+    token_old_umask=$(umask)
+    umask 077
+    token_tmp=$(mktemp "$APP_DIR/.cloudflared.token.XXXXXX") || {
+        umask "$token_old_umask"
+        return 1
+    }
+    if ! printf '%s' "$token_value" > "$token_tmp"; then
+        rm -f "$token_tmp"
+        umask "$token_old_umask"
+        return 1
+    fi
+    if ! chown root:sing-box "$token_tmp" || ! chmod 0640 "$token_tmp" || ! mv -f "$token_tmp" "$ARGO_TOKEN_FILE"; then
+        rm -f "$token_tmp"
+        umask "$token_old_umask"
+        return 1
+    fi
+    umask "$token_old_umask"
+    return 0
 }
 
 sing_box_version_from() {
@@ -1184,11 +1218,26 @@ start_cloudflared_service() {
 }
 
 cloudflared_status() {
+    msg '========== Cloudflare 固定 Tunnel 状态 =========='
+    printf 'Tunnel 备注：%s\n' "${ARGO_TUNNEL_NAME:-未设置}"
+    printf 'Public Hostname：%s\n' "${ARGO_HOST:-未设置}"
+    if [ -s "$ARGO_TOKEN_FILE" ]; then
+        token_meta=$(stat -c '%a %U:%G' "$ARGO_TOKEN_FILE" 2>/dev/null || ls -l "$ARGO_TOKEN_FILE" 2>/dev/null || true)
+        printf 'Tunnel Token：已配置（内容隐藏；权限：%s）\n' "${token_meta:-未知}"
+    else
+        printf 'Tunnel Token：缺失\n'
+    fi
+    if [ -x "$CLOUDFLARED_BIN" ]; then
+        "$CLOUDFLARED_BIN" --version 2>/dev/null | sed -n '1p' || true
+    fi
     if [ "$SERVICE_KIND" = systemd ]; then
         systemctl --no-pager --full status "$CLOUDFLARED_SERVICE" 2>/dev/null || true
     elif [ "$SERVICE_KIND" = openrc ]; then
         rc-service "$CLOUDFLARED_SERVICE" status 2>/dev/null || true
+    else
+        warn '尚未识别 systemd / OpenRC。'
     fi
+    msg '提示：服务进程 active 不等于 Cloudflare 控制台已 Healthy；最终请检查 Tunnel 的 Connector 状态。'
 }
 
 save_state() {
@@ -1201,6 +1250,7 @@ save_state() {
       --arg ws_server "$WS_SERVER" \
       --arg ws_mode "$WS_MODE" \
       --arg argo_host "$ARGO_HOST" \
+      --arg argo_tunnel_name "$ARGO_TUNNEL_NAME" \
       --arg tls_domain "$TLS_DOMAIN" \
       --arg ws_host "$WS_HOST" \
       --arg reality_sni "$REALITY_SNI" \
@@ -1232,7 +1282,7 @@ save_state() {
       --arg enable_vless_reality "$ENABLE_VLESS_REALITY" \
       --arg enable_naive "$ENABLE_NAIVE" \
       --arg enable_anytls_reality "$ENABLE_ANYTLS_REALITY" \
-      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,ws_mode:$ws_mode,argo_host:$argo_host,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"; then
+      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,ws_mode:$ws_mode,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"; then
         rm -f "$tmp"
         warn '无法生成 manager.json；原有管理状态未更改。'
         return 1
@@ -1262,6 +1312,7 @@ load_state() {
     ENABLE_ANYTLS_REALITY=$(jq -r 'if has("enabled_anytls_reality") then (if .enabled_anytls_reality then "1" else "0" end) else "1" end' "$STATE_FILE")
     WS_MODE=$(jq -r '.ws_mode // "direct"' "$STATE_FILE")
     ARGO_HOST=$(jq -r '.argo_host // ""' "$STATE_FILE")
+    ARGO_TUNNEL_NAME=$(jq -r '.argo_tunnel_name // ""' "$STATE_FILE")
     if [ -z "$WS_SERVER" ]; then
         if [ -n "$PREFERRED_IP" ]; then WS_SERVER=$PREFERRED_IP
         elif [ -n "$PREFERRED_IPV6" ]; then WS_SERVER=$PREFERRED_IPV6
@@ -1599,15 +1650,18 @@ install_wizard() {
     selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY))
     [ "$selected_count" -gt 0 ] || err '至少选择一种协议。'
 
-    WS_MODE=direct; ARGO_HOST=""; ARGO_TOKEN=""
+    WS_MODE=direct; ARGO_HOST=""; ARGO_TUNNEL_NAME=""; ARGO_TOKEN=""
     if [ "$ENABLE_WS_TLS" = 1 ]; then
         ask_value 'VLESS + WS 接入方式：1=直连 TLS，2=Cloudflare Tunnel（Argo）' '2'
         case "$REPLY" in 1) WS_MODE=direct ;; 2) WS_MODE=argo ;; *) err '请选择 1 或 2。' ;; esac
         if [ "$WS_MODE" = argo ]; then
-            ask_value 'Cloudflare Tunnel 公网主机名（例如 ws.example.com）' ''
+            ask_value 'Cloudflare 固定 Tunnel 公网主机名（例如 ws.example.com）' ''
             ARGO_HOST=$(trim_value "$REPLY")
+            ask_value 'Tunnel 备注名（可选，仅在本机管理菜单显示）' ''
+            ARGO_TUNNEL_NAME=$(trim_value "$REPLY")
             ask_secret 'Cloudflare Tunnel Token（Zero Trust → Networks → Tunnels → Add a replica）'
             ARGO_TOKEN=$(trim_value "$REPLY")
+            valid_argo_token "$ARGO_TOKEN" || err 'Cloudflare Tunnel Token 格式无效；请粘贴 Add a replica 命令中的完整 eyJ... Token。'
             ask_value '客户端连接地址/优选 IP（可留空，默认 Argo 主机名）' "$ARGO_HOST"
             WS_SERVER=$(trim_value "$REPLY")
         fi
@@ -1743,7 +1797,10 @@ install_from_config() {
     [ "$ENABLE_ANYTLS_REALITY" = 1 ] && NEED_ORIGIN=1
     if [ "$ENABLE_WS_TLS" = 1 ]; then
         case "$WS_MODE" in
-            argo) [ -n "$ARGO_TOKEN" ] || err '选择 Argo Tunnel 时必须填写 Cloudflare Tunnel Token。' ;;
+            argo)
+                valid_domain "$ARGO_HOST" || err 'Cloudflare 固定 Tunnel 的 Public Hostname 格式无效。'
+                valid_argo_token "$ARGO_TOKEN" || err 'Cloudflare Tunnel Token 格式无效；请粘贴完整的 eyJ... Token。'
+                ;;
             direct) NEED_CERT=1 ;;
             *) err "不支持的 WS 接入方式：$WS_MODE" ;;
         esac
@@ -1818,9 +1875,7 @@ install_from_config() {
     fi
 
     if [ "$ENABLE_WS_TLS" = 1 ] && [ "$WS_MODE" = argo ]; then
-        printf '%s' "$ARGO_TOKEN" > "$ARGO_TOKEN_FILE"
-        chmod 0640 "$ARGO_TOKEN_FILE"
-        chown root:sing-box "$ARGO_TOKEN_FILE"
+        write_argo_token_file "$ARGO_TOKEN" || err '无法安全写入 Cloudflare Tunnel Token 文件；请检查 /etc/sing-box 权限。'
     fi
 
     ANYTLS_PASSWORD=""; WS_UUID=""; REALITY_UUID=""; REALITY_PRIVATE=""; REALITY_PUBLIC=""; REALITY_SID=""
@@ -1940,10 +1995,10 @@ install_web_config() {
     fi
 
     jq -e '
-      def text: type == "string" and (test("[\\u0000\\r\\n]") | not);
+      def text: type == "string" and (explode | all(. != 0 and . != 10 and . != 13));
       type == "object" and (.schema == 5) and
       (.protocols | type == "object") and
-      ([.origin_ipv4,.origin_ipv6,.ws_server,.ws_mode,.argo_host,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
+      ([.origin_ipv4,.origin_ipv6,.ws_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
         | all(. == null or text)) and
       (.ports | type == "object")
     ' "$web_cfg" >/dev/null 2>&1 || err '网页配置 JSON 格式不正确或版本不匹配，请刷新最新版 HTML 后重新生成命令。'
@@ -1955,6 +2010,7 @@ install_web_config() {
     ENABLE_ANYTLS_REALITY=$(jq -r 'if .protocols.anytls_reality == true then "1" else "0" end' "$web_cfg")
     WS_MODE=$(web_string ws_mode); WS_MODE=${WS_MODE:-direct}
     ARGO_HOST=$(web_string argo_host)
+    ARGO_TUNNEL_NAME=$(web_string argo_tunnel_name)
     ARGO_TOKEN=$(web_string argo_token)
     ORIGIN_ADDR=$(web_string origin_ipv4); ORIGIN_IPV6=$(web_string origin_ipv6)
     WS_SERVER=$(web_string ws_server)
@@ -2223,6 +2279,136 @@ change_preferred_ip() {
     WS_SERVER=$new_ws_server
     save_state
     show_nodes
+}
+
+change_argo_binding() {
+    [ "$ENABLE_WS_TLS" = 1 ] && [ "$WS_MODE" = argo ] || {
+        warn '当前未启用 VLESS + WS 固定 Argo Tunnel。'
+        return 0
+    }
+    [ -s "$ARGO_TOKEN_FILE" ] || {
+        warn '当前 Tunnel Token 文件缺失；请先重新安装 Argo 模式，或使用安装向导配置 Token。'
+        return 0
+    }
+
+    msg '修改固定 Tunnel 的 Public Hostname、备注名或轮换 Token。'
+    msg 'Token 留空表示保留当前 Token；不会显示或回显现有 Token。'
+    old_argo_host=$ARGO_HOST
+    old_argo_name=$ARGO_TUNNEL_NAME
+    old_ws_server=$WS_SERVER
+    old_ws_host=$WS_HOST
+    backup_dir=$(mktemp -d) || { warn '无法创建临时备份目录。'; return 0; }
+    if ! cp -p "$ARGO_TOKEN_FILE" "$backup_dir/cloudflared.token"; then
+        rm -rf "$backup_dir"
+        warn '无法备份当前 Tunnel Token；没有修改任何配置。'
+        return 0
+    fi
+
+    ask_value '新的固定 Tunnel Public Hostname' "$ARGO_HOST"
+    new_argo_host=$(trim_value "$REPLY")
+    valid_cert_domain "$new_argo_host" || {
+        rm -rf "$backup_dir"
+        warn 'Public Hostname 格式无效；请输入你在 Cloudflare 管理的域名，例如 ws.example.com。'
+        return 0
+    }
+    ask_value 'Tunnel 备注名（仅本机显示，可留空）' "$ARGO_TUNNEL_NAME"
+    new_argo_name=$(trim_value "$REPLY")
+    ask_secret '新的 Cloudflare Tunnel Token（直接回车保留当前 Token）'
+    new_argo_token=$(trim_value "$REPLY")
+    if [ -n "$new_argo_token" ] && ! valid_argo_token "$new_argo_token"; then
+        rm -rf "$backup_dir"
+        warn '新 Tunnel Token 格式无效；没有修改任何配置。'
+        return 0
+    fi
+
+    ARGO_HOST=$new_argo_host
+    ARGO_TUNNEL_NAME=$new_argo_name
+    WS_HOST=$new_argo_host
+    if [ -z "$old_ws_server" ] || [ "$old_ws_server" = "$old_argo_host" ]; then
+        WS_SERVER=$new_argo_host
+        PREFERRED_IP=""
+        PREFERRED_IPV6=""
+    fi
+
+    if [ -n "$new_argo_token" ]; then
+        if ! write_argo_token_file "$new_argo_token"; then
+            ARGO_HOST=$old_argo_host
+            ARGO_TUNNEL_NAME=$old_argo_name
+            WS_SERVER=$old_ws_server
+            WS_HOST=$old_ws_host
+            rm -rf "$backup_dir"
+            warn '新 Token 无法安全写入；原配置保持不变。'
+            return 0
+        fi
+        if ! start_cloudflared_service; then
+            cp -p "$backup_dir/cloudflared.token" "$ARGO_TOKEN_FILE"
+            chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+            chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+            start_cloudflared_service >/dev/null 2>&1 || true
+            ARGO_HOST=$old_argo_host
+            ARGO_TUNNEL_NAME=$old_argo_name
+            WS_SERVER=$old_ws_server
+            WS_HOST=$old_ws_host
+            rm -rf "$backup_dir"
+            warn 'Tunnel 服务重启失败，已恢复本机旧 Token 文件和旧节点参数。若你已在 Cloudflare 控制台执行 Rotate Token，旧 Token 可能已失效，请重新输入新 Token。'
+            return 0
+        fi
+        sleep 3
+        if [ "$SERVICE_KIND" = systemd ]; then
+            if ! systemctl is-active --quiet "$CLOUDFLARED_SERVICE"; then
+                cp -p "$backup_dir/cloudflared.token" "$ARGO_TOKEN_FILE"
+                chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                start_cloudflared_service >/dev/null 2>&1 || true
+                ARGO_HOST=$old_argo_host
+                ARGO_TUNNEL_NAME=$old_argo_name
+                WS_SERVER=$old_ws_server
+                WS_HOST=$old_ws_host
+                rm -rf "$backup_dir"
+                warn '新 Token 启动后服务未处于 active，已恢复本机旧 Token 文件和旧节点参数。若 Cloudflare 已轮换 Token，旧 Token 可能已失效。'
+                return 0
+            fi
+        elif [ "$SERVICE_KIND" = openrc ]; then
+            if ! rc-service "$CLOUDFLARED_SERVICE" status >/dev/null 2>&1; then
+                cp -p "$backup_dir/cloudflared.token" "$ARGO_TOKEN_FILE"
+                chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                start_cloudflared_service >/dev/null 2>&1 || true
+                ARGO_HOST=$old_argo_host
+                ARGO_TUNNEL_NAME=$old_argo_name
+                WS_SERVER=$old_ws_server
+                WS_HOST=$old_ws_host
+                rm -rf "$backup_dir"
+                warn '新 Token 启动后 OpenRC 服务未运行，已恢复本机旧 Token 文件和旧节点参数。若 Cloudflare 已轮换 Token，旧 Token 可能已失效。'
+                return 0
+            fi
+        fi
+    fi
+
+    if ! save_state; then
+        cp -p "$backup_dir/cloudflared.token" "$ARGO_TOKEN_FILE"
+        chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+        chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+        start_cloudflared_service >/dev/null 2>&1 || true
+        ARGO_HOST=$old_argo_host
+        ARGO_TUNNEL_NAME=$old_argo_name
+        WS_SERVER=$old_ws_server
+        WS_HOST=$old_ws_host
+        rm -rf "$backup_dir"
+        warn '保存管理状态失败；已尽力恢复旧 Token 和节点参数。'
+        return 0
+    fi
+
+    rm -rf "$backup_dir"
+    show_nodes
+    if [ "$old_argo_host" != "$ARGO_HOST" ]; then
+        msg "Public Hostname 已更新为 $ARGO_HOST。请在 Cloudflare Zero Trust 的该 Tunnel 中同步添加/修改 Public Hostname，并将 Service URL 指向 http://127.0.0.1:$WS_PORT。"
+    fi
+    if [ -n "$new_argo_token" ]; then
+        msg '新 Tunnel Token 已写入受限权限文件并重启 cloudflared。请在 Cloudflare 控制台确认 Connector 状态为 Healthy。'
+    else
+        msg 'Tunnel 节点参数已保存；现有 Token 保持不变。'
+    fi
 }
 
 change_ws_host() {
@@ -2534,6 +2720,9 @@ menu() {
         printf '\nWS 单一连接地址：%s' "${WS_SERVER:-未设置}"
         printf '\nTLS 证书域名 / TLS SNI（证书协议）：%s' "${TLS_DOMAIN:-不需要（Argo WS 使用 $ARGO_HOST）}"
         printf '\nWS HTTP Host：%s | WS 接入：%s' "${WS_HOST:-未设置}" "$WS_MODE"
+        if [ "$WS_MODE" = argo ] && [ "$ENABLE_WS_TLS" = 1 ]; then
+            printf '\n固定 Tunnel：%s | Public Hostname：%s' "${ARGO_TUNNEL_NAME:-未命名}" "${ARGO_HOST:-未设置}"
+        fi
         printf '\nReality SNI（VLESS Reality + AnyTLS Reality；默认 www.bing.com）：%s' "$REALITY_SNI" 
         printf '\n节点辨识符：%s' "${NODE_LABEL:-未设置}"
         printf '\n端口：AnyTLS %s | WS TLS %s | VLESS Reality %s | NaiveProxy %s/TCP | AnyTLS Reality %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
@@ -2554,6 +2743,7 @@ menu() {
         printf '14. 诊断 NaiveProxy（本机监听 / TLS 证书 / HTTP2）\n'
         printf '15. 批量修改已安装协议端口（留空随机）\n'
         printf '16. 查看 Cloudflare Tunnel 状态（Argo 模式）\n'
+        printf '17. 修改固定 Argo Tunnel 域名 / 备注 / Token\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -2574,6 +2764,7 @@ menu() {
             13) change_node_label ;;
             14) [ "$ENABLE_NAIVE" = 1 ] && diagnose_naive || warn '当前未安装 NaiveProxy。' ;;
             16) [ "$ENABLE_WS_TLS" = 1 ] && [ "$WS_MODE" = argo ] && cloudflared_status || warn '当前未启用 Argo Tunnel。' ;;
+            17) change_argo_binding ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac
