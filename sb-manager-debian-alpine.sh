@@ -5,6 +5,7 @@
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=5; selective protocol installation and Cloudflare Tunnel (Argo) WS mode
+# Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -1081,6 +1082,7 @@ check_cert_pair() {
     openssl x509 -in "$cert" -noout >/dev/null 2>&1 || { warn '证书 PEM 格式无效。'; return 1; }
     openssl pkey -in "$key" -noout >/dev/null 2>&1 || { warn '私钥 PEM 格式无效或带有不受支持的口令。'; return 1; }
     openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1 || { warn "证书不包含域名 $domain。"; return 1; }
+    openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || { warn "证书已过期：$domain。"; return 1; }
     cert_pub=$(openssl x509 -in "$cert" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum | awk '{print $1}') || return 1
     key_pub=$(openssl pkey -in "$key" -pubout -outform DER | sha256sum | awk '{print $1}') || return 1
     [ "$cert_pub" = "$key_pub" ] || { warn '证书和私钥不匹配。'; return 1; }
@@ -1635,6 +1637,484 @@ overlay_install() {
     fi
     msg '覆盖升级完成：保留原有已选协议、UUID、密码、密钥、端口和节点路径。'
     show_nodes
+}
+
+add_pick_port() {
+    add_requested=$1
+    add_protocol=$2
+    add_port_mode=$3
+    add_reserved=$4
+
+    set -- $add_reserved
+    if [ -n "$add_requested" ]; then
+        add_requested=$(normalize_optional_port "$add_requested" "$add_protocol") ||
+            err "$add_protocol 端口必须是 1024–65535 的整数。"
+        if ! port_is_available "$add_requested" "$@"; then
+            err "$add_protocol 端口 $add_requested 已被现有节点或其他进程占用；为避免修改旧节点，请选择其他端口。"
+        fi
+        printf '%s\n' "$add_requested"
+        return 0
+    fi
+
+    if [ "$add_port_mode" = ws-direct ]; then
+        pick_random_ws_port "$@" || err '没有可用的 VLESS + WS 直连端口（2053、2083、2087、2096、8443）。'
+    else
+        pick_random_range_port 10000 65535 "$@" || err "无法为 $add_protocol 分配新的空闲 TCP 端口。"
+    fi
+}
+
+write_cf_credentials_for_add() {
+    add_cf_value=$1
+    add_zone_value=$2
+
+    if [ -n "$add_cf_value" ]; then
+        add_cf_tmp="${CF_TOKEN_FILE}.tmp.$$"
+        (umask 077; printf '%s' "$add_cf_value" > "$add_cf_tmp") || {
+            rm -f "$add_cf_tmp"
+            return 1
+        }
+        chown root:root "$add_cf_tmp" && chmod 0600 "$add_cf_tmp" &&
+            mv -f "$add_cf_tmp" "$CF_TOKEN_FILE" || {
+                rm -f "$add_cf_tmp"
+                return 1
+            }
+    fi
+
+    if [ -n "$add_zone_value" ]; then
+        add_zone_tmp="${CF_ZONE_ID_FILE}.tmp.$$"
+        (umask 077; printf '%s' "$add_zone_value" > "$add_zone_tmp") || {
+            rm -f "$add_zone_tmp"
+            return 1
+        }
+        chown root:root "$add_zone_tmp" && chmod 0600 "$add_zone_tmp" &&
+            mv -f "$add_zone_tmp" "$CF_ZONE_ID_FILE" || {
+                rm -f "$add_zone_tmp"
+                return 1
+            }
+    else
+        rm -f "$CF_ZONE_ID_FILE"
+    fi
+}
+
+prepare_add_certificate() {
+    CERT_FILE=${CERT_FILE:-$CERT_DIR/fullchain.pem}
+    KEY_FILE=${KEY_FILE:-$CERT_DIR/privkey.pem}
+    add_cert_valid=0
+
+    if [ -n "$TLS_DOMAIN" ] &&
+       check_cert_pair "$CERT_FILE" "$KEY_FILE" "$TLS_DOMAIN" >/dev/null 2>&1; then
+        add_cert_valid=1
+    fi
+
+    if [ "$add_cert_valid" -eq 1 ] && { [ "$CERT_MODE" = none ] || [ -z "$CERT_MODE" ]; }; then
+        CERT_MODE=manual
+    fi
+
+    if [ "$add_cert_valid" -eq 0 ]; then
+        if [ "$add_old_need_cert" -eq 0 ]; then
+            msg '当前安装没有可复用的有效源站 TLS 证书，需要为新节点配置证书。'
+            ask_value '证书方式：1=Cloudflare DNS-01，2=HTTP-01，3=手动导入' '1'
+            case "$REPLY" in
+                1) CERT_MODE=cloudflare ;;
+                2) CERT_MODE=standalone ;;
+                3) CERT_MODE=manual ;;
+                *) err '证书方式只能选择 1、2 或 3。' ;;
+            esac
+            if [ "$CERT_MODE" = cloudflare ]; then
+                ask_value 'Cloudflare DNS 区域根域名（例如 mouwei.dpdns.org）' "$CF_ZONE_NAME"
+                CF_ZONE_NAME=$(trim_value "$REPLY")
+            else
+                CF_ZONE_NAME=""
+            fi
+            ask_value 'TLS 证书域名（例如 hinet.mouwei.dpdns.org）' "$TLS_DOMAIN"
+            TLS_DOMAIN=$(trim_value "$REPLY")
+        else
+            valid_cert_domain "$TLS_DOMAIN" ||
+                err '现有 TLS 节点的证书域名无效；为保护现有节点，不允许在增量添加时擅自更换域名。'
+            if [ "$CERT_MODE" = none ] || [ -z "$CERT_MODE" ]; then
+                msg '现有 TLS 节点没有记录证书签发方式。'
+                ask_value '请选择证书方式：1=Cloudflare DNS-01，2=HTTP-01，3=手动导入' '1'
+                case "$REPLY" in
+                    1) CERT_MODE=cloudflare ;;
+                    2) CERT_MODE=standalone ;;
+                    3) CERT_MODE=manual ;;
+                    *) err '证书方式只能选择 1、2 或 3。' ;;
+                esac
+            fi
+            if [ "$CERT_MODE" = cloudflare ] && [ -z "$CF_ZONE_NAME" ]; then
+                ask_value 'Cloudflare DNS 区域根域名' ''
+                CF_ZONE_NAME=$(trim_value "$REPLY")
+            fi
+        fi
+    fi
+
+    valid_cert_domain "$TLS_DOMAIN" || err 'TLS 证书域名无效；请输入你拥有或获准管理的域名。'
+
+    case "$CERT_MODE" in
+        cloudflare)
+            if [ -z "$CF_ZONE_NAME" ]; then
+                ask_value 'Cloudflare DNS 区域根域名' ''
+                CF_ZONE_NAME=$(trim_value "$REPLY")
+            fi
+            valid_cert_domain "$CF_ZONE_NAME" || err 'Cloudflare 区域根域名格式无效。'
+            domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" ||
+                err "TLS 证书域名 $TLS_DOMAIN 不属于 Cloudflare 区域 $CF_ZONE_NAME。"
+
+            add_cf_existing=""
+            [ ! -s "$CF_TOKEN_FILE" ] || add_cf_existing=$(cat "$CF_TOKEN_FILE")
+            ask_secret 'Cloudflare DNS API Token（直接回车保留现有；不是 Tunnel Token）'
+            add_cf_new=$(trim_value "$REPLY")
+            if [ -z "$add_cf_new" ] && [ -z "$add_cf_existing" ]; then
+                err 'Cloudflare DNS API Token 不能为空。'
+            fi
+
+            add_zone_existing=$(cat "$CF_ZONE_ID_FILE" 2>/dev/null || true)
+            ask_value 'Cloudflare Zone ID（可留空自动识别）' "$add_zone_existing"
+            add_zone_new=$(trim_value "$REPLY")
+            if [ -n "$add_zone_new" ]; then
+                case "$add_zone_new" in *[!A-Fa-f0-9]*) err 'Cloudflare Zone ID 必须是 32 位十六进制字符串。' ;; esac
+                [ "${#add_zone_new}" -eq 32 ] || err 'Cloudflare Zone ID 必须是 32 位十六进制字符串。'
+            fi
+
+            setup_reload_hook
+            install_acme ""
+
+            add_cf_backup_dir=""
+            add_cf_token_had_old=0
+            add_cf_zone_had_old=0
+            if [ -n "$add_cf_new" ] || [ "$add_zone_new" != "$add_zone_existing" ]; then
+                add_cf_backup_dir=$(mktemp -d) || err '无法创建 Cloudflare 凭据备份目录。'
+                if [ -s "$CF_TOKEN_FILE" ]; then
+                    cp -p "$CF_TOKEN_FILE" "$add_cf_backup_dir/cloudflare.token" ||
+                        { rm -rf "$add_cf_backup_dir"; err '无法备份原 DNS API Token；没有修改凭据。'; }
+                    add_cf_token_had_old=1
+                fi
+                if [ -s "$CF_ZONE_ID_FILE" ]; then
+                    cp -p "$CF_ZONE_ID_FILE" "$add_cf_backup_dir/cloudflare-zone-id" ||
+                        { rm -rf "$add_cf_backup_dir"; err '无法备份原 Zone ID；没有修改凭据。'; }
+                    add_cf_zone_had_old=1
+                fi
+                if ! write_cf_credentials_for_add "$add_cf_new" "$add_zone_new"; then
+                    if [ "$add_cf_token_had_old" -eq 1 ]; then cp -p "$add_cf_backup_dir/cloudflare.token" "$CF_TOKEN_FILE"; else rm -f "$CF_TOKEN_FILE"; fi
+                    if [ "$add_cf_zone_had_old" -eq 1 ]; then cp -p "$add_cf_backup_dir/cloudflare-zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+                    rm -rf "$add_cf_backup_dir"
+                    err '无法安全保存 Cloudflare DNS API 凭据；已恢复原凭据。'
+                fi
+            fi
+
+            add_cf_current=$(cat "$CF_TOKEN_FILE" 2>/dev/null || true)
+            add_zone_current=$(cat "$CF_ZONE_ID_FILE" 2>/dev/null || true)
+            if [ "$add_cert_valid" -eq 0 ] ||
+               [ -n "$add_cf_new" ] ||
+               [ "$add_zone_new" != "$add_zone_existing" ] ||
+               ! acme_cf_credentials_match "$TLS_DOMAIN" "$add_cf_current" "$add_zone_current"; then
+                add_cert_backup_dir=$(mktemp -d) || err '无法创建证书备份目录。'
+                [ ! -s "$CERT_FILE" ] || cp -p "$CERT_FILE" "$add_cert_backup_dir/fullchain.pem" ||
+                    { rm -rf "$add_cert_backup_dir"; err '无法备份现有证书；停止 DNS-01 更新。'; }
+                [ ! -s "$KEY_FILE" ] || cp -p "$KEY_FILE" "$add_cert_backup_dir/privkey.pem" ||
+                    { rm -rf "$add_cert_backup_dir"; err '无法备份现有私钥；停止 DNS-01 更新。'; }
+                if ! issue_cloudflare_cert "$TLS_DOMAIN"; then
+                    if [ -s "$add_cert_backup_dir/fullchain.pem" ]; then cp -p "$add_cert_backup_dir/fullchain.pem" "$CERT_FILE"; fi
+                    if [ -s "$add_cert_backup_dir/privkey.pem" ]; then cp -p "$add_cert_backup_dir/privkey.pem" "$KEY_FILE"; fi
+                    chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
+                    chmod 0644 "$CERT_FILE" 2>/dev/null || true
+                    chmod 0640 "$KEY_FILE" 2>/dev/null || true
+                    if [ -n "$add_cf_backup_dir" ]; then
+                        if [ "$add_cf_token_had_old" -eq 1 ]; then cp -p "$add_cf_backup_dir/cloudflare.token" "$CF_TOKEN_FILE"; else rm -f "$CF_TOKEN_FILE"; fi
+                        if [ "$add_cf_zone_had_old" -eq 1 ]; then cp -p "$add_cf_backup_dir/cloudflare-zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+                        rm -rf "$add_cf_backup_dir"
+                    fi
+                    rm -rf "$add_cert_backup_dir"
+                    err 'Cloudflare DNS-01 证书处理失败。请检查 DNS API Token 的 Zone:DNS:Edit 权限、Zone ID、DNS 托管状态及 ACME 日志。'
+                fi
+                rm -rf "$add_cert_backup_dir"
+            fi
+            [ -z "$add_cf_backup_dir" ] || rm -rf "$add_cf_backup_dir"
+            ;;
+        standalone)
+            if [ "$add_cert_valid" -eq 0 ]; then
+                setup_reload_hook
+                issue_http_cert "$TLS_DOMAIN" ||
+                    err 'HTTP-01 证书申请失败；请确认域名解析到 VPS 且公网 TCP 80 可访问。'
+            fi
+            ;;
+        manual)
+            if [ "$add_cert_valid" -eq 0 ]; then
+                setup_reload_hook
+                install_manual_cert "$TLS_DOMAIN"
+            fi
+            ;;
+        *)
+            err '当前证书签发方式无效，请重新选择 Cloudflare DNS-01、HTTP-01 或手动导入。'
+            ;;
+    esac
+
+    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$TLS_DOMAIN" ||
+        err '新节点使用的 TLS 证书校验失败；没有继续修改 sing-box 配置。'
+}
+
+add_missing_protocols() {
+    need_root
+    [ -s "$STATE_FILE" ] || err '找不到现有 manager.json；请先完成首次安装。'
+    manager_state_is_valid || err '现有 manager.json 无效；为避免覆盖或丢失节点凭据，停止增量添加。'
+
+    load_state
+    derive_runtime_needs
+
+    add_old_anytls=$ENABLE_ANYTLS
+    add_old_ws=$ENABLE_WS_TLS
+    add_old_reality=$ENABLE_VLESS_REALITY
+    add_old_naive=$ENABLE_NAIVE
+    add_old_anyreality=$ENABLE_ANYTLS_REALITY
+    add_old_need_cert=$NEED_CERT
+    add_old_need_origin=$NEED_ORIGIN
+    add_old_anytls_port=$ANYTLS_PORT
+    add_old_ws_port=$WS_PORT
+    add_old_reality_port=$REALITY_PORT
+    add_old_naive_port=$NAIVE_PORT
+    add_old_anyreality_port=$ANYREALITY_PORT
+
+    add_anytls=0
+    add_ws=0
+    add_reality=0
+    add_naive=0
+    add_anyreality=0
+
+    msg '========== 增量添加 sing-box 节点 =========='
+    msg '只会添加尚未部署的协议；现有节点的密码、UUID、密钥、端口和 WS 路径不会重新生成。'
+    printf '当前状态：AnyTLS=%s，VLESS WS=%s，VLESS Reality=%s，NaiveProxy=%s，AnyTLS Reality=%s\n' \
+        "$([ "$ENABLE_ANYTLS" = 1 ] && printf 已安装 || printf 未安装)" \
+        "$([ "$ENABLE_WS_TLS" = 1 ] && printf 已安装 || printf 未安装)" \
+        "$([ "$ENABLE_VLESS_REALITY" = 1 ] && printf 已安装 || printf 未安装)" \
+        "$([ "$ENABLE_NAIVE" = 1 ] && printf 已安装 || printf 未安装)" \
+        "$([ "$ENABLE_ANYTLS_REALITY" = 1 ] && printf 已安装 || printf 未安装)"
+
+    if [ "$ENABLE_ANYTLS" = 0 ]; then
+        ask_value '添加普通 AnyTLS？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_anytls=1; ENABLE_ANYTLS=1 ;; esac
+    fi
+    if [ "$ENABLE_WS_TLS" = 0 ]; then
+        ask_value '添加 VLESS + WebSocket？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_ws=1; ENABLE_WS_TLS=1 ;; esac
+    fi
+    if [ "$ENABLE_VLESS_REALITY" = 0 ]; then
+        ask_value '添加 VLESS + Reality？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_reality=1; ENABLE_VLESS_REALITY=1 ;; esac
+    fi
+    if [ "$ENABLE_NAIVE" = 0 ]; then
+        ask_value '添加 NaiveProxy？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_naive=1; ENABLE_NAIVE=1 ;; esac
+    fi
+    if [ "$ENABLE_ANYTLS_REALITY" = 0 ]; then
+        ask_value '添加 AnyTLS + Reality？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_anyreality=1; ENABLE_ANYTLS_REALITY=1 ;; esac
+    fi
+
+    add_selected=$((add_anytls + add_ws + add_reality + add_naive + add_anyreality))
+    if [ "$add_selected" -eq 0 ]; then
+        msg '没有选择新增协议，现有配置保持不变。'
+        return 0
+    fi
+
+    if [ "$add_ws" -eq 1 ]; then
+        msg '配置新 VLESS + WS 接入方式。NAT VPS 通常建议使用固定 Cloudflare Tunnel（Argo）。'
+        ask_value 'WS 接入方式：1=直连 TLS，2=Cloudflare 固定 Tunnel（Argo）' '2'
+        case "$REPLY" in
+            1) WS_MODE=direct ;;
+            2) WS_MODE=argo ;;
+            *) err '请选择 1 或 2。' ;;
+        esac
+        if [ "$WS_MODE" = argo ]; then
+            ask_value 'Cloudflare Tunnel Public Hostname（例如 ws.example.com）' "$ARGO_HOST"
+            ARGO_HOST=$(trim_value "$REPLY")
+            ask_value 'Tunnel 备注名（可选）' "$ARGO_TUNNEL_NAME"
+            ARGO_TUNNEL_NAME=$(trim_value "$REPLY")
+            ask_secret 'Cloudflare Tunnel Token（粘贴完整 eyJ... Token；不是 DNS API Token）'
+            ARGO_TOKEN=$(trim_value "$REPLY")
+            valid_argo_token "$ARGO_TOKEN" || err 'Cloudflare Tunnel Token 格式无效。'
+            ask_value '客户端连接地址 / 优选 IP（留空使用 Public Hostname）' "$ARGO_HOST"
+            WS_SERVER=$(trim_value "$REPLY")
+        else
+            ARGO_HOST=""
+            ARGO_TUNNEL_NAME=""
+            ARGO_TOKEN=""
+            ask_value '客户端连接地址 / 优选 IP（留空使用证书域名）' "$WS_SERVER"
+            WS_SERVER=$(trim_value "$REPLY")
+        fi
+    fi
+
+    NEED_CERT=0
+    NEED_ORIGIN=0
+    [ "$ENABLE_ANYTLS" = 1 ] && NEED_CERT=1 && NEED_ORIGIN=1
+    [ "$ENABLE_NAIVE" = 1 ] && NEED_CERT=1 && NEED_ORIGIN=1
+    [ "$ENABLE_VLESS_REALITY" = 1 ] && NEED_ORIGIN=1
+    [ "$ENABLE_ANYTLS_REALITY" = 1 ] && NEED_ORIGIN=1
+    if [ "$ENABLE_WS_TLS" = 1 ] && [ "$WS_MODE" = direct ]; then NEED_CERT=1; fi
+
+
+    if [ "$add_reality" -eq 1 ] || [ "$add_anyreality" -eq 1 ]; then
+        if [ "$add_old_reality" = 0 ] && [ "$add_old_anyreality" = 0 ]; then
+            ask_value 'Reality SNI / 握手目标域名' "${REALITY_SNI:-www.bing.com}"
+            REALITY_SNI=$(trim_value "$REPLY")
+        fi
+        valid_domain "$REALITY_SNI" || err 'Reality SNI 必须是有效域名。'
+    fi
+
+    if [ "$NEED_ORIGIN" = 1 ] && [ "$add_old_need_origin" -eq 0 ]; then
+        msg '新节点需要源站公网地址。留空时脚本会尝试通过 IPv4 / IPv6 外部检测服务自动识别。'
+        ask_value '源站 IPv4 / 域名（留空自动检测）' "$ORIGIN_ADDR"
+        ORIGIN_ADDR=$(trim_value "$REPLY")
+        ask_value '源站 IPv6（留空自动检测）' "$ORIGIN_IPV6"
+        ORIGIN_IPV6=$(trim_value "$REPLY")
+    fi
+
+    install_dependencies_and_core
+    ensure_service_account
+    enable_bbr
+    SB_BIN=$(resolve_sing_box_binary 2>/dev/null || printf '%s' "$SB_BIN")
+    [ -x "$SB_BIN" ] || err '找不到可执行的 sing-box。'
+
+    if [ "$NEED_CERT" = 1 ]; then
+        prepare_add_certificate
+        resolve_install_domains
+        setup_reload_hook
+    else
+        resolve_install_domains
+    fi
+
+    if [ "$add_ws" -eq 1 ] && [ "$WS_MODE" = direct ]; then
+        ask_value 'VLESS + WS HTTP Host（默认使用 TLS 证书域名）' "$TLS_DOMAIN"
+        WS_HOST=$(trim_value "$REPLY")
+        valid_domain "$WS_HOST" || err 'VLESS + WS HTTP Host 格式无效。'
+        [ -n "$WS_SERVER" ] || WS_SERVER=$TLS_DOMAIN
+    fi
+
+    resolve_install_addresses
+
+    add_reserved_ports=""
+    [ "$add_old_anytls" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_anytls_port"
+    [ "$add_old_ws" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_ws_port"
+    [ "$add_old_reality" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_reality_port"
+    [ "$add_old_naive" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_naive_port"
+    [ "$add_old_anyreality" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_anyreality_port"
+
+    if [ "$add_anytls" -eq 1 ]; then
+        ask_value '新增 AnyTLS TCP 端口（留空自动分配）' ''
+        ANYTLS_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'AnyTLS' tcp "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $ANYTLS_PORT"
+    fi
+    if [ "$add_ws" -eq 1 ]; then
+        if [ "$WS_MODE" = argo ]; then
+            ask_value '新增 Argo 本机 WS 端口（留空自动分配）' ''
+            WS_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS + WS Argo' argo "$add_reserved_ports")
+        else
+            ask_value '新增 VLESS + WS 直连 TCP 端口（留空自动分配）' ''
+            WS_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS + WS' ws-direct "$add_reserved_ports")
+        fi
+        add_reserved_ports="$add_reserved_ports $WS_PORT"
+    fi
+    if [ "$add_reality" -eq 1 ]; then
+        ask_value '新增 VLESS Reality TCP 端口（留空自动分配）' ''
+        REALITY_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS Reality' tcp "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $REALITY_PORT"
+    fi
+    if [ "$add_naive" -eq 1 ]; then
+        ask_value '新增 NaiveProxy TCP 端口（留空自动分配）' ''
+        NAIVE_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'NaiveProxy' tcp "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $NAIVE_PORT"
+    fi
+    if [ "$add_anyreality" -eq 1 ]; then
+        ask_value '新增 AnyTLS + Reality TCP 端口（留空自动分配）' ''
+        ANYREALITY_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'AnyTLS + Reality' tcp "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $ANYREALITY_PORT"
+    fi
+
+    if [ "$add_anytls" -eq 1 ]; then
+        ANYTLS_PASSWORD=$(openssl rand -hex 24)
+    fi
+    if [ "$add_ws" -eq 1 ]; then
+        WS_UUID=$("$SB_BIN" generate uuid)
+        WS_PATH="/ws-$(openssl rand -hex 8)"
+    fi
+    if [ "$add_reality" -eq 1 ]; then
+        REALITY_UUID=$("$SB_BIN" generate uuid)
+        add_reality_keypair=$("$SB_BIN" generate reality-keypair)
+        REALITY_PRIVATE=$(printf '%s\n' "$add_reality_keypair" | awk '/PrivateKey/ {print $2}')
+        REALITY_PUBLIC=$(printf '%s\n' "$add_reality_keypair" | awk '/PublicKey/ {print $2}')
+        REALITY_SID=$("$SB_BIN" generate rand --hex 8)
+        [ -n "$REALITY_PRIVATE" ] && [ -n "$REALITY_PUBLIC" ] && [ -n "$REALITY_SID" ] ||
+            err 'VLESS Reality 密钥生成失败。'
+    fi
+    if [ "$add_naive" -eq 1 ]; then
+        NAIVE_USERNAME="naive-$(openssl rand -hex 6)"
+        NAIVE_PASSWORD=$(openssl rand -hex 24)
+    fi
+    if [ "$add_anyreality" -eq 1 ]; then
+        ANYREALITY_PASSWORD=$(openssl rand -hex 24)
+        add_anyreality_keypair=$("$SB_BIN" generate reality-keypair)
+        ANYREALITY_PRIVATE=$(printf '%s\n' "$add_anyreality_keypair" | awk '/PrivateKey/ {print $2}')
+        ANYREALITY_PUBLIC=$(printf '%s\n' "$add_anyreality_keypair" | awk '/PublicKey/ {print $2}')
+        ANYREALITY_SID=$("$SB_BIN" generate rand --hex 8)
+        [ -n "$ANYREALITY_PRIVATE" ] && [ -n "$ANYREALITY_PUBLIC" ] && [ -n "$ANYREALITY_SID" ] ||
+            err 'AnyTLS + Reality 密钥生成失败。'
+    fi
+
+    add_argo_token_backup=""
+    add_argo_token_had_old=0
+    if [ "$add_ws" -eq 1 ] && [ "$WS_MODE" = argo ]; then
+        install_cloudflared
+        if [ -s "$ARGO_TOKEN_FILE" ]; then
+            add_argo_token_backup="${ARGO_TOKEN_FILE}.add-backup.$$"
+            cp -p "$ARGO_TOKEN_FILE" "$add_argo_token_backup" ||
+                err '无法备份现有 Tunnel Token；为避免丢失凭据，停止添加。'
+            add_argo_token_had_old=1
+        fi
+        write_argo_token_file "$ARGO_TOKEN" || err '无法安全保存 Cloudflare Tunnel Token。'
+    fi
+
+    create_service
+    if ! build_config; then
+        if [ "$add_ws" -eq 1 ] && [ "$WS_MODE" = argo ]; then
+            if [ "$add_argo_token_had_old" -eq 1 ]; then
+                cp -p "$add_argo_token_backup" "$ARGO_TOKEN_FILE"
+                chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+            else
+                rm -f "$ARGO_TOKEN_FILE"
+            fi
+            rm -f "$add_argo_token_backup"
+        fi
+        load_state
+        derive_runtime_needs
+        warn '新增协议未能通过配置检查或启动检查；原有 manager.json 和 sing-box 配置已回滚。'
+        return 0
+    fi
+
+    if [ "$add_ws" -eq 1 ] && [ "$WS_MODE" = argo ]; then
+        rm -f "$add_argo_token_backup"
+        create_cloudflared_service
+        if start_cloudflared_service; then
+            msg '新增的 Cloudflare Tunnel 服务已启动。'
+        else
+            warn 'VLESS + WS 配置已写入，但 cloudflared 未能启动；请检查 Tunnel Token、出站网络及日志。'
+        fi
+        msg "请在 Cloudflare Zero Trust 添加/确认 Public Hostname：$ARGO_HOST → http://127.0.0.1:$WS_PORT"
+    fi
+
+    msg '增量添加完成。旧节点参数保持不变；以下为当前全部已安装节点：'
+    show_nodes
+    msg '新增协议需要在防火墙 / NAT 服务商开放或映射的 TCP 端口：'
+    [ "$add_anytls" -eq 0 ] || printf '  AnyTLS：%s/tcp\n' "$ANYTLS_PORT"
+    [ "$add_reality" -eq 0 ] || printf '  VLESS Reality：%s/tcp\n' "$REALITY_PORT"
+    [ "$add_naive" -eq 0 ] || printf '  NaiveProxy：%s/tcp\n' "$NAIVE_PORT"
+    [ "$add_anyreality" -eq 0 ] || printf '  AnyTLS + Reality：%s/tcp\n' "$ANYREALITY_PORT"
+    if [ "$add_ws" -eq 1 ]; then
+        if [ "$WS_MODE" = argo ]; then
+            msg 'VLESS + WS Argo 客户端公网端口为 443；本机 WS 端口不需要 NAT 入站映射。'
+        else
+            printf '  VLESS + WS 直连：%s/tcp\n' "$WS_PORT"
+        fi
+    fi
 }
 
 install_wizard() {
@@ -2744,6 +3224,7 @@ menu() {
         printf '15. 批量修改已安装协议端口（留空随机）\n'
         printf '16. 查看 Cloudflare Tunnel 状态（Argo 模式）\n'
         printf '17. 修改固定 Argo Tunnel 域名 / 备注 / Token\n'
+        printf '18. 添加尚未部署的协议节点（增量添加，不影响现有节点）\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -2765,6 +3246,7 @@ menu() {
             14) [ "$ENABLE_NAIVE" = 1 ] && diagnose_naive || warn '当前未安装 NaiveProxy。' ;;
             16) [ "$ENABLE_WS_TLS" = 1 ] && [ "$WS_MODE" = argo ] && cloudflared_status || warn '当前未启用 Argo Tunnel。' ;;
             17) change_argo_binding ;;
+            18) add_missing_protocols ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac
@@ -2830,10 +3312,14 @@ main() {
         SB_BIN="$(resolve_sing_box_binary 2>/dev/null || printf /usr/bin/sing-box)"
         case "${1:-}" in
             install|--install) overlay_install ;;
+            add|add-node|add-nodes) add_missing_protocols ;;
             *) menu ;;
         esac
     else
-        install_wizard
+        case "${1:-}" in
+            add|add-node|add-nodes) err '增量添加需要已有 sing-box 安装；请先完成首次安装。' ;;
+            *) install_wizard ;;
+        esac
     fi
 }
 

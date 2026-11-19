@@ -57,6 +57,7 @@ jiedian/
 - 支持 IPv4 / IPv6 源站地址自动检测；Argo-only 安装不需要填写源站公网 IP。
 - 端口冲突时自动更换可用端口；配置检查或服务重启失败时尝试回滚。
 - 管理菜单支持单个协议修改端口、查看节点、日志、固定 Tunnel 状态、Tunnel Token 轮换、BBR 状态和卸载。
+- **增量添加节点**：已安装后可通过菜单 `18`（或 `sb-manager add`）安装尚未部署的协议；自动跳过已有协议，只为新增协议生成凭据和端口，保留旧节点 UUID、密码、Reality 密钥、端口、WS 路径和 Tunnel 配置。
 
 ## 一、不通过 HTML 直接安装
 
@@ -110,7 +111,7 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
 
 网页命令会携带 Base64 编码的 JSON 配置。Base64 不是加密；命令中可能包含 Cloudflare DNS API Token 或 Tunnel Token。不要公开分享命令、截图或提交到 GitHub。
 
-如果 VPS 已经存在本脚本的有效安装，网页安装入口会执行覆盖升级并保留原有节点凭据和配置，不会使用网页新参数覆盖现有节点。已安装节点需要更换固定 Tunnel Token 时，请使用管理菜单 `17`，不要依赖网页覆盖升级。
+如果 VPS 已经存在本脚本的有效安装，网页安装入口会执行覆盖升级并保留原有节点凭据和配置，不会使用网页新参数覆盖现有节点。已安装节点需要更换固定 Tunnel Token 时，请使用管理菜单 `17`；需要增加首次未部署的协议时，请使用菜单 `18` 或 `/usr/local/sbin/sb-manager add`，不要依赖网页覆盖升级。
 
 ## 三、NAT VPS 使用 Cloudflare Tunnel（Argo）为 VLESS + WS 接入
 
@@ -229,7 +230,32 @@ Argo 模式的客户端公网端口固定为 `443`；VPS 本机的 WS 监听端�
 
 Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，不会自动把 AnyTLS、VLESS Reality、NaiveProxy 或 AnyTLS + Reality 变成 Tunnel 流量。若同时选择这些协议，仍需要 NAT 服务商为相应协议提供可用的公网 TCP 端口映射，并确保公网端口与脚本生成的节点端口匹配。本脚本不负责把其他协议映射成 Cloudflare Tunnel TCP 服务。
 
-## 四、端口分配与后期修改
+## 四、通过 sb-manager 增量添加此前未部署的节点
+
+如果首次安装时只安装了 VLESS + WS / Argo，之后想增加 AnyTLS、VLESS Reality、NaiveProxy 或 AnyTLS + Reality，不需要卸载或重新安装。
+
+1. SSH 登录 VPS，执行：
+   ```bash
+   /usr/local/sbin/sb-manager
+   ```
+2. 选择菜单 `18. 添加尚未部署的协议节点`。
+3. 脚本会显示当前五种协议的安装状态，只询问尚未安装的协议；已经部署的协议不会再次选择，也不会重新生成密码、UUID、Reality 密钥、端口或 WS 路径。
+4. 如果新增协议需要 TLS 证书，优先检查并复用当前证书。没有可用证书时，可选择 Cloudflare DNS-01、HTTP-01 或手动导入。Cloudflare DNS-01 使用 **DNS API Token**，不是 Argo Tunnel Token；如果已有 Token，可直接回车保留，也可输入新 Token 更新。
+5. 如果新增协议需要源站公网地址，脚本会保留已有地址；首次需要时允许手动填写 IPv4 / IPv6，留空则尝试自动检测。
+6. 新增协议端口留空时自动分配；手动指定时会检查是否与现有节点端口或其他监听进程冲突。增量添加不会为了新节点而改变旧节点端口。
+7. 配置通过 sing-box 检查并成功重启后，脚本会显示全部节点链接和本次新增协议的 TCP 端口。需要公网入站的节点还要在 VPS 防火墙、安全组和 NAT 服务商面板中配置相应端口映射。
+
+也可以直接进入增量添加向导：
+
+```bash
+/usr/local/sbin/sb-manager add
+```
+
+如果菜单 `18` 显示所有协议均已安装，说明当前五种协议都已部署，无需重复添加。若新增 VLESS + WS 选择 Argo，仍需在 Cloudflare Zero Trust 中把 Public Hostname 的 Service URL 指向脚本显示的 `http://127.0.0.1:<本机 WS 端口>`。
+
+网页生成的一键安装命令在检测到已有 `manager.json` 时仍按“保留现有配置的覆盖升级”处理，不会把网页中新勾选的协议直接叠加到现有节点；已有 VPS 要增加节点，请使用上述菜单 `18` 或 `sb-manager add`。
+
+## 五、端口分配与后期修改
 
 - Argo WS：本机监听 `127.0.0.1:<WS_PORT>`，客户端端口固定 `443`，不需要 NAT 公网入站映射。
 - 直连 WS TLS：本机监听端口也是客户端端口；使用 Cloudflare 橙云时需选择 Cloudflare 支持的 HTTPS 代理端口（例如 `443`、`2053`、`2083`、`2087`、`2096`、`8443`）。
@@ -252,10 +278,11 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 - `10` 查看最近日志。
 - `16` 查看 Cloudflare 固定 Tunnel 状态。
 - `17` 修改固定 Tunnel 的 Public Hostname、备注名或轮换 Token。
+- `18` 增量添加尚未部署的协议节点，不重新生成现有节点凭据。
 
 修改 Argo WS 本机端口后，记得更新 Cloudflare Tunnel Public Hostname 的 Service URL。修改其他直连协议端口后，记得更新系统防火墙、云安全组和 NAT 服务商端口映射。
 
-## 五、卸载
+## 六、卸载
 
 在需要卸载的 VPS 上以 root 身份执行：
 
@@ -267,7 +294,7 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 
 卸载不会删除 Cloudflare 控制台中的 Tunnel、Public Hostname、DNS 记录，也不会删除 NAT 服务商端口映射或云厂商安全组。需要时应在 Cloudflare 控制台单独清理 Tunnel 和 DNS 路由。
 
-## 六、发布到 GitHub Pages
+## 七、发布到 GitHub Pages
 
 仓库：<https://github.com/mxw1589/jiedian>
 
@@ -281,7 +308,7 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 
 无需选择 Next.js、Jekyll 或其他 Actions 工作流。GitHub Pages 直接发布仓库根目录中的静态 `index.html`。
 
-## 七、安全说明与限制
+## 八、安全说明与限制
 
 - Cloudflare Tunnel Token 和 DNS API Token 都是敏感凭据。网页生成命令中 Token 使用 Base64 编码，Base64 不是加密。不要公开分享安装命令。
 - 不要将 Token、节点链接、证书私钥或 VPS 配置 JSON 上传到公开仓库。

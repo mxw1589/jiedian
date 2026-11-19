@@ -94,7 +94,7 @@
     <button id="downloadOutput" class="ghost" disabled>下载命令 TXT</button>
     <button id="exportConfig" class="ghost" disabled>导出配置 JSON（不含 Token）</button>
   </div>
-  <div class="notice">安全提醒：安装命令会包含 Base64 编码的 Tunnel Token；Base64 不是加密。不要公开分享命令，不要把 Tunnel Token、DNS API Token、节点链接或证书私钥提交到 GitHub。已安装的 VPS 可在管理菜单使用 17 更换固定 Tunnel Token。</div>
+  <div class="notice">安全提醒：安装命令会包含 Base64 编码的 Tunnel Token；Base64 不是加密。不要公开分享命令，不要把 Tunnel Token、DNS API Token、节点链接或证书私钥提交到 GitHub。已安装的 VPS 可在管理菜单使用 17 更换固定 Tunnel Token。<br>已有 VPS 如需增加首次没有部署的协议，请运行 <code>/usr/local/sbin/sb-manager</code> 并选择 <code>18</code>；也可执行 <code>/usr/local/sbin/sb-manager add</code>。该功能只添加缺失协议，不会覆盖现有节点凭据、端口和路径。网页安装命令对已有安装仍按保留配置的覆盖升级处理。</div>
 </section>
 
 <section class="panel bottom">
