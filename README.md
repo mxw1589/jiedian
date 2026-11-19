@@ -4,7 +4,7 @@
 
 # sing-box 单 VPS 选择性安装与管理工具
 
-适用于 Debian / Ubuntu / Alpine 的 sing-box 安装脚本和静态网页配置面板。无需安装全部协议；只勾选需要的协议，网页会根据选择启用相关字段、禁用无关字段，并在填写完成后自动更新一键安装命令。
+适用于 Debian / Ubuntu / Alpine 的 sing-box 安装脚本和静态网页配置面板。无需安装全部协议；只勾选需要的协议，网页会根据选择显示所需字段、隐藏完全无关字段，并在填写完成后自动更新一键安装命令。
 
 ## 项目文件
 
@@ -12,12 +12,14 @@
 jiedian/
 ├── index.html
 ├── README.md
+├── CHANGELOG.md
 └── sb-manager-debian-alpine.sh
 ```
 
-- `index.html`：静态配置面板，可发布到 GitHub Pages。
-- `README.md`：安装、Argo Tunnel 配置、管理和卸载说明。
-- `sb-manager-debian-alpine.sh`：Debian / Ubuntu / Alpine 安装及管理脚本。
+- `index.html`：紧凑型静态配置面板，可发布到 GitHub Pages。
+- `README.md`：安装、字段说明、Argo Tunnel 配置、管理和卸载说明。
+- `CHANGELOG.md`：本次修复与版本变更记录。
+- `sb-manager-debian-alpine.sh`：Debian / Ubuntu / Alpine 安装及管理脚本；自动识别系统、CPU 架构和服务管理器。
 
 ## 功能简介
 
@@ -37,13 +39,36 @@ jiedian/
 
 ### 网页配置面板
 
-- 协议选择变化时，相关输入项立即启用/禁用。
-- 固定 Argo Tunnel / 直连 WS 模式可切换；Tunnel 备注名只用于本机显示，不改变 Cloudflare 中的 Tunnel 身份。
-- 只有所选协议需要的 TLS 域名、证书、Reality SNI、Tunnel Token 和端口输入项才会启用。
-- **安装命令随表单输入自动生成，不需要点击“生成命令”。**
-- 端口留空由 VPS 自动分配；只为启用的协议分配端口。
-- 支持导出不含 Token 的配置 JSON。
+- 页面改为紧凑双栏布局；桌面端减少纵向滚动，手机端自动单栏排列。
+- 每个字段标注“必填 / 可选 / 默认”；当前协议完全不需要的字段直接隐藏，不只是灰显。
+- 协议选择变化时，相关字段即时显示或隐藏；隐藏字段不会写入配置。
+- **安装命令和卸载命令同时显示、分开生成、分别复制**；安装命令随表单实时更新，卸载命令固定显示。
+- 端口留空由 VPS 自动分配；源站 IP 留空由 VPS 自动检测；Reality SNI 留空使用默认值。
+- 操作系统、CPU 架构和 systemd / OpenRC 不需要手动选择，脚本自动识别。
+- 支持导出不含 Token 的配置 JSON，以及下载分隔显示的安装 / 卸载命令 TXT。
 - 页面是静态前端，表单内容只在当前浏览器处理，不会自动上传到 GitHub Pages。
+
+### 表单字段：哪些要填，哪些不用填
+
+| 字段 | 标记 | 什么时候需要 / 留空行为 |
+|---|---|---|
+| Tunnel Public Hostname | 必填 | 仅选择 VLESS + WS / Argo 时填写，例如 `ws.example.com` |
+| Cloudflare Tunnel Token | 必填 | 仅 Argo 模式填写完整 Token |
+| Tunnel 备注名 | 可选 | 仅用于本机菜单显示；留空即可 |
+| 客户端连接地址 / 优选 IP | 可选 | 仅 WS 高级选项；留空自动使用 Argo 主机名或 TLS 域名 |
+| 自定义 WS HTTP Host | 可选 | 仅直连 WS 高级选项；留空自动使用 TLS 域名 |
+| 源站 IPv4 / IPv6 | 可选 | 仅直连 TCP 协议需要；两项都留空时自动检测 |
+| Reality SNI | 可选 / 默认 | 仅 Reality 协议需要；留空默认 `www.bing.com` |
+| TLS 证书域名 | 必填 | 仅 AnyTLS、NaiveProxy、直连 WS 需要 |
+| 证书签发方式 | 默认 | 默认 Cloudflare DNS-01；也可选择 HTTP-01 |
+| Cloudflare 根域名 | 必填 | 仅 DNS-01 需要，例如 `example.com` |
+| Cloudflare DNS API Token | 必填 | 仅 DNS-01 需要；与 Tunnel Token 不同 |
+| Cloudflare Zone ID | 可选 | DNS-01 可自动查询；留空即可 |
+| 证书邮箱 | 可选 | 留空即可，不影响 DNS-01 申请 |
+| 节点辨识符 | 可选 | 仅用于区分节点；留空使用默认名称 |
+| 各协议端口 | 可选 | 留空自动分配；只有需要固定内网监听端口时才填 |
+
+**完全不需要填写的项目：** 不选 WS，就不需要 WS 接入方式和 Tunnel 参数；不选 Reality，就不需要 Reality SNI；不选 AnyTLS / Naive / 直连 WS，就不需要 TLS 证书或 Cloudflare DNS API；Argo-only 不需要源站 IP 和源站证书。系统版本、CPU 架构、服务管理器都由脚本自动判断。
 
 ### 服务端脚本
 
@@ -58,6 +83,7 @@ jiedian/
 - 端口冲突时自动更换可用端口；配置检查或服务重启失败时尝试回滚。
 - 管理菜单支持单个协议修改端口、查看节点、日志、固定 Tunnel 状态、Tunnel Token 轮换、BBR 状态和卸载。
 - **增量添加节点**：已安装后可通过菜单 `18`（或 `sb-manager add`）安装尚未部署的协议；自动跳过已有协议，只为新增协议生成凭据和端口，保留旧节点 UUID、密码、Reality 密钥、端口、WS 路径和 Tunnel 配置。
+- 启用 NaiveProxy 时，节点展示流程会额外生成 `/etc/sing-box/naive-client.json`，供 sing-box 1.13.0+ 客户端使用；该文件含认证信息，权限限制为 `0600`。
 
 ## 一、不通过 HTML 直接安装
 
@@ -105,9 +131,9 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
 1. 打开 [sing-box 在线配置面板](https://mxw1589.github.io/jiedian/)。
 2. 勾选需要安装的协议。默认预选 VLESS + WebSocket + Argo，可按需取消或增加协议。
 3. 选择 WS 接入方式：NAT VPS 使用 Cloudflare 固定 Tunnel（Argo）；有可用公网入站和源站证书时才考虑直连 TLS。
-4. 根据当前选择填写已启用的字段。未选择协议对应的输入框会禁用；不需要证书的组合不会要求填写证书域名或 DNS API Token。
-5. 表单完整后，安装命令自动显示在“自动生成的一键安装命令”区域。无需点击生成按钮。
-6. 点击“复制自动生成的安装命令”，以 root 登录目标 VPS，将命令粘贴到 SSH 终端执行。
+4. 根据当前选择填写标有“必填”的字段；“可选”字段可以留空，“默认”字段已有预设值。当前协议完全不需要的字段会直接隐藏。
+5. 页面下方会同时显示安装命令和卸载命令。安装命令随参数自动更新；卸载命令单独显示，不会与安装命令混在一起。
+6. 只复制“安装命令”，以 root 登录目标 VPS 后粘贴执行。卸载命令仅在以后确实需要卸载时单独使用；不要连续执行两条命令。
 
 网页命令会携带 Base64 编码的 JSON 配置。Base64 不是加密；命令中可能包含 Cloudflare DNS API Token 或 Tunnel Token。不要公开分享命令、截图或提交到 GitHub。
 
@@ -255,7 +281,21 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 
 网页生成的一键安装命令在检测到已有 `manager.json` 时仍按“保留现有配置的覆盖升级”处理，不会把网页中新勾选的协议直接叠加到现有节点；已有 VPS 要增加节点，请使用上述菜单 `18` 或 `sb-manager add`。
 
-## 五、端口分配与后期修改
+## 五、NaiveProxy 与 Linux 客户端
+
+本项目的 NaiveProxy 服务端由 **sing-box 内置 Naive 入站**提供，不需要在 VPS 上另外安装独立的 Naive 服务端。脚本会检查 sing-box 版本至少为 `1.13.0`：
+
+- Debian / Ubuntu：通过 sing-box 官方软件源安装。
+- Alpine：优先检查仓库版本；若版本低于 `1.13.0` 或不可用，则自动下载官方 Linux 发布版。
+- 启用 NaiveProxy 后，查看节点时会生成 `/etc/sing-box/naive-client.json`，供 Linux 上的 sing-box `1.13.0+` 客户端使用。
+
+如果某个 Linux 图形客户端提示“找不到 `Naive` 核心”，那通常是**客户端应用自身没有配置外部 Naive 核心路径**，不等于 VPS 服务端缺少核心。可以改用官方 sing-box 客户端读取 `naive-client.json`，也可以按该图形客户端的 Linux 版说明单独配置其核心路径；本项目不提供桌面端专用核心安装器。
+
+客户端配置文件包含 Naive 用户名和密码，默认权限为 `0600`。请通过 SSH / SCP 等安全方式传输，不要公开分享。若 NAT 服务商的公网映射端口与 VPS 内部监听端口不同，请把 JSON 中 `server_port` 改成服务商分配的公网端口；脚本默认写入的是 VPS 内部监听端口。
+
+官方 sing-box Naive 出站说明：<https://sing-box.sagernet.org/configuration/outbound/naive/>。
+
+## 六、端口分配与后期修改
 
 - Argo WS：本机监听 `127.0.0.1:<WS_PORT>`，客户端端口固定 `443`，不需要 NAT 公网入站映射。
 - 直连 WS TLS：本机监听端口也是客户端端口；使用 Cloudflare 橙云时需选择 Cloudflare 支持的 HTTPS 代理端口（例如 `443`、`2053`、`2083`、`2087`、`2096`、`8443`）。
@@ -279,10 +319,28 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 - `16` 查看 Cloudflare 固定 Tunnel 状态。
 - `17` 修改固定 Tunnel 的 Public Hostname、备注名或轮换 Token。
 - `18` 增量添加尚未部署的协议节点，不重新生成现有节点凭据。
+- `19` 删除一个已安装协议；只移除所选协议的入站、端口和凭据，其他协议保留。不能删除最后一个协议；如需移除整个程序，使用菜单 `11` 或 `sb-manager uninstall`。
+- `20` 先选择一个已安装协议，再修改该协议的 SNI / TLS 域名、连接地址或 WS 优选 IP、Cloudflare 绑定域名 / Argo Public Hostname、端口，以及协议专属凭据和可选参数。
+
+### 菜单 20：按协议修改参数
+
+菜单 `20` 会先列出当前已安装协议，再进入该协议的修改菜单：
+
+1. **SNI / TLS 域名**：AnyTLS、NaiveProxy、直连 WS 共用同一套源站 TLS 证书和 `TLS_DOMAIN`；修改其中一个协议的 TLS 域名时，会同步影响其他使用这张证书的协议。VLESS Reality 与 AnyTLS + Reality 当前共用 `REALITY_SNI`，修改任意一个时会同步影响另一个。
+2. **连接地址 / WS 优选 IP**：WS 协议只修改自己的客户端连接地址；其他协议修改的是共用源站 IPv4 / IPv6，影响所有使用源站地址的直连协议。源站地址留空保持原值，输入 `-` 清除此地址，输入 `auto` 尝试自动检测。NAT VPS 的自动检测结果可能是出站 IP，不一定等于服务商分配的入站映射地址。
+3. **Cloudflare 绑定域名**：Argo WS 修改 Tunnel Public Hostname、可选备注名及可选轮换的 Tunnel Token；备注名输入 `-` 可清除。DNS-01 TLS 协议修改 Cloudflare Zone、证书域名、可选 Zone ID 和可选 DNS API Token。Zone ID 输入 `-` 表示清除固定 ID、让 acme.sh 自动查询；DNS API Token 留空表示保留当前值。
+4. **端口**：只修改当前选择的协议。留空自动分配；修改后必须同步检查 NAT 映射和防火墙。Argo WS 的本机端口变化后，还要把 Cloudflare Tunnel Service URL 改成 `http://127.0.0.1:<新端口>`。
+5. **协议专属值**：AnyTLS / Naive 凭据可自定义或随机生成；WS 可修改 HTTP Host、Path、UUID；Reality 协议可修改 UUID 或重新生成密钥对 / Short ID。密码输入留空保持原值，输入 `-` 随机生成。WS Host 输入 `-` 恢复默认域名，WS Path 输入 `-` 随机生成。
+
+WS 的直连 TLS / Argo 接入方式属于安装模式，不能在菜单中直接热切换；如需切换，先用菜单 `19` 删除 VLESS + WS，再用菜单 `18` 重新添加 VLESS + WS，其他协议不会被删除。TLS 证书签发模式也不会因修改域名而自动切换；菜单可更新当前 DNS-01 的 Zone / Token / Zone ID，HTTP-01 和手动证书仍按原签发方式管理。
+
+### 菜单 19：删除协议
+
+删除时必须输入 `DELETE` 二次确认。删除 Argo WS 会停止并移除 VPS 本机的 `cloudflared-sb-tunnel` 服务和 Token 文件，但不会删除 Cloudflare 控制台里的 Tunnel、Public Hostname 或 DNS 记录。删除其他协议不会更改剩余协议的凭据、端口和证书。最后一个协议不能单独删除；如需清空整个安装，请使用完整卸载。
 
 修改 Argo WS 本机端口后，记得更新 Cloudflare Tunnel Public Hostname 的 Service URL。修改其他直连协议端口后，记得更新系统防火墙、云安全组和 NAT 服务商端口映射。
 
-## 六、卸载
+## 七、卸载
 
 在需要卸载的 VPS 上以 root 身份执行：
 
@@ -294,12 +352,12 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 
 卸载不会删除 Cloudflare 控制台中的 Tunnel、Public Hostname、DNS 记录，也不会删除 NAT 服务商端口映射或云厂商安全组。需要时应在 Cloudflare 控制台单独清理 Tunnel 和 DNS 路由。
 
-## 七、发布到 GitHub Pages
+## 八、发布到 GitHub Pages
 
 仓库：<https://github.com/mxw1589/jiedian>
 
 1. 打开仓库，点击 **Add file → Upload files**。
-2. 上传并覆盖根目录的 `index.html`、`README.md` 和 `sb-manager-debian-alpine.sh`。
+2. 上传并覆盖根目录的 `index.html`、`README.md`、`CHANGELOG.md` 和 `sb-manager-debian-alpine.sh`。本版本只需上传上述四个根目录文件。
 3. 点击 **Commit changes**，提交到 `main` 分支。
 4. 打开 **Settings → Pages**。
 5. Source 选择 **Deploy from a branch**；Branch 选择 `main`，目录选择 `/(root)`，点击 Save。
@@ -308,7 +366,7 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 
 无需选择 Next.js、Jekyll 或其他 Actions 工作流。GitHub Pages 直接发布仓库根目录中的静态 `index.html`。
 
-## 八、安全说明与限制
+## 九、安全说明与限制
 
 - Cloudflare Tunnel Token 和 DNS API Token 都是敏感凭据。网页生成命令中 Token 使用 Base64 编码，Base64 不是加密。不要公开分享安装命令。
 - 不要将 Token、节点链接、证书私钥或 VPS 配置 JSON 上传到公开仓库。
