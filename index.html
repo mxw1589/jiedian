@@ -28,6 +28,13 @@
 <main class="layout">
 <section class="panel">
   <div class="panelhead"><h2>① 选择协议</h2><span class="badge">可单选 / 多选</span></div>
+  <div class="notice">
+    <b>三个域名和一个可选地址</b><br>
+    ① 根域名：Cloudflare DNS 的 Zone 名称，例如 <code>example.com</code>。<br>
+    ② CF 绑定 IP 的域名：Cloudflare DNS 中用 A/AAAA 记录指向 VPS IP 的名称，例如 <code>direct.example.com</code>，也是直连用的证书域名。<br>
+    ③ Tunnel 域名：Cloudflare Zero Trust 中给隧道绑定的 Public Hostname，例如 <code>tunnel.example.com</code>。<br>
+    ④ 优选 IP / 域名：可选的客户端连接地址，例如 <code>edge.example.com</code>，不替代前面三个域名。
+  </div>
   <div class="protocols">
     <label class="protocol"><input type="checkbox" id="pAnytls"><span><b>AnyTLS</b><small>需要 TLS 证书和公网 TCP 映射</small></span></label>
     <label class="protocol"><input type="checkbox" id="pWs"><span><b>VLESS + WS + TLS 直连</b><small>需要源站 TLS 证书和公网 TCP 端口</small></span></label>
@@ -42,7 +49,7 @@
   <div id="wsSection" class="subpanel">
     <div class="subhead">WebSocket 接入设置</div>
     <div id="argoFields">
-      <div class="field"><label for="argoHost">Cloudflare Tunnel 绑定域名（Public Hostname） <i class="mark req">必填</i></label><input id="argoHost" placeholder="例如 tunnel.example.com" autocomplete="off"></div>
+      <div class="field"><label for="argoHost">③ Tunnel 域名（Public Hostname） <i class="mark req">必填</i></label><input id="argoHost" placeholder="例如 tunnel.example.com" autocomplete="off"></div>
       <div class="footnote">填 Cloudflare Zero Trust → Tunnels → 公开应用路由中绑定的完整域名。它是 Argo 的 SNI 和 WS Host，不是优选地址，也不是 Service URL。</div>
       <div class="field"><label for="argoToken">Cloudflare Tunnel Token <i class="mark req">必填</i></label><input id="argoToken" type="password" placeholder="粘贴完整 eyJ... Token" autocomplete="off"></div>
       <div class="field"><label for="argoTunnelName">Tunnel 备注名 <i class="mark opt">可选</i></label><input id="argoTunnelName" placeholder="连续空格会合并为一个" autocomplete="off"></div>
@@ -81,11 +88,11 @@
 
   <div id="certFields" class="subpanel hidden">
     <div class="subhead">TLS 证书（仅 AnyTLS / Naive / 直连 WS 需要）</div>
-    <div class="field"><label for="tlsDomain">指向 VPS 的 DNS 域名（TLS 证书 / SNI） <i id="tlsDomainMark" class="mark req">必填</i></label><input id="tlsDomain" placeholder="例如 direct.example.com"></div>
+    <div class="field"><label for="tlsDomain">② CF 绑定 IP 的域名（TLS 证书 / SNI） <i id="tlsDomainMark" class="mark req">必填</i></label><input id="tlsDomain" placeholder="例如 direct.example.com"></div>
     <div class="footnote">填你管理且证书要覆盖的完整域名；在 Cloudflare DNS 中配置该名称的 A/AAAA 等记录，使其指向 VPS。AnyTLS、NaiveProxy 和直连 WS 共用此值；直连 WS 的 Host 默认也用它。不填优选域名/IP；建议与 Tunnel 绑定域名不同。</div>
     <div class="field"><label for="certMode">证书签发方式 <i class="mark def">默认 DNS-01</i></label><select id="certMode"><option value="cloudflare">Cloudflare DNS-01（推荐）</option><option value="http01">HTTP-01（公网 TCP 80 必须可访问）</option></select></div>
     <div id="cfCertFields">
-      <div class="field"><label for="cfZone">Cloudflare DNS 区域（Zone 名称） <i class="mark req">必填</i></label><input id="cfZone" placeholder="例如 example.com，按 DNS 控制台中的区域名称填写"></div>
+      <div class="field"><label for="cfZone">① 根域名（Cloudflare DNS Zone） <i class="mark req">必填</i></label><input id="cfZone" placeholder="例如 example.com，按 DNS 控制台中的区域名称填写"></div>
       <div class="footnote">例如区域为 <code>example.com</code>、证书要签给 <code>direct.example.com</code>，则两栏分别填写。如果证书就签给区域本身，只填这里，上方证书域名留空即可。</div>
       <div class="field"><label for="cfToken">Cloudflare DNS API Token <i class="mark req">必填</i></label><input id="cfToken" type="password" placeholder="需要 Zone:DNS:Edit 权限" autocomplete="off"></div>
       <div class="field"><label for="cfZoneId">Zone ID <i class="mark opt">可选</i></label><input id="cfZoneId" placeholder="32 位十六进制；留空自动查询"></div>
@@ -96,7 +103,7 @@
   </div>
 
   <div id="portFields" class="subpanel hidden">
-    <div class="subhead">端口 <i class="mark opt">留空：新节点自动分配，旧节点保留</i></div>
+    <div class="subhead">本机端口 <i class="mark opt">留空：优先沿用上次端口</i></div>
     <div class="portgrid">
       <div class="port hidden" id="portAnytlsWrap"><label for="portAnytls">AnyTLS TCP</label><input id="portAnytls" type="number" min="1024" max="65535" placeholder="自动随机"></div>
       <div class="port hidden" id="portWsWrap"><label for="portWs">直连 WS TLS TCP</label><input id="portWs" type="number" min="1024" max="65535" placeholder="自动随机"></div>
@@ -306,7 +313,7 @@ if command -v curl >/dev/null 2>&1; then curl -fsSL '${RAW_URL}' -o "$SH"
 else wget -qO "$SH" '${RAW_URL}'; fi
 head -n 1 "$SH" | grep -qx '#!/bin/sh'
 grep -q 'WEB_CONFIG_MODE=1' "$SH"
-grep -q 'WEB_CONFIG_SCHEMA=7' "$SH" && grep -q 'WEB_WS_PREFERENCES=1' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
+grep -q 'WEB_CONFIG_SCHEMA=7' "$SH" && grep -q 'WEB_WS_PREFERENCES=1' "$SH" && grep -q 'WEB_PORT_REUSE=1' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
 install -m 700 "$SH" /usr/local/sbin/sb-manager
 rm -f "$SH"
 /usr/local/sbin/sb-manager install-web-config "$CFG"
@@ -338,7 +345,8 @@ function syncUI(){
   const portMap=[["portAnytls","portAnytlsWrap",p.anytls],["portWs","portWsWrap",ws],["portArgo","portArgoWrap",argo],["portSS2022","portSS2022Wrap",p.ss2022],["portReality","portRealityWrap",p.vless_reality],["portNaive","portNaiveWrap",p.naive],["portAnyReality","portAnyRealityWrap",p.anytls_reality]];
   portMap.forEach(([id,wrap,on])=>{setEnabled(id,on);$(wrap).classList.toggle("hidden",!on);});
   $("portFields").classList.toggle("hidden",!any);
-  $("portHint").textContent=argo?"Argo WS 端口是 VPS 本机 127.0.0.1 监听端口，不需要 NAT 入站映射；客户端公网端口固定为 443。其他直连协议仍需公网端口映射；Shadowsocks 2022 请同时放行 TCP 和 UDP。":"NAT VPS 请确认服务商映射的目标端口与这里的本机监听端口一致。";
+  const portReuseHint="留空优先用上次端口；已移除的节点重装时，历史端口被占用才另选，有没有沿用以终端输出为准。";
+  $("portHint").textContent=portReuseHint+(argo?" Argo 客户端固定用 443；Cloudflare Service URL 应使用终端显示的本机端口。":" NAT VPS 请确认服务商映射的目标端口与本机监听端口一致。");
   $("selectionHint").textContent=any?`已选择 ${Object.values(p).filter(Boolean).length} 种协议。只显示这些协议需要的参数；隐藏项不会写入配置。`:"请至少选择一种协议。";
   $("argoHelp").classList.toggle("hidden",!argo);
 }

@@ -56,7 +56,7 @@ jiedian/
 - 协议选择变化时，相关字段即时显示或隐藏；隐藏字段不会写入配置。
 - 当前浏览器为每类域名／IP 保留最近 8 条有效输入，供再次填写时选择；不会自动套用，也不保存 Token、密码、邮箱或安装命令。可用“清除本地历史”删除。
 - **安装命令和卸载命令同时显示、分开生成、分别复制**；安装命令随表单实时更新，卸载命令固定显示。
-- 网页端口留空时，新节点自动分配空闲端口，旧节点保留原端口；源站 IP 留空由 VPS 自动检测；Reality SNI 留空使用默认值。
+- 网页端口留空时，运行中的旧节点保留原端口；重新勾选或卸载重装的节点优先使用同一 VPS 上记录的上次端口，冲突时才另选。源站 IP 留空由 VPS 自动检测；Reality SNI 留空使用默认值。
 - 操作系统、CPU 架构和 systemd / OpenRC 不需要手动选择，脚本自动识别。
 - 支持导出不含 Token 的配置 JSON，以及下载分隔显示的安装 / 卸载命令 TXT。
 - 页面是静态前端，表单内容只在当前浏览器处理，不会自动上传到 GitHub Pages。
@@ -79,13 +79,14 @@ jiedian/
 | Cloudflare Zone ID | 可选 | DNS-01 可自动查询；留空即可 |
 | 证书邮箱 | 可选 | 留空即可，不影响 DNS-01 申请 |
 | 节点辨识符 | 可选 | 仅用于区分节点；留空使用默认名称 |
-| 各协议端口 | 可选 | 网页留空时新节点自动分配、旧节点保留；需要指定内网监听端口时才填 |
+| 各协议端口 | 可选 | 留空优先沿用上次成功使用的端口。手动填写优先，若冲突则报错而不是偷偷换端口 |
 
 **完全不需要填写的项目：** 不选 Argo 就不需要 Tunnel 参数；不选 Reality，就不需要 Reality SNI；不选 AnyTLS / Naive / 直连 WS，就不需要 TLS 证书或 Cloudflare DNS API；Argo-only 不需要源站 IP 和源站证书。系统版本、CPU 架构、服务管理器都由脚本自动判断。
 
 ### TLS 证书域名怎么填
 
-- **三个地址用途不同**：DNS 中将 `direct.example.com` 指向 VPS：它是 TLS 证书域名；Zero Trust 中将 `tunnel.example.com` 绑定 Tunnel：它是 Argo 的 Public Hostname；如果还想使用 `edge.example.com` 或某个 IP，只在“优选域名 / IP”填写，不替代前两者。
+- **① 根域名**：填 Cloudflare DNS 的 Zone 名称，如 `example.com`。**② CF 绑定 IP 的域名**：填在 Cloudflare DNS 用 A/AAAA 指向 VPS 的完整名称，如 `direct.example.com`，也是直连的 TLS 证书域名。若 ② 与 ① 完全相同，用 DNS-01 时只填 ①。
+- **③ Tunnel 域名**：填 Cloudflare Zero Trust 的 Public Hostname，如 `tunnel.example.com`，它是 Argo 的 SNI / Host。**④ 优选 IP / 域名**：可选的客户端连接目标，如 `edge.example.com`，不会替代 ①、② 或 ③。
 - 填你拥有或获准管理的根域名或完整子域名，例如 `example.com`、`direct.example.com`。只填域名，不带 `https://`、端口、路径、尾点或 `*.`；不要填 IP、优选 IP 或 Reality 的 `www.bing.com`。
 - **Cloudflare DNS-01**：填 Cloudflare Zone 本身或其子域名，例如 Zone 是 `example.com`，可填 `direct.example.com`。**HTTP-01**：域名需解析到 VPS，且公网 TCP `80` 可访问。**手动导入**：填证书 SAN 覆盖的具体域名；即使导入通配符证书，也填写具体子域名。
 - DNS-01 留空 Zone ID 时，脚本通过 Cloudflare API 查询填写的 Zone。更新 Token 时会把续期凭据写到该证书自己的 acme.sh 配置，不撤销已有授权；如果证书尚未到续期时间，会先校验现有证书再复用。
@@ -383,6 +384,8 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 卸载会删除本脚本管理的 `/etc/sing-box` 配置目录、sing-box 服务、管理脚本、证书重载钩子，以及本脚本创建的 `cloudflared-sb-tunnel` 专用服务和 Tunnel Token 文件。如果 `cloudflared` 二进制是本脚本下载的，也会删除；如果系统原本已有 cloudflared，则保留该二进制。
 
 预装或来源未记录的 sing-box 核心和 APT 源会保留；本脚本新安装并记录的核心与新增 APT 源会随卸载移除。
+
+卸载时保留仅含协议端口号的 `/var/backups/sb-manager/last-ports.json`，同一 VPS 重装且端口留空时优先复用。不保留节点凭据来恢复旧链接；重装后需重新导入节点。若 Argo 本机端口改了，请按终端输出同步修改 Cloudflare Service URL，客户端仍使用 `443`。
 
 卸载不会删除 Cloudflare 控制台中的 Tunnel、Public Hostname、DNS 记录，也不会删除 NAT 服务商端口映射或云厂商安全组。需要时应在 Cloudflare 控制台单独清理 Tunnel 和 DNS 路由。
 

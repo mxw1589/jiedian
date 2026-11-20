@@ -6,12 +6,30 @@
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
 # WEB_WS_PREFERENCES=1
+# WEB_PORT_REUSE=1
 # Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
 # Manager menu 19: remove one protocol; menu 20: protocol-scoped SNI/IP/Cloudflare/port/credential editor
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
 APP_DIR=/etc/sing-box
+PORT_HISTORY_FILE=/var/backups/sb-manager/last-ports.json
+PORT_HISTORY='{}'
+PORT_HISTORY_FILTER='
+    def usable_ports:
+        if type == "object" then
+            with_entries(select(.key as $key |
+                (["anytls","ws_tls","ws_argo","vless_reality","naive","anytls_reality","ss2022"] | index($key)) != null and
+                (.value | type == "number" and . >= 1024 and . <= 65535 and floor == .)))
+        else {} end;
+    def active_ports:
+        (.ws_mode == "argo" and (has("enabled_ws_argo") | not)) as $legacy_argo |
+        {anytls:.anytls_port,
+         ws_tls:(if $legacy_argo then null else .ws_port end),
+         ws_argo:(if $legacy_argo then .ws_port else .argo_port end),
+         vless_reality:.reality_port,naive:.naive_port,anytls_reality:.anyreality_port,ss2022:.ss2022_port} |
+        usable_ports;
+'
 STATE_FILE="$APP_DIR/manager.json"
 CONFIG_FILE="$APP_DIR/config.json"
 CERT_DIR="$APP_DIR/cert"
@@ -495,6 +513,23 @@ requested_or_random_port() {
     fi
 }
 
+remembered_port() {
+    history_key=$1
+    history_udp=$2
+    shift 2
+    remembered=$(jq -nr --argjson history "$PORT_HISTORY" --arg key "$history_key" '$history[$key] // empty') || return 1
+    [ -n "$remembered" ] && check_udp_port="$history_udp" port_is_available "$remembered" "$@" || return 1
+    printf '%s\n' "$remembered"
+}
+
+reserve_history_port() {
+    history_choice=""
+    if [ "$1" = 1 ] && [ -z "$2" ]; then
+        history_choice=$(remembered_port "$3" "$4" $reserved_ports) || return 0
+        reserved_ports="$reserved_ports $history_choice"
+    fi
+}
+
 assign_ports() {
     ANYTLS_PORT=$(normalize_optional_port "$ANYTLS_PORT" 'AnyTLS') || exit 1
     SS2022_PORT=$(normalize_optional_port "$SS2022_PORT" 'Shadowsocks 2022') || exit 1
@@ -514,8 +549,17 @@ assign_ports() {
 
     used_ports=""
     reserved_ports=""
-    if [ "${web_schema:-}" = 7 ]; then
+    if [ "${web_schema:-}" = 7 ] || [ "$PORT_HISTORY" != '{}' ]; then
         reserved_ports="$ANYTLS_PORT $WS_PORT $ARGO_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $SS2022_PORT"
+    fi
+    if [ "$PORT_HISTORY" != '{}' ]; then
+        reserve_history_port "$ENABLE_ANYTLS" "$ANYTLS_PORT" anytls 0; ANYTLS_PORT=${history_choice:-$ANYTLS_PORT}
+        reserve_history_port "$ENABLE_WS_TLS" "$WS_PORT" ws_tls 0; WS_PORT=${history_choice:-$WS_PORT}
+        reserve_history_port "$ENABLE_WS_ARGO" "$ARGO_PORT" ws_argo 0; ARGO_PORT=${history_choice:-$ARGO_PORT}
+        reserve_history_port "$ENABLE_VLESS_REALITY" "$REALITY_PORT" vless_reality 0; REALITY_PORT=${history_choice:-$REALITY_PORT}
+        reserve_history_port "$ENABLE_NAIVE" "$NAIVE_PORT" naive 0; NAIVE_PORT=${history_choice:-$NAIVE_PORT}
+        reserve_history_port "$ENABLE_ANYTLS_REALITY" "$ANYREALITY_PORT" anytls_reality 0; ANYREALITY_PORT=${history_choice:-$ANYREALITY_PORT}
+        reserve_history_port "$ENABLE_SS2022" "$SS2022_PORT" ss2022 1; SS2022_PORT=${history_choice:-$SS2022_PORT}
     fi
     PORT_FALLBACK_USED=0
     for protocol_name in 'AnyTLS' 'VLESS WS TLS' 'VLESS WS Argo' 'VLESS Reality' 'NaiveProxy' 'AnyTLS + Reality' 'Shadowsocks 2022'; do
@@ -578,7 +622,7 @@ assign_ports() {
 }
 
 ask_ports() {
-    msg 'TCP 端口可留空随机分配；手动填写时可用范围为 1024–65535。'
+    msg '端口留空时优先沿用上次端口，没有可用记录则自动分配；手动填写范围为 1024–65535。'
     if [ "$ENABLE_ANYTLS" = 1 ]; then
         ask_value 'AnyTLS TCP 端口（留空随机选 10000–65535）' "${ANYTLS_PORT:-}"
         ANYTLS_PORT=$REPLY
@@ -1352,6 +1396,7 @@ cloudflared_status() {
 save_state() {
     tmp="$STATE_FILE.tmp.$$"
     if ! jq -n \
+      --argjson saved_ports "$PORT_HISTORY" \
       --arg origin_addr "$ORIGIN_ADDR" \
       --arg origin_ipv6 "$ORIGIN_IPV6" \
       --arg preferred_ip "$PREFERRED_IP" \
@@ -1398,7 +1443,7 @@ save_state() {
       --arg enable_vless_reality "$ENABLE_VLESS_REALITY" \
       --arg enable_naive "$ENABLE_NAIVE" \
       --arg enable_anytls_reality "$ENABLE_ANYTLS_REALITY" \
-      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,enabled_ws_argo:($enable_ws_argo=="1"),enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_password:$ss2022_password,argo_port:(if $enable_ws_argo=="1" then ($argo_port|tonumber) else null end),argo_server:$argo_server,argo_uuid:$argo_uuid,argo_path:$argo_path,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"; then
+      "$PORT_HISTORY_FILTER"'{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,enabled_ws_argo:($enable_ws_argo=="1"),enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_password:$ss2022_password,argo_port:(if $enable_ws_argo=="1" then ($argo_port|tonumber) else null end),argo_server:$argo_server,argo_uuid:$argo_uuid,argo_path:$argo_path,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label} | .port_history = ($saved_ports + active_ports)' > "$tmp"; then
         rm -f "$tmp"
         warn '无法生成 manager.json；原有管理状态未更改。'
         return 1
@@ -1413,6 +1458,7 @@ save_state() {
 
 load_state() {
     [ -s "$STATE_FILE" ] || err '没有找到配置。请先运行安装向导。'
+    PORT_HISTORY=$(jq -c "$PORT_HISTORY_FILTER"'(.port_history | usable_ports) + active_ports' "$STATE_FILE")
     ORIGIN_ADDR=$(jq -r '.origin_addr // ""' "$STATE_FILE")
     ORIGIN_IPV6=$(jq -r '.origin_ipv6 // ""' "$STATE_FILE")
     PREFERRED_IP=$(jq -r '.preferred_ip // ""' "$STATE_FILE")
@@ -1822,6 +1868,7 @@ add_pick_port() {
     add_protocol=$2
     add_port_mode=$3
     add_reserved=$4
+    add_history_key=${5:-}
 
     set -- $add_reserved
     if [ -n "$add_requested" ]; then
@@ -1834,6 +1881,11 @@ add_pick_port() {
         return 0
     fi
 
+    if [ -n "$add_history_key" ] && [ "$PORT_HISTORY" != '{}' ] &&
+       add_previous=$(remembered_port "$add_history_key" "$([ "$add_port_mode" = ss2022 ] && printf 1 || printf 0)" "$@"); then
+        printf '%s\n' "$add_previous"
+        return 0
+    fi
     if [ "$add_port_mode" = ws-direct ]; then
         pick_random_ws_port "$@" || err '没有可用的 VLESS + WS 直连端口（2053、2083、2087、2096、8443）。'
     elif [ "$add_port_mode" = ss2022 ]; then
@@ -2166,38 +2218,38 @@ add_missing_protocols() {
 
     if [ "$add_anytls" -eq 1 ]; then
         ask_value '新增 AnyTLS TCP 端口（留空自动分配）' ''
-        ANYTLS_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'AnyTLS' tcp "$add_reserved_ports")
+        ANYTLS_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'AnyTLS' tcp "$add_reserved_ports" anytls)
         add_reserved_ports="$add_reserved_ports $ANYTLS_PORT"
     fi
     if [ "$add_ws" -eq 1 ]; then
         ask_value '新增 VLESS + WS 直连 TCP 端口（留空自动分配）' ''
-        WS_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS + WS 直连' ws-direct "$add_reserved_ports")
+        WS_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS + WS 直连' ws-direct "$add_reserved_ports" ws_tls)
         add_reserved_ports="$add_reserved_ports $WS_PORT"
     fi
     if [ "$add_argo" -eq 1 ]; then
         ask_value '新增 Argo 本机 WS 端口（留空自动分配）' ''
-        ARGO_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS + WS Argo' argo "$add_reserved_ports")
+        ARGO_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS + WS Argo' argo "$add_reserved_ports" ws_argo)
         add_reserved_ports="$add_reserved_ports $ARGO_PORT"
     fi
     if [ "$add_reality" -eq 1 ]; then
         ask_value '新增 VLESS Reality TCP 端口（留空自动分配）' ''
-        REALITY_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS Reality' tcp "$add_reserved_ports")
+        REALITY_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS Reality' tcp "$add_reserved_ports" vless_reality)
         add_reserved_ports="$add_reserved_ports $REALITY_PORT"
     fi
     if [ "$add_naive" -eq 1 ]; then
         ask_value '新增 NaiveProxy TCP 端口（留空自动分配）' ''
-        NAIVE_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'NaiveProxy' tcp "$add_reserved_ports")
+        NAIVE_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'NaiveProxy' tcp "$add_reserved_ports" naive)
         add_reserved_ports="$add_reserved_ports $NAIVE_PORT"
     fi
     if [ "$add_anyreality" -eq 1 ]; then
         ask_value '新增 AnyTLS + Reality TCP 端口（留空自动分配）' ''
-        ANYREALITY_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'AnyTLS + Reality' tcp "$add_reserved_ports")
+        ANYREALITY_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'AnyTLS + Reality' tcp "$add_reserved_ports" anytls_reality)
         add_reserved_ports="$add_reserved_ports $ANYREALITY_PORT"
     fi
 
     if [ "$add_ss2022" -eq 1 ]; then
         ask_value '新增 Shadowsocks 2022 TCP/UDP 端口（留空自动分配）' ''
-        SS2022_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'Shadowsocks 2022' ss2022 "$add_reserved_ports")
+        SS2022_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'Shadowsocks 2022' ss2022 "$add_reserved_ports" ss2022)
         SS2022_PASSWORD=$(openssl rand -base64 16)
     fi
     if [ "$add_anytls" -eq 1 ]; then
@@ -2527,6 +2579,9 @@ install_from_config() {
 
     resolve_install_domains
     if [ ! -e "$STATE_FILE" ] && [ -d "$APP_DIR" ]; then backup_existing_install; fi
+    if [ ! -e "$STATE_FILE" ] && [ -s "$PORT_HISTORY_FILE" ]; then
+        PORT_HISTORY=$(jq -ce "$PORT_HISTORY_FILTER"'usable_ports' "$PORT_HISTORY_FILE" 2>/dev/null) || PORT_HISTORY='{}'
+    fi
     install_dependencies_and_core
     resolve_install_addresses
     PREVIOUS_ANYTLS_PORT=${PREVIOUS_ANYTLS_PORT:-}; PREVIOUS_WS_PORT=${PREVIOUS_WS_PORT:-}
@@ -3821,10 +3876,23 @@ remove_acme_cron_entry() {
     fi
 }
 
+save_uninstall_port_history() (
+    [ -s "$STATE_FILE" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 1
+    umask 077
+    install -d -m 0700 "${PORT_HISTORY_FILE%/*}" || return 1
+    history_tmp=$(mktemp "$PORT_HISTORY_FILE.tmp.XXXXXX") || return 1
+    if ! jq -ce "$PORT_HISTORY_FILTER"'select(type == "object") | (.port_history | usable_ports) + active_ports' "$STATE_FILE" > "$history_tmp" ||
+       ! mv -f "$history_tmp" "$PORT_HISTORY_FILE"; then
+        rm -f "$history_tmp"
+        return 1
+    fi
+)
+
 confirm_uninstall() {
     msg '========== 确认卸载 sing-box 管理器 =========='
     printf '%s\n' '将删除：/etc/sing-box、/usr/local/sbin/sb-manager、sing-box 服务文件、Argo 专用 cloudflared 服务及本脚本安装的软件包/二进制。'
-    printf '%s\n' '不会删除：预装的 sing-box、/root/.acme.sh、系统依赖包、系统防火墙规则、云厂商安全组或其他 cron 任务。'
+    printf '%s\n' '会保留：用于重装的协议端口记录、预装的 sing-box、/root/.acme.sh、系统依赖包、防火墙和其他 cron 任务。'
     ask_value '确认在当前 VPS 上卸载？(y/N)' 'n'
     case "$(trim_value "$REPLY")" in
         y|Y) return 0 ;;
@@ -3834,6 +3902,7 @@ confirm_uninstall() {
 
 uninstall_manager() {
     need_root
+    save_uninstall_port_history || warn '无法保存重装用的协议端口记录；不会影响卸载。'
     cf_managed=0; [ ! -f "$APP_DIR/cloudflared-managed" ] || cf_managed=1
     msg '正在停止 sing-box / Cloudflare Tunnel 服务……'
     if command -v systemctl >/dev/null 2>&1; then
