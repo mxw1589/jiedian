@@ -42,47 +42,51 @@
   <div id="wsSection" class="subpanel">
     <div class="subhead">WebSocket 接入设置</div>
     <div id="argoFields">
-      <div class="field"><label for="argoHost">Tunnel Public Hostname <i class="mark req">必填</i></label><input id="argoHost" placeholder="例如 ws.example.com" autocomplete="off"></div>
+      <div class="field"><label for="argoHost">Cloudflare Tunnel 绑定域名（Public Hostname） <i class="mark req">必填</i></label><input id="argoHost" placeholder="例如 tunnel.example.com" autocomplete="off"></div>
+      <div class="footnote">填 Cloudflare Zero Trust → Tunnels → 公开应用路由中绑定的完整域名。它是 Argo 的 SNI 和 WS Host，不是优选地址，也不是 Service URL。</div>
       <div class="field"><label for="argoToken">Cloudflare Tunnel Token <i class="mark req">必填</i></label><input id="argoToken" type="password" placeholder="粘贴完整 eyJ... Token" autocomplete="off"></div>
       <div class="field"><label for="argoTunnelName">Tunnel 备注名 <i class="mark opt">可选</i></label><input id="argoTunnelName" placeholder="连续空格会合并为一个" autocomplete="off"></div>
-      <div class="field"><label for="argoServer">Argo 优选域名 / IP <i class="mark opt">可选</i></label><input id="argoServer" placeholder="默认 Tunnel Public Hostname；旧节点留空保留优选值"></div>
+      <div id="argoServerField" class="field"><label for="argoServer">Argo 优选域名 / IP <i class="mark opt">可选</i></label><input id="argoServer" placeholder="首次留空使用 Tunnel 绑定域名"></div>
       <div class="footnote">只粘贴 Cloudflare Zero Trust → Tunnels → Add a replica 中的 Token，不要粘贴整条安装命令。</div>
     </div>
     <div id="directWsFields" class="hidden">
       <div class="notice">直连模式需要你自己的 TLS 域名和证书；若使用 HTTP-01，还必须确保公网 TCP 80 可访问。</div>
-      <div class="field"><label for="wsServer">直连 WS 优选域名 / IP <i class="mark opt">可选</i></label><input id="wsServer" placeholder="默认 TLS 证书域名；旧节点留空保留优选值"></div>
+      <label id="shareWsAddressField" class="hidden"><input id="shareWsAddress" type="checkbox" checked> 直连 WS 与 Argo 共用优选域名 / IP，只填一次</label>
+      <div class="field"><label for="wsServer"><span id="wsServerLabel">直连 WS 优选域名 / IP</span> <i class="mark opt">可选</i></label><input id="wsServer" placeholder="首次留空使用 TLS 证书域名"></div>
       <details class="advanced">
         <summary>直连 WS 高级设置</summary>
         <div class="field"><label for="directWsHost">自定义 WS HTTP Host <i class="mark opt">可选</i></label><input id="directWsHost" placeholder="默认 TLS 证书域名；旧节点留空保留自定义值"></div>
       </details>
     </div>
-    <div class="footnote">优选域名 / IP 只改变客户端连接地址，不改变 SNI 或 Host。留空保留旧的自定义值；输入 <code>-</code> 恢复默认。Argo 客户端固定用 443；直连需要连接地址能访问所选端口。</div>
+    <div class="footnote">优选域名 / IP 是客户端实际拨号地址，只填域名、IPv4 或裸 IPv6，不带协议、端口或路径。不会改变 SNI 或 Host。同步时留空保留各自的旧优选值，输入 <code>-</code> 恢复各自默认。Argo 固定走 443；直连地址须支持设置的端口。</div>
   </div>
 </section>
 
 <section class="panel">
   <div class="panelhead"><h2>② 参数设置</h2><span class="badge">按需显示</span></div>
+  <div class="footnote">此浏览器为每类域名／IP保留最近 8 条可选历史，不自动填入配置，也不保存 Token、密码或安装命令。 <button id="clearHistory" class="secondary" type="button">清除本地历史</button> <span id="historyStatus" role="status"></span></div>
   <div class="field"><label for="nodeLabel">节点辨识符 <i class="mark opt">可选</i></label><input id="nodeLabel" placeholder="例如 SG-NAT01；留空使用默认名称" maxlength="20"></div>
 
   <div id="originFields" class="subpanel hidden">
     <div class="subhead">源站地址 <i class="mark opt">可选，自动检测</i></div>
     <div class="field"><label for="originIPv4">源站 IPv4 / 域名</label><input id="originIPv4" placeholder="留空自动检测 IPv4"></div>
     <div class="field"><label for="originIPv6">源站 IPv6</label><input id="originIPv6" placeholder="留空自动检测 IPv6"></div>
-    <div class="footnote">两项都留空时由 VPS 自动检测公网地址；若自动检测失败或需要指定出口地址，再手动填写。</div>
+    <div class="footnote">这里填能直达 VPS 的公网 IP 或 DNS-only 解析域名，所选的普通 AnyTLS、NaiveProxy、Reality 和 Shadowsocks 2022 共用，不用分别填。别填 Cloudflare 优选地址或 Tunnel 域名；两项留空时由 VPS 自动检测。</div>
   </div>
 
   <div id="realityFields" class="subpanel hidden">
     <div class="subhead">Reality 参数</div>
-    <div class="field"><label for="realitySni">Reality SNI <i class="mark opt">可选</i><i class="mark def">默认 www.bing.com</i></label><input id="realitySni" value="www.bing.com" placeholder="www.bing.com"></div>
+    <div class="field"><label for="realitySni">Reality 握手域名（两种 Reality 共用） <i class="mark opt">可选</i><i class="mark def">默认 www.bing.com</i></label><input id="realitySni" value="www.bing.com" placeholder="www.bing.com"></div>
   </div>
 
   <div id="certFields" class="subpanel hidden">
     <div class="subhead">TLS 证书（仅 AnyTLS / Naive / 直连 WS 需要）</div>
-    <div class="field"><label for="tlsDomain">TLS 证书域名 <i class="mark req">必填</i></label><input id="tlsDomain" placeholder="例如 direct.example.com"></div>
-    <div class="footnote">填写你管理的根域名或子域名（不带协议、端口、路径或通配符）；证书必须覆盖该名称。优选 IP 填在连接地址，不填在这里。同时启用两条 WS 时，建议使用不同的直连域名和 Tunnel 公网主机名。</div>
+    <div class="field"><label for="tlsDomain">指向 VPS 的 DNS 域名（TLS 证书 / SNI） <i id="tlsDomainMark" class="mark req">必填</i></label><input id="tlsDomain" placeholder="例如 direct.example.com"></div>
+    <div class="footnote">填你管理且证书要覆盖的完整域名；在 Cloudflare DNS 中配置该名称的 A/AAAA 等记录，使其指向 VPS。AnyTLS、NaiveProxy 和直连 WS 共用此值；直连 WS 的 Host 默认也用它。不填优选域名/IP；建议与 Tunnel 绑定域名不同。</div>
     <div class="field"><label for="certMode">证书签发方式 <i class="mark def">默认 DNS-01</i></label><select id="certMode"><option value="cloudflare">Cloudflare DNS-01（推荐）</option><option value="http01">HTTP-01（公网 TCP 80 必须可访问）</option></select></div>
     <div id="cfCertFields">
-      <div class="field"><label for="cfZone">Cloudflare 根域名 <i class="mark req">必填</i></label><input id="cfZone" placeholder="例如 example.com"></div>
+      <div class="field"><label for="cfZone">Cloudflare DNS 区域（Zone 名称） <i class="mark req">必填</i></label><input id="cfZone" placeholder="例如 example.com，按 DNS 控制台中的区域名称填写"></div>
+      <div class="footnote">例如区域为 <code>example.com</code>、证书要签给 <code>direct.example.com</code>，则两栏分别填写。如果证书就签给区域本身，只填这里，上方证书域名留空即可。</div>
       <div class="field"><label for="cfToken">Cloudflare DNS API Token <i class="mark req">必填</i></label><input id="cfToken" type="password" placeholder="需要 Zone:DNS:Edit 权限" autocomplete="off"></div>
       <div class="field"><label for="cfZoneId">Zone ID <i class="mark opt">可选</i></label><input id="cfZoneId" placeholder="32 位十六进制；留空自动查询"></div>
       <div class="field"><label for="cfEmail">证书账户邮箱 <i class="mark opt">可选</i></label><input id="cfEmail" type="email" placeholder="留空也可以申请证书"></div>
@@ -108,6 +112,14 @@
   <div class="notice ok">系统类型和 CPU 架构无需填写：安装脚本会自动识别 Debian / Alpine、可用 CPU 架构，并选择 systemd 或 OpenRC。Naive 服务端由 sing-box 内置支持，自动确保版本不低于 1.13.0；VPS 不需要额外安装独立 Naive 服务端核心。</div>
 </section>
 </main>
+<datalist id="historyTunnelDomain"></datalist>
+<datalist id="historyPreferredAddress"></datalist>
+<datalist id="historyWsHost"></datalist>
+<datalist id="historyTlsDomain"></datalist>
+<datalist id="historyCfZone"></datalist>
+<datalist id="historyOriginIPv4"></datalist>
+<datalist id="historyOriginIPv6"></datalist>
+<datalist id="historyRealitySni"></datalist>
 
 <section class="panel commands">
   <div class="panelhead"><h2>③ 安装 / 卸载命令（自动生成并分开显示）</h2><span class="badge">安装命令随参数实时更新</span></div>
@@ -165,7 +177,7 @@
 const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
 const UNINSTALL_COMMAND="/usr/local/sbin/sb-manager uninstall";
 const $=id=>document.getElementById(id);
-const ids=["pAnytls","pWs","pArgo","pSS2022","pReality","pNaive","pAnyReality","argoServer","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portArgo","portSS2022","portReality","portNaive","portAnyReality"];
+const ids=["pAnytls","pWs","pArgo","pSS2022","pReality","pNaive","pAnyReality","argoServer","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","shareWsAddress","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portArgo","portSS2022","portReality","portNaive","portAnyReality"];
 const v=id=>$(id).value.trim();
 const tunnelName=()=>v("argoTunnelName").replace(/ {2,}/g," ");
 const protocolLabels={anytls:"AnyTLS",ws_tls:"直连 WS TLS",ws_argo:"Argo WS TLS",ss2022:"Shadowsocks 2022",vless_reality:"VLESS + Reality",naive:"NaiveProxy",anytls_reality:"AnyTLS + Reality"};
@@ -173,16 +185,17 @@ const selectedNames=p=>Object.entries(protocolLabels).filter(([key])=>p[key]).ma
 function selected(){return {anytls:$("pAnytls").checked,ws_tls:$("pWs").checked,ws_argo:$("pArgo").checked,ss2022:$("pSS2022").checked,vless_reality:$("pReality").checked,naive:$("pNaive").checked,anytls_reality:$("pAnyReality").checked};}
 function needsCert(p){return p.anytls||p.naive||p.ws_tls;}
 function needsOrigin(p){return p.anytls||p.vless_reality||p.naive||p.anytls_reality||p.ss2022;}
+function sharesWsAddress(p){return p.ws_tls&&p.ws_argo&&$("shareWsAddress").checked;}
 function b64(s){return btoa(unescape(encodeURIComponent(s)));}
 function cfgFromForm(){
   const p=selected(),certNeeded=needsCert(p);
   const certMode=certNeeded?v("certMode"):"none";
-  const tlsDomain=certNeeded?v("tlsDomain"):"";
+  const tlsDomain=certNeeded?(v("tlsDomain")||(certMode==="cloudflare"?v("cfZone"):"")):"";
   const argoHost=p.ws_argo?v("argoHost"):"";
   const wsHost=p.ws_tls?v("directWsHost"):"";
   const wsServer=p.ws_tls?v("wsServer"):"";
   return {
-    schema:7,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?v("argoServer"):"",
+    schema:7,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?(sharesWsAddress(p)?wsServer:v("argoServer")):"",
     argo_tunnel_name:p.ws_argo?tunnelName():"",
     argo_token:p.ws_argo?v("argoToken"):"",
     origin_ipv4:needsOrigin(p)?v("originIPv4"):"",
@@ -200,7 +213,45 @@ function cfgFromForm(){
 const domainRe=/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[A-Za-z]{2,63}$/;
 function isIPv4(s){const a=s.split(".");return a.length===4&&a.every(x=>/^\d{1,3}$/.test(x)&&+x<=255);}
 function isIPv6(s){try{return s.includes(":")&&/^[0-9a-f:.]+$/i.test(s)&&new URL(`http://[${s}]/`).hostname.startsWith("[");}catch{return false;}}
-function validOptionalWsAddress(value){return !value||value==="-"||domainRe.test(value)||isIPv4(value)||isIPv6(value);}
+function isAddress(value){return domainRe.test(value)||isIPv4(value)||isIPv6(value);}
+function validOptionalWsAddress(value){return !value||value==="-"||isAddress(value);}
+const historyKey="jiedian.address-history.v1";
+const historyFields={
+  argoHost:"historyTunnelDomain",wsServer:"historyPreferredAddress",argoServer:"historyPreferredAddress",
+  directWsHost:"historyWsHost",tlsDomain:"historyTlsDomain",cfZone:"historyCfZone",
+  originIPv4:"historyOriginIPv4",originIPv6:"historyOriginIPv6",realitySni:"historyRealitySni"
+};
+const historyValidators={
+  historyTunnelDomain:value=>domainRe.test(value),historyPreferredAddress:isAddress,
+  historyWsHost:value=>domainRe.test(value),historyTlsDomain:value=>domainRe.test(value),
+  historyCfZone:value=>domainRe.test(value),historyOriginIPv4:value=>domainRe.test(value)||isIPv4(value),
+  historyOriginIPv6:isIPv6,historyRealitySni:value=>domainRe.test(value)
+};
+let addressHistory=readAddressHistory();
+function readAddressHistory(){
+  let saved;
+  try{saved=JSON.parse(localStorage.getItem(historyKey)||"{}");}catch{saved={};}
+  return Object.fromEntries(Object.entries(historyValidators).map(([listId,valid])=>{
+    const values=saved?.[listId];
+    return [listId,Array.isArray(values)?[...new Set(values.filter(value=>typeof value==="string"&&valid(value)))].slice(0,8):[]];
+  }));
+}
+function refreshHistory(listId){
+  $(listId).replaceChildren(...addressHistory[listId].map(value=>{
+    const option=document.createElement("option");
+    option.value=value;
+    return option;
+  }));
+}
+function rememberAddress(id){
+  if(!Object.hasOwn(historyFields,id)||$(id).disabled)return;
+  const listId=historyFields[id],value=v(id);
+  if(!historyValidators[listId](value))return;
+  addressHistory[listId]=[value,...addressHistory[listId].filter(previous=>previous!==value)].slice(0,8);
+  refreshHistory(listId);
+  try{localStorage.setItem(historyKey,JSON.stringify(addressHistory));}
+  catch{$("historyStatus").textContent="此浏览器禁止本地存储，本次历史仅在当前页面有效。";}
+}
 function validate(c){
   const p=c.protocols;
   if(!Object.values(p).some(Boolean))throw Error("请至少勾选一种协议。");
@@ -209,7 +260,7 @@ function validate(c){
   for(const [k,x] of activePorts)if(!/^\d+$/.test(x)||+x<1024||+x>65535)throw Error("已启用协议的手动端口必须是 1024–65535 的整数。");
   const portNums=activePorts.map(([,x])=>+x);if(new Set(portNums).size!==portNums.length)throw Error("已启用协议的端口不能重复。");
   if(p.ws_argo){
-    if(!domainRe.test(c.argo_host))throw Error("请填写有效的固定 Tunnel Public Hostname，例如 ws.example.com。");
+    if(!domainRe.test(c.argo_host))throw Error("请填写 Cloudflare Tunnel 公开应用路由绑定的完整域名，例如 tunnel.example.com。");
     if(c.argo_tunnel_name&&!/^[\p{L}\p{N} ._-]{1,64}$/u.test(c.argo_tunnel_name))throw Error("Tunnel 备注名最多 64 个字符，只允许中文、字母、数字、空格、点、下划线和短横线。");
     if(!c.argo_token||!/^eyJ[A-Za-z0-9+/=_-]{37,8191}$/.test(c.argo_token))throw Error("请填写完整的 Cloudflare Tunnel Token（通常以 eyJ 开头）。");
     if(!validOptionalWsAddress(c.argo_server))throw Error("Argo 优选地址格式无效；请填写域名、IPv4 或 IPv6（不要带端口）。");
@@ -224,14 +275,16 @@ function validate(c){
     if(c.origin_ipv6&&!isIPv6(c.origin_ipv6))throw Error("源站 IPv6 格式不正确。");
   }
   if(needsCert(p)){
-    if(!domainRe.test(c.tls_domain)||/^(?:www\.)?(?:bing|microsoft)\.com$/i.test(c.tls_domain))throw Error("请填写你管理的 TLS 证书域名；不要填写 IP、通配符或 Reality 示例域名。");
     if(c.cert_mode==="cloudflare"){
-      if(!domainRe.test(c.cf_zone_name))throw Error("请填写有效的 Cloudflare 根域名。");
+      if(!domainRe.test(c.cf_zone_name))throw Error("请填写 Cloudflare DNS 控制台中的 Zone 名称，例如 example.com。");
+    }else if(c.cert_mode!=="http01")throw Error("请选择 TLS 证书方式。");
+    if(!domainRe.test(c.tls_domain)||/^(?:www\.)?(?:bing|microsoft)\.com$/i.test(c.tls_domain))throw Error("请填写指向 VPS 的 TLS 证书域名；不要填优选 IP、通配符或 Reality 示例域名。");
+    if(c.cert_mode==="cloudflare"){
       if(!c.cf_token)throw Error("请填写 Cloudflare DNS API Token。");
       if(c.cf_zone_id&&!/^[a-fA-F0-9]{32}$/.test(c.cf_zone_id))throw Error("Zone ID 必须是 32 位十六进制，或留空自动查询。");
       if(c.cf_email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.cf_email))throw Error("证书邮箱格式不正确，或将其留空。");
-      const d=c.tls_domain.toLowerCase(),z=c.cf_zone_name.toLowerCase();if(!(d===z||d.endsWith("."+z)))throw Error("TLS 证书域名必须属于所填 Cloudflare 根域名。");
-    }else if(c.cert_mode!=="http01")throw Error("请选择 TLS 证书方式。");
+      const d=c.tls_domain.toLowerCase(),z=c.cf_zone_name.toLowerCase();if(!(d===z||d.endsWith("."+z)))throw Error("TLS 证书域名必须是所填 DNS Zone 本身或它的子域名。");
+    }
   }
   return c;
 }
@@ -267,13 +320,19 @@ fi`;}
 function setEnabled(id,on){$(id).disabled=!on;}
 function syncUI(){
   const p=selected(),ws=p.ws_tls,argo=p.ws_argo,cert=needsCert(p),origin=needsOrigin(p),reality=p.vless_reality||p.anytls_reality,any=Object.values(p).some(Boolean),cf=cert&&v("certMode")==="cloudflare";
+  const bothWs=ws&&argo,shared=sharesWsAddress(p);
   $("wsSection").classList.toggle("hidden",!ws&&!argo);
   $("argoFields").classList.toggle("hidden",!argo);$("directWsFields").classList.toggle("hidden",!ws);
-  ["argoHost","argoToken","argoTunnelName","argoServer"].forEach(id=>setEnabled(id,argo));
+  ["argoHost","argoToken","argoTunnelName"].forEach(id=>setEnabled(id,argo));
+  $("argoServerField").classList.toggle("hidden",!argo||shared);setEnabled("argoServer",argo&&!shared);
+  $("shareWsAddressField").classList.toggle("hidden",!bothWs);setEnabled("shareWsAddress",bothWs);
+  $("wsServerLabel").textContent=shared?"两条 WS 共用的优选域名 / IP":"直连 WS 优选域名 / IP";
   setEnabled("wsServer",ws);setEnabled("directWsHost",ws);
   $("originFields").classList.toggle("hidden",!origin);["originIPv4","originIPv6"].forEach(id=>setEnabled(id,origin));
   $("realityFields").classList.toggle("hidden",!reality);setEnabled("realitySni",reality);
   $("certFields").classList.toggle("hidden",!cert);setEnabled("certMode",cert);setEnabled("tlsDomain",cert);
+  $("tlsDomainMark").textContent=cf?"与 Zone 相同可留空":"必填";
+  $("tlsDomainMark").className=cf?"mark opt":"mark req";
   $("cfCertFields").classList.toggle("hidden",!cf);["cfZone","cfToken","cfZoneId","cfEmail"].forEach(id=>setEnabled(id,cf));
   $("httpCertHint").classList.toggle("hidden",!cert||v("certMode")!=="http01");
   const portMap=[["portAnytls","portAnytlsWrap",p.anytls],["portWs","portWsWrap",ws],["portArgo","portArgoWrap",argo],["portSS2022","portSS2022Wrap",p.ss2022],["portReality","portRealityWrap",p.vless_reality],["portNaive","portNaiveWrap",p.naive],["portAnyReality","portAnyRealityWrap",p.anytls_reality]];
@@ -296,8 +355,16 @@ ids.forEach(id=>{
   $(id).addEventListener("input",render);
   $(id).addEventListener("change",()=>{
     if(id==="argoTunnelName")$(id).value=tunnelName();
+    rememberAddress(id);
     render();
   });
+});
+Object.entries(historyFields).forEach(([id,listId])=>{$(id).setAttribute("list",listId);$(id).setAttribute("autocomplete","off");});
+Object.keys(historyValidators).forEach(refreshHistory);
+$("clearHistory").addEventListener("click",()=>{
+  Object.keys(historyValidators).forEach(listId=>{addressHistory[listId]=[];refreshHistory(listId);});
+  try{localStorage.removeItem(historyKey);$("historyStatus").textContent="已清除本地历史。";}
+  catch{$("historyStatus").textContent="已清除当前页面的历史，浏览器存储不可访问。";}
 });
 $("copyOutput").addEventListener("click",()=>copyText($("commandOutput").value));
 $("downloadOutput").addEventListener("click",()=>download("sing-box-install-command.txt",$("commandOutput").value));

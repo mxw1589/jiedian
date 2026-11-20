@@ -54,6 +54,7 @@ jiedian/
 - 页面改为紧凑双栏布局；桌面端减少纵向滚动，手机端自动单栏排列。
 - 每个字段标注“必填 / 可选 / 默认”；当前协议完全不需要的字段直接隐藏，不只是灰显。
 - 协议选择变化时，相关字段即时显示或隐藏；隐藏字段不会写入配置。
+- 当前浏览器为每类域名／IP 保留最近 8 条有效输入，供再次填写时选择；不会自动套用，也不保存 Token、密码、邮箱或安装命令。可用“清除本地历史”删除。
 - **安装命令和卸载命令同时显示、分开生成、分别复制**；安装命令随表单实时更新，卸载命令固定显示。
 - 网页端口留空时，新节点自动分配空闲端口，旧节点保留原端口；源站 IP 留空由 VPS 自动检测；Reality SNI 留空使用默认值。
 - 操作系统、CPU 架构和 systemd / OpenRC 不需要手动选择，脚本自动识别。
@@ -64,16 +65,16 @@ jiedian/
 
 | 字段 | 标记 | 什么时候需要 / 留空行为 |
 |---|---|---|
-| Tunnel Public Hostname | 必填 | 仅选择 VLESS + WS / Argo 时填写，例如 `ws.example.com` |
+| Cloudflare Tunnel 绑定域名（Public Hostname） | 必填 | 仅 Argo；填 Zero Trust → Tunnels → 公开应用路由绑定的完整域名，例如 `tunnel.example.com`，不是 Service URL |
 | Cloudflare Tunnel Token | 必填 | 仅 Argo 模式填写完整 Token |
 | Tunnel 备注名 | 可选 | 仅用于本机菜单显示；连续空格合并为一个，只输入空格视为留空 |
-| 优选域名 / IP | 可选 | 勾选直连 WS 或 Argo 后分别显示。首次留空使用 TLS 证书域名或 Tunnel Public Hostname；同步时留空保留旧优选地址，填 `-` 恢复默认 |
+| 优选域名 / IP | 可选 | 客户端的拨号地址，不带协议、端口或路径。两条 WS 可勾选共用，只需填一次；首次留空各用默认域名，同步留空各保留旧值，填 `-` 恢复默认 |
 | 自定义 WS HTTP Host | 可选 | 仅直连 WS 高级设置；首次留空使用 TLS 域名，同步留空保留旧自定义 Host，填 `-` 恢复默认 |
 | 源站 IPv4 / IPv6 | 可选 | AnyTLS、Reality、NaiveProxy、Shadowsocks 2022 使用；两项都留空时自动检测 |
 | Reality SNI | 可选 / 默认 | 仅 Reality 协议需要；留空默认 `www.bing.com` |
-| TLS 证书域名 | 必填 | 仅 AnyTLS、NaiveProxy、直连 WS 需要 |
+| 指向 VPS 的 DNS 域名（TLS 证书 / SNI） | 按需 | AnyTLS、NaiveProxy、直连 WS 共用；如与 DNS Zone 完全相同且使用 DNS-01，只填 Zone 即可 |
 | 证书签发方式 | 默认 | 默认 Cloudflare DNS-01；也可选择 HTTP-01 |
-| Cloudflare 根域名 | 必填 | 仅 DNS-01 需要，例如 `example.com` |
+| Cloudflare DNS 区域（Zone 名称） | 必填 | 仅 DNS-01，填 Cloudflare 控制台的实际区域名，例如 `example.com`，不要猜测后缀 |
 | Cloudflare DNS API Token | 必填 | 仅 DNS-01 需要；与 Tunnel Token 不同 |
 | Cloudflare Zone ID | 可选 | DNS-01 可自动查询；留空即可 |
 | 证书邮箱 | 可选 | 留空即可，不影响 DNS-01 申请 |
@@ -84,6 +85,7 @@ jiedian/
 
 ### TLS 证书域名怎么填
 
+- **三个地址用途不同**：DNS 中将 `direct.example.com` 指向 VPS：它是 TLS 证书域名；Zero Trust 中将 `tunnel.example.com` 绑定 Tunnel：它是 Argo 的 Public Hostname；如果还想使用 `edge.example.com` 或某个 IP，只在“优选域名 / IP”填写，不替代前两者。
 - 填你拥有或获准管理的根域名或完整子域名，例如 `example.com`、`direct.example.com`。只填域名，不带 `https://`、端口、路径、尾点或 `*.`；不要填 IP、优选 IP 或 Reality 的 `www.bing.com`。
 - **Cloudflare DNS-01**：填 Cloudflare Zone 本身或其子域名，例如 Zone 是 `example.com`，可填 `direct.example.com`。**HTTP-01**：域名需解析到 VPS，且公网 TCP `80` 可访问。**手动导入**：填证书 SAN 覆盖的具体域名；即使导入通配符证书，也填写具体子域名。
 - **Argo** 不使用这个字段。两条 WS 都开时，建议直连填 `direct.example.com`，Tunnel Public Hostname 填 `tunnel.example.com`，各自配置 DNS 路由。Argo 客户端走 Cloudflare TLS `443`，Tunnel 回源到 `http://127.0.0.1:<Argo 本机端口>`。
