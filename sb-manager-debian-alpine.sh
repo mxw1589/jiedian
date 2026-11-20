@@ -1,11 +1,12 @@
 #!/bin/sh
-# sing-box multi-protocol manager for Debian + Alpine
+# sing-box single-VPS multi-protocol manager for Debian + Alpine
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
-# Manual or random collision-checked TCP ports; Cloudflare DNS-01 or HTTP-01
-# WEB_CONFIG_MODE=1; supports single/multi-VPS deployment; overlay install preserves existing settings
-# WEB_CONFIG_SCHEMA=2; blank origin addresses are detected on the VPS
-# WEB_CONFIG_SCHEMA=3; node label validation supports nonempty labels
+# Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
+# WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
+# WEB_CONFIG_SCHEMA=6 (also accepts 5); independent direct and Argo WS inbounds
+# Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
+# Manager menu 19: remove one protocol; menu 20: protocol-scoped SNI/IP/Cloudflare/port/credential editor
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -23,6 +24,30 @@ NAIVE_PORT=""
 NAIVE_USERNAME=""
 NAIVE_PASSWORD=""
 WS_SERVER=""
+SS2022_PORT=""
+SS2022_PASSWORD=""
+SS2022_METHOD=2022-blake3-aes-128-gcm
+ENABLE_SS2022=0
+# Selective protocol installation. Missing flags in old manager.json are treated as enabled.
+ENABLE_ANYTLS=1
+ENABLE_WS_TLS=1
+ENABLE_VLESS_REALITY=1
+ENABLE_NAIVE=1
+ENABLE_ANYTLS_REALITY=1
+ENABLE_WS_ARGO=0
+ARGO_PORT=""
+ARGO_SERVER=""
+ARGO_UUID=""
+ARGO_PATH=""
+ARGO_HOST=""
+ARGO_TUNNEL_NAME=""
+ARGO_TOKEN=""
+ARGO_TOKEN_FILE="$APP_DIR/cloudflared.token"
+CLOUDFLARED_BIN=/usr/local/libexec/sb-manager/cloudflared
+CLOUDFLARED_RUN=/usr/local/sbin/sb-cloudflared-run
+CLOUDFLARED_SERVICE=cloudflared-sb-tunnel
+NEED_CERT=0
+NEED_ORIGIN=1
 BBR_SYSCTL_FILE=/etc/sysctl.d/99-sb-manager-bbr.conf
 BBR_MODULES_FILE=/etc/modules-load.d/sb-manager-bbr.conf
 BBR_BACKUP_FILE="$APP_DIR/bbr-previous.conf"
@@ -271,6 +296,14 @@ restore_bbr() {
 }
 
 
+valid_argo_token() {
+    token_value=$1
+    [ "${#token_value}" -ge 40 ] && [ "${#token_value}" -le 8192 ] || return 1
+    case "$token_value" in eyJ*) ;; *) return 1 ;; esac
+    case "$token_value" in *[!A-Za-z0-9+/=_-]*) return 1 ;; esac
+    return 0
+}
+
 valid_domain() {
     v=$1
     [ -n "$v" ] || return 1
@@ -305,15 +338,6 @@ domain_belongs_to_zone() {
     esac
 }
 
-confirm_domain_control() {
-    domain_to_confirm=$1
-    printf '\n即将为域名 %s 申请 TLS 证书。\n' "$domain_to_confirm"
-    printf '请确认这是你拥有或获准管理的域名，而不是 www.bing.com / www.microsoft.com 等第三方域名。\n'
-    ask_value '确认请输入大写 YES' ''
-    [ "$REPLY" = "YES" ] || { warn '未确认域名所有权，已停止证书申请。'; return 1; }
-    return 0
-}
-
 valid_host() {
     v=$1
     [ -n "$v" ] || return 1
@@ -334,8 +358,32 @@ valid_ipv4_address() {
     } END { exit !(NR == 1 && valid) }'
 }
 
+valid_ipv6_literal() {
+    printf '%s\n' "$1" | awk '
+      function group_ok(g) { return length(g) >= 1 && length(g) <= 4 && g ~ /^[0-9A-Fa-f]+$/ }
+      {
+        s=$0
+        if (s !~ /^[0-9A-Fa-f:]+$/ || s ~ /:::/) exit 1
+        d=index(s,"::")
+        n=0
+        if (d > 0) {
+          left=substr(s,1,d-1); right=substr(s,d+2)
+          if (index(right,"::") > 0) exit 1
+          if (left != "") { nl=split(left,a,":"); n+=nl; for(i=1;i<=nl;i++) if(!group_ok(a[i])) exit 1 }
+          if (right != "") { nr=split(right,b,":"); n+=nr; for(i=1;i<=nr;i++) if(!group_ok(b[i])) exit 1 }
+          if (n >= 8) exit 1
+        } else {
+          n=split(s,a,":")
+          if (n != 8) exit 1
+          for(i=1;i<=n;i++) if(!group_ok(a[i])) exit 1
+        }
+        exit 0
+      }
+    '
+}
+
 valid_ipv6_address() {
-    case "$1" in *:*) ;; *) return 1 ;; esac
+    valid_ipv6_literal "$1" || return 1
     command -v ip >/dev/null 2>&1 || return 1
     ip -6 route get "$1" >/dev/null 2>&1
 }
@@ -348,7 +396,9 @@ valid_port() {
 
 port_listening() {
     p=$1
-    ss -H -lnt 2>/dev/null | awk -v suffix=":$p" '$4 ~ (suffix "$") {found=1} END {exit !found}'
+    if ss -H -lnt 2>/dev/null | awk -v suffix=":$p" '$4 ~ (suffix "$") {found=1} END {exit !found}'; then return 0; fi
+    [ "${check_udp_port:-0}" = 1 ] &&
+        ss -H -lnu 2>/dev/null | awk -v suffix=":$p" '$4 ~ (suffix "$") {found=1} END {exit !found}'
 }
 
 random_between() {
@@ -436,43 +486,110 @@ requested_or_random_port() {
 
 assign_ports() {
     ANYTLS_PORT=$(normalize_optional_port "$ANYTLS_PORT" 'AnyTLS') || exit 1
+    SS2022_PORT=$(normalize_optional_port "$SS2022_PORT" 'Shadowsocks 2022') || exit 1
+    ARGO_PORT=$(normalize_optional_port "$ARGO_PORT" 'VLESS WS Argo') || exit 1
     WS_PORT=$(normalize_optional_port "$WS_PORT" 'VLESS WS TLS') || exit 1
     REALITY_PORT=$(normalize_optional_port "$REALITY_PORT" 'VLESS Reality') || exit 1
     NAIVE_PORT=$(normalize_optional_port "$NAIVE_PORT" 'NaiveProxy') || exit 1
     ANYREALITY_PORT=$(normalize_optional_port "$ANYREALITY_PORT" 'AnyTLS + Reality') || exit 1
 
-    set --
-    for item_port in "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"; do
-        [ -n "$item_port" ] || continue
-        case " $* " in *" $item_port "*) err '五种协议的端口不能重复。' ;; esac
-        manual_port_available "$item_port" "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" ||
-            err "TCP 端口 $item_port 已被其他程序占用。请更换端口后重试。"
-        set -- "$@" "$item_port"
-    done
-    set -- "$@" "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT"
+    [ "$ENABLE_ANYTLS" = 1 ] || ANYTLS_PORT=""
+    [ "$ENABLE_WS_TLS" = 1 ] || WS_PORT=""
+    [ "$ENABLE_WS_ARGO" = 1 ] || ARGO_PORT=""
+    [ "$ENABLE_SS2022" = 1 ] || SS2022_PORT=""
+    [ "$ENABLE_VLESS_REALITY" = 1 ] || REALITY_PORT=""
+    [ "$ENABLE_NAIVE" = 1 ] || NAIVE_PORT=""
+    [ "$ENABLE_ANYTLS_REALITY" = 1 ] || ANYREALITY_PORT=""
 
-    ANYTLS_PORT=$(requested_or_random_port "$ANYTLS_PORT" 'AnyTLS' "$@") || exit 1
-    WS_PORT=$(requested_or_random_port "$WS_PORT" 'VLESS WS TLS' "$@" "$ANYTLS_PORT") || exit 1
-    REALITY_PORT=$(requested_or_random_port "$REALITY_PORT" 'VLESS Reality' "$@" "$ANYTLS_PORT" "$WS_PORT") || exit 1
-    NAIVE_PORT=$(requested_or_random_port "$NAIVE_PORT" 'NaiveProxy' "$@" "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT") || exit 1
-    ANYREALITY_PORT=$(requested_or_random_port "$ANYREALITY_PORT" 'AnyTLS + Reality' "$@" "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT") || exit 1
-    msg "TCP 端口：AnyTLS=$ANYTLS_PORT，WS TLS=$WS_PORT，VLESS Reality=$REALITY_PORT，NaiveProxy=$NAIVE_PORT，AnyTLS Reality=$ANYREALITY_PORT"
+    used_ports=""
+    PORT_FALLBACK_USED=0
+    for protocol_name in 'AnyTLS' 'VLESS WS TLS' 'VLESS WS Argo' 'VLESS Reality' 'NaiveProxy' 'AnyTLS + Reality' 'Shadowsocks 2022'; do
+        case "$protocol_name" in
+            'AnyTLS') enabled=$ENABLE_ANYTLS; item_port=$ANYTLS_PORT ;;
+            'VLESS WS TLS') enabled=$ENABLE_WS_TLS; item_port=$WS_PORT ;;
+            'VLESS WS Argo') enabled=$ENABLE_WS_ARGO; item_port=$ARGO_PORT ;;
+            'Shadowsocks 2022') enabled=$ENABLE_SS2022; item_port=$SS2022_PORT ;;
+            'VLESS Reality') enabled=$ENABLE_VLESS_REALITY; item_port=$REALITY_PORT ;;
+            'NaiveProxy') enabled=$ENABLE_NAIVE; item_port=$NAIVE_PORT ;;
+            'AnyTLS + Reality') enabled=$ENABLE_ANYTLS_REALITY; item_port=$ANYREALITY_PORT ;;
+        esac
+        [ "$enabled" = 1 ] || continue
+
+        if [ -n "$item_port" ]; then
+            case " $used_ports " in
+                *" $item_port "*)
+                    warn "$protocol_name 指定端口 $item_port 与已选择协议重复；将自动随机分配。"
+                    item_port=""
+                    PORT_FALLBACK_USED=1
+                    ;;
+                *)
+                    if ! check_udp_port="$([ "$protocol_name" = 'Shadowsocks 2022' ] && printf 1 || printf 0)" manual_port_available "$item_port" \
+                        "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" \
+                        "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" "${PREVIOUS_ARGO_PORT:-}" "${PREVIOUS_SS2022_PORT:-}"; then
+                        warn "$protocol_name 指定 TCP 端口 $item_port 已被其他程序占用；将自动随机分配。"
+                        item_port=""
+                        PORT_FALLBACK_USED=1
+                    fi
+                    ;;
+            esac
+        fi
+
+        if [ -z "$item_port" ]; then
+            case "$protocol_name" in
+                'VLESS WS TLS') item_port=$(pick_random_ws_port $used_ports) || err 'WS TLS 无可用的 Cloudflare HTTPS 代理端口。' ;;
+                'Shadowsocks 2022') item_port=$(check_udp_port=1 pick_random_range_port 10000 65535 $used_ports) || err '无法为 Shadowsocks 2022 分配空闲 TCP/UDP 端口。' ;;
+                'VLESS WS Argo') item_port=$(pick_random_range_port 10000 65535 $used_ports) || err '无法为 Argo 本机 WS 分配空闲端口。' ;;
+                *) item_port=$(pick_random_range_port 10000 65535 $used_ports) || err "无法为 $protocol_name 分配可用端口。" ;;
+            esac
+        fi
+        used_ports="$used_ports $item_port"
+        case "$protocol_name" in
+            'AnyTLS') ANYTLS_PORT=$item_port ;;
+            'VLESS WS TLS') WS_PORT=$item_port ;;
+            'VLESS WS Argo') ARGO_PORT=$item_port ;;
+            'Shadowsocks 2022') SS2022_PORT=$item_port ;;
+            'VLESS Reality') REALITY_PORT=$item_port ;;
+            'NaiveProxy') NAIVE_PORT=$item_port ;;
+            'AnyTLS + Reality') ANYREALITY_PORT=$item_port ;;
+        esac
+    done
+
+    msg "已选择协议端口：AnyTLS=${ANYTLS_PORT:-未安装}，WS TLS=${WS_PORT:-未安装}，Argo=${ARGO_PORT:-未安装}，VLESS Reality=${REALITY_PORT:-未安装}，NaiveProxy=${NAIVE_PORT:-未安装}，AnyTLS Reality=${ANYREALITY_PORT:-未安装}，Shadowsocks 2022=${SS2022_PORT:-未安装}"
+    if [ "$PORT_FALLBACK_USED" -eq 1 ]; then
+        warn '至少一个手动端口发生冲突，已自动改用空闲随机端口。请检查 NAT 映射和防火墙。'
+    fi
 }
 
 ask_ports() {
     msg 'TCP 端口可留空随机分配；手动填写时可用范围为 1024–65535。'
-    msg 'NAT VPS 请填写服务商分配的可用端口。Cloudflare 橙云代理请为 WS TLS 填写 2053、2083、2087、2096 或 8443。'
-
-    ask_value 'AnyTLS TCP 端口（留空随机选 10000–65535）' ''
-    ANYTLS_PORT=$REPLY
-    ask_value 'VLESS WS TLS TCP 端口（留空随机选 2053/2083/2087/2096/8443）' ''
-    WS_PORT=$REPLY
-    ask_value 'VLESS Reality TCP 端口（留空随机选 10000–65535）' ''
-    REALITY_PORT=$REPLY
-    ask_value 'NaiveProxy TCP 端口（留空随机选 10000–65535）' ''
-    NAIVE_PORT=$REPLY
-    ask_value 'AnyTLS + Reality TCP 端口（留空随机选 10000–65535）' ''
-    ANYREALITY_PORT=$REPLY
+    if [ "$ENABLE_ANYTLS" = 1 ]; then
+        ask_value 'AnyTLS TCP 端口（留空随机选 10000–65535）' "${ANYTLS_PORT:-}"
+        ANYTLS_PORT=$REPLY
+    else ANYTLS_PORT=""; fi
+    if [ "$ENABLE_WS_TLS" = 1 ]; then
+        ask_value '直连 VLESS WS TLS TCP 端口（留空自动分配 Cloudflare 支持端口）' "${WS_PORT:-}"
+        WS_PORT=$REPLY
+    else WS_PORT=""; fi
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        ask_value 'Argo 本机 WS 端口（留空自动分配；无需公网入站）' "$ARGO_PORT"
+        ARGO_PORT=$REPLY
+    else ARGO_PORT=""; fi
+    if [ "$ENABLE_SS2022" = 1 ]; then
+        ask_value 'Shadowsocks 2022 TCP/UDP 端口（留空自动分配）' "$SS2022_PORT"
+        SS2022_PORT=$REPLY
+    else SS2022_PORT=""; fi
+    if [ "$ENABLE_VLESS_REALITY" = 1 ]; then
+        ask_value 'VLESS Reality TCP 端口（留空随机选 10000–65535）' "${REALITY_PORT:-}"
+        REALITY_PORT=$REPLY
+    else REALITY_PORT=""; fi
+    if [ "$ENABLE_NAIVE" = 1 ]; then
+        ask_value 'NaiveProxy TCP 端口（留空随机选 10000–65535）' "${NAIVE_PORT:-}"
+        NAIVE_PORT=$REPLY
+    else NAIVE_PORT=""; fi
+    if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+        ask_value 'AnyTLS + Reality TCP 端口（留空随机选 10000–65535）' "${ANYREALITY_PORT:-}"
+        ANYREALITY_PORT=$REPLY
+    else ANYREALITY_PORT=""; fi
 }
 
 ipv6_kernel_enabled() {
@@ -523,28 +640,136 @@ ask_secret() {
     fi
 }
 
+write_argo_token_file() {
+    token_value=$1
+    valid_argo_token "$token_value" || return 1
+    [ -d "$APP_DIR" ] || return 1
+    grep -q '^sing-box:' /etc/group 2>/dev/null || return 1
+    token_old_umask=$(umask)
+    umask 077
+    token_tmp=$(mktemp "$APP_DIR/.cloudflared.token.XXXXXX") || {
+        umask "$token_old_umask"
+        return 1
+    }
+    if ! printf '%s' "$token_value" > "$token_tmp"; then
+        rm -f "$token_tmp"
+        umask "$token_old_umask"
+        return 1
+    fi
+    if ! chown root:sing-box "$token_tmp" || ! chmod 0640 "$token_tmp" || ! mv -f "$token_tmp" "$ARGO_TOKEN_FILE"; then
+        rm -f "$token_tmp"
+        umask "$token_old_umask"
+        return 1
+    fi
+    umask "$token_old_umask"
+    return 0
+}
+
+sing_box_version_from() {
+    candidate_bin=$1
+    [ -x "$candidate_bin" ] || return 1
+    version_line=$("$candidate_bin" version 2>/dev/null | sed -n '1p' || true)
+    printf '%s\n' "$version_line" |
+        sed -n 's/.*version[[:space:]]*v\{0,1\}\([0-9][0-9.]*\).*/\1/p'
+}
+
+version_supports_naive() {
+    [ -n "${1:-}" ] || return 1
+    awk -v v="$1" 'BEGIN {
+        n = split(v, a, ".");
+        if (n < 2) exit 1;
+        major = a[1] + 0;
+        minor = a[2] + 0;
+        if (major > 1 || (major == 1 && minor >= 13)) exit 0;
+        exit 1;
+    }'
+}
+
+resolve_sing_box_binary() {
+    # Prefer the upstream binary installed under /usr/local/bin. On Alpine,
+    # an older APK binary may still exist under /usr/bin after fallback.
+    if [ -x /usr/local/bin/sing-box ]; then
+        printf '%s\n' /usr/local/bin/sing-box
+        return 0
+    fi
+    command -v sing-box 2>/dev/null
+}
+
+install_alpine_official_release() {
+    msg 'Alpine 仓库中的 sing-box 不存在或版本低于 1.13.0，改用 sing-box 官方 Linux 发布版……'
+    if ! release_json=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest); then
+        err '无法访问 GitHub Releases API；请检查 VPS 网络后重试。'
+    fi
+    tag=$(printf '%s\n' "$release_json" | jq -r '.tag_name // empty') ||
+        err '无法解析 GitHub 最新 sing-box 版本信息。'
+    case "$tag" in ''|null) err 'GitHub 未返回 sing-box 最新版本号。' ;; esac
+    ver=${tag#v}
+    case "$(uname -m)" in
+        x86_64) rel_arch=amd64 ;;
+        aarch64) rel_arch=arm64 ;;
+        armv7l|armv7) rel_arch=armv7 ;;
+        *) err "暂不支持此 Alpine CPU 架构：$(uname -m)" ;;
+    esac
+    archive="sing-box-${ver}-linux-${rel_arch}.tar.gz"
+    unpack_dir=$(mktemp -d /tmp/sing-box-unpack.XXXXXX) || err '无法创建 sing-box 临时解压目录。'
+    if ! curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "/tmp/${archive}"; then
+        rm -rf "$unpack_dir" "/tmp/${archive}"
+        err "下载 sing-box 官方发布版失败（${archive}）；请检查 GitHub 网络连接后重试。"
+    fi
+    if ! tar -xzf "/tmp/${archive}" -C "$unpack_dir"; then
+        rm -rf "$unpack_dir" "/tmp/${archive}"
+        err '解压 sing-box 官方发布版失败。'
+    fi
+    mkdir -p /usr/local/bin
+    if ! install -m 0755 "$unpack_dir/sing-box-${ver}-linux-${rel_arch}/sing-box" /usr/local/bin/sing-box; then
+        rm -rf "$unpack_dir" "/tmp/${archive}"
+        err '安装 sing-box 官方 Linux 二进制文件失败。'
+    fi
+    rm -rf "$unpack_dir" "/tmp/${archive}"
+
+    # Pin the manager/service to the official binary explicitly. Do not let an
+    # older /usr/bin/sing-box from Alpine's APK package shadow this version.
+    SB_BIN=/usr/local/bin/sing-box
+    release_version=$(sing_box_version_from "$SB_BIN" || true)
+    version_supports_naive "$release_version" ||
+        err "官方发布版版本检查失败（检测到：${release_version:-无法识别}）；NaiveProxy 需要 sing-box 1.13.0 或更新版本。"
+    msg "已安装官方 sing-box：$release_version（满足 NaiveProxy 最低版本要求）。"
+}
+
 install_dependencies_and_core() {
     if [ -f /etc/alpine-release ]; then
         OS_FAMILY=alpine
         msg '检测到 Alpine Linux，安装 sing-box 和依赖……'
         apk update
         apk add --no-cache ca-certificates curl jq openssl iproute2 tar gzip kmod
-        if ! apk add --no-cache sing-box; then
-            warn '当前 Alpine 仓库没有 sing-box 包，尝试安装官方 Linux 发布版。'
-            tag=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r '.tag_name')
-            ver=${tag#v}
-            case "$(uname -m)" in
-                x86_64) rel_arch=amd64 ;;
-                aarch64) rel_arch=arm64 ;;
-                armv7l|armv7) rel_arch=armv7 ;;
-                *) err "暂不支持此 Alpine CPU 架构：$(uname -m)" ;;
-            esac
-            archive="sing-box-${ver}-linux-${rel_arch}.tar.gz"
-            curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "/tmp/${archive}"
-            mkdir -p /tmp/sing-box-unpack
-            tar -xzf "/tmp/${archive}" -C /tmp/sing-box-unpack
-            install -m 0755 "/tmp/sing-box-unpack/sing-box-${ver}-linux-${rel_arch}/sing-box" /usr/local/bin/sing-box
-            rm -rf "/tmp/${archive}" /tmp/sing-box-unpack
+
+        # Some Alpine repositories provide sing-box, but older branches may
+        # package a release below 1.13.0. Naive inbound requires >= 1.13.0.
+        # Install the APK when available, inspect its actual binary version,
+        # and fall back to the upstream release whenever it is absent, broken,
+        # or too old.
+        if apk search -x sing-box 2>/dev/null | grep -q .; then
+            if ! apk add --no-cache sing-box; then
+                warn 'Alpine sing-box APK 安装失败；将尝试官方 Linux 发布版。'
+            fi
+        fi
+
+        candidate_bin=$(command -v sing-box 2>/dev/null || true)
+        candidate_version=""
+        if [ -n "$candidate_bin" ]; then
+            candidate_version=$(sing_box_version_from "$candidate_bin" || true)
+        fi
+
+        if [ -n "$candidate_bin" ] && version_supports_naive "$candidate_version"; then
+            SB_BIN=$candidate_bin
+            msg "使用 Alpine 仓库 sing-box：$candidate_version（满足 NaiveProxy 最低版本要求）。"
+        else
+            if [ -n "$candidate_bin" ]; then
+                warn "Alpine 仓库提供的 sing-box 版本为 ${candidate_version:-无法识别}，低于 NaiveProxy 所需的 1.13.0；自动切换到官方新版。"
+            else
+                warn 'Alpine 仓库没有可用的 sing-box 二进制；自动切换到官方新版。'
+            fi
+            install_alpine_official_release
         fi
         update-ca-certificates 2>/dev/null || true
     elif [ -f /etc/debian_version ]; then
@@ -565,26 +790,22 @@ Signed-By: /etc/apt/keyrings/sagernet.asc
 APT_EOF
         apt-get update
         DEBIAN_FRONTEND=noninteractive apt-get install -y sing-box
+        SB_BIN="$(command -v sing-box 2>/dev/null || true)"
     else
         err '仅支持 Debian 和 Alpine Linux。'
     fi
-    command -v sing-box >/dev/null 2>&1 || err 'sing-box 安装失败。请确认系统仓库可用。'
-    SB_BIN="$(command -v sing-box)"
+
+    [ -n "$SB_BIN" ] && [ -x "$SB_BIN" ] ||
+        err 'sing-box 安装失败：没有找到可执行文件。请检查软件源或网络后重试。'
     "$SB_BIN" version | head -n 1 || true
     require_naive_version
 }
 
 require_naive_version() {
-    version_line=$("$SB_BIN" version 2>/dev/null | head -n 1 || true)
-    version=$(printf '%s\n' "$version_line" | sed -n 's/.*version[[:space:]]*v\{0,1\}\([0-9][0-9.]*\).*/\1/p')
+    version=$(sing_box_version_from "$SB_BIN" || true)
     [ -n "$version" ] || err '无法读取 sing-box 版本，无法确认 Naive 入站兼容性。'
-    awk -v v="$version" 'BEGIN {
-        split(v, a, ".");
-        major = a[1] + 0;
-        minor = a[2] + 0;
-        if (major > 1 || (major == 1 && minor >= 13)) exit 0;
-        exit 1;
-    }' || err "当前 sing-box 版本 $version 过旧；NaiveProxy 入站需要 sing-box 1.13.0 或更新版本。"
+    version_supports_naive "$version" ||
+        err "当前 sing-box 版本 $version 过旧；NaiveProxy 入站需要 sing-box 1.13.0 或更新版本。"
 }
 
 ensure_service_account() {
@@ -655,17 +876,16 @@ service_restart() {
         systemctl restart sing-box
     elif [ "$SERVICE_KIND" = openrc ]; then
         rc-service sing-box restart >/dev/null 2>&1 || rc-service sing-box start
-    else
-        err '服务管理器尚未初始化。'
+    else err '服务管理器尚未初始化。'; fi
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        start_cloudflared_service || warn 'sing-box 已重启，但 Cloudflare Tunnel 重启失败。'
     fi
 }
 
 service_status() {
-    if [ "$SERVICE_KIND" = systemd ]; then
-        systemctl --no-pager --full status sing-box || true
-    elif [ "$SERVICE_KIND" = openrc ]; then
-        rc-service sing-box status || true
-    fi
+    if [ "$SERVICE_KIND" = systemd ]; then systemctl --no-pager --full status sing-box || true
+    elif [ "$SERVICE_KIND" = openrc ]; then rc-service sing-box status || true; fi
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then cloudflared_status; fi
 }
 
 setup_reload_hook() {
@@ -880,6 +1100,7 @@ check_cert_pair() {
     openssl x509 -in "$cert" -noout >/dev/null 2>&1 || { warn '证书 PEM 格式无效。'; return 1; }
     openssl pkey -in "$key" -noout >/dev/null 2>&1 || { warn '私钥 PEM 格式无效或带有不受支持的口令。'; return 1; }
     openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1 || { warn "证书不包含域名 $domain。"; return 1; }
+    openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || { warn "证书已过期：$domain。"; return 1; }
     cert_pub=$(openssl x509 -in "$cert" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum | awk '{print $1}') || return 1
     key_pub=$(openssl pkey -in "$key" -pubout -outform DER | sha256sum | awk '{print $1}') || return 1
     [ "$cert_pub" = "$key_pub" ] || { warn '证书和私钥不匹配。'; return 1; }
@@ -901,14 +1122,162 @@ install_manual_cert() {
     CERT_MODE=manual
 }
 
+cloudflared_supports_token_file() {
+    cf_candidate=$1
+    cf_version=$("$cf_candidate" --version 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="version") {print $(i+1); exit}}' | sed 's/[^0-9.].*$//')
+    [ -n "$cf_version" ] || return 1
+    awk -F. -v v="$cf_version" 'BEGIN {
+        n=split(v,a,"."); if(n<2) exit 1;
+        year=a[1]+0; minor=a[2]+0;
+        if(year>2025 || (year==2025 && minor>=4)) exit 0;
+        exit 1;
+    }'
+}
+
+install_cloudflared() {
+    if [ -x "$CLOUDFLARED_BIN" ] && cloudflared_supports_token_file "$CLOUDFLARED_BIN"; then
+        return 0
+    fi
+    existing_cf=$(command -v cloudflared 2>/dev/null || true)
+    if [ -n "$existing_cf" ] && [ -x "$existing_cf" ] && cloudflared_supports_token_file "$existing_cf"; then
+        CLOUDFLARED_BIN=$existing_cf
+        msg "使用系统已有 cloudflared：$CLOUDFLARED_BIN"
+        return 0
+    fi
+
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64) asset=cloudflared-linux-amd64 ;;
+        aarch64|arm64) asset=cloudflared-linux-arm64 ;;
+        armv7l|armv6l) asset=cloudflared-linux-arm ;;
+        *) err "暂不支持自动安装 cloudflared 的 CPU 架构：$arch" ;;
+    esac
+    if [ "$OS_FAMILY" = alpine ]; then apk add --no-cache gcompat >/dev/null 2>&1 || true; fi
+    install -d -m 0755 /usr/local/libexec/sb-manager
+    tmp_cf=$(mktemp)
+    if ! curl -fL --retry 3 --connect-timeout 15 --max-time 180 \
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/$asset" -o "$tmp_cf"; then
+        rm -f "$tmp_cf"
+        err '下载 cloudflared 官方发布版失败；请检查 VPS 出站网络后重试。'
+    fi
+    chmod 0755 "$tmp_cf"
+    if ! cloudflared_supports_token_file "$tmp_cf"; then
+        rm -f "$tmp_cf"
+        err '下载的 cloudflared 版本无法运行或低于 2025.4.0（不支持安全的 --token-file）。'
+    fi
+    install -m 0755 "$tmp_cf" "$CLOUDFLARED_BIN"
+    rm -f "$tmp_cf"
+    printf 'managed-by-sb-manager\n' > "$APP_DIR/cloudflared-managed"
+    chmod 0600 "$APP_DIR/cloudflared-managed"
+    msg "cloudflared 已安装：$CLOUDFLARED_BIN ($arch)"
+}
+
+create_cloudflared_service() {
+    [ -s "$ARGO_TOKEN_FILE" ] || err "Cloudflare Tunnel Token 文件不存在：$ARGO_TOKEN_FILE"
+    cat > "$CLOUDFLARED_RUN" <<EOF_RUN
+#!/bin/sh
+set -eu
+TOKEN_FILE='$ARGO_TOKEN_FILE'
+[ -s "\$TOKEN_FILE" ] || { echo 'Cloudflare Tunnel Token 文件不存在。' >&2; exit 1; }
+exec '$CLOUDFLARED_BIN' tunnel --no-autoupdate run --token-file "\$TOKEN_FILE"
+EOF_RUN
+    chown root:sing-box "$CLOUDFLARED_RUN"
+    chmod 0750 "$CLOUDFLARED_RUN"
+
+    if [ "$SERVICE_KIND" = systemd ]; then
+        cat > "/etc/systemd/system/$CLOUDFLARED_SERVICE.service" <<EOF_CF_SERVICE
+[Unit]
+Description=Cloudflare Tunnel for sing-box VLESS WS
+Wants=network-online.target
+After=network-online.target sing-box.service
+
+[Service]
+Type=simple
+User=sing-box
+Group=sing-box
+ExecStart=$CLOUDFLARED_RUN
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+EOF_CF_SERVICE
+        systemctl daemon-reload
+        systemctl enable "$CLOUDFLARED_SERVICE" >/dev/null
+    elif [ "$SERVICE_KIND" = openrc ]; then
+        cat > "/etc/init.d/$CLOUDFLARED_SERVICE" <<EOF_CF_SERVICE
+#!/sbin/openrc-run
+description="Cloudflare Tunnel for sing-box VLESS WS"
+command="$CLOUDFLARED_RUN"
+command_user="sing-box:sing-box"
+command_background="yes"
+pidfile="/run/$CLOUDFLARED_SERVICE.pid"
+
+depend() {
+    need net
+    after sing-box
+}
+EOF_CF_SERVICE
+        chmod 0755 "/etc/init.d/$CLOUDFLARED_SERVICE"
+        rc-update add "$CLOUDFLARED_SERVICE" default >/dev/null 2>&1 || true
+    else
+        err '无法识别 systemd / OpenRC，不能创建 Cloudflare Tunnel 服务。'
+    fi
+}
+
+start_cloudflared_service() {
+    [ -s "$ARGO_TOKEN_FILE" ] || return 1
+    if [ "$SERVICE_KIND" = systemd ]; then
+        systemctl restart "$CLOUDFLARED_SERVICE" 2>/dev/null || systemctl start "$CLOUDFLARED_SERVICE"
+    elif [ "$SERVICE_KIND" = openrc ]; then
+        rc-service "$CLOUDFLARED_SERVICE" restart >/dev/null 2>&1 || rc-service "$CLOUDFLARED_SERVICE" start
+    else return 1; fi
+}
+
+cloudflared_status() {
+    msg '========== Cloudflare 固定 Tunnel 状态 =========='
+    printf 'Tunnel 备注：%s\n' "${ARGO_TUNNEL_NAME:-未设置}"
+    printf 'Public Hostname：%s\n' "${ARGO_HOST:-未设置}"
+    if [ -s "$ARGO_TOKEN_FILE" ]; then
+        token_meta=$(stat -c '%a %U:%G' "$ARGO_TOKEN_FILE" 2>/dev/null || ls -l "$ARGO_TOKEN_FILE" 2>/dev/null || true)
+        printf 'Tunnel Token：已配置（内容隐藏；权限：%s）\n' "${token_meta:-未知}"
+    else
+        printf 'Tunnel Token：缺失\n'
+    fi
+    if [ -x "$CLOUDFLARED_BIN" ]; then
+        "$CLOUDFLARED_BIN" --version 2>/dev/null | sed -n '1p' || true
+    fi
+    if [ "$SERVICE_KIND" = systemd ]; then
+        systemctl --no-pager --full status "$CLOUDFLARED_SERVICE" 2>/dev/null || true
+    elif [ "$SERVICE_KIND" = openrc ]; then
+        rc-service "$CLOUDFLARED_SERVICE" status 2>/dev/null || true
+    else
+        warn '尚未识别 systemd / OpenRC。'
+    fi
+    msg '提示：服务进程 active 不等于 Cloudflare 控制台已 Healthy；最终请检查 Tunnel 的 Connector 状态。'
+}
+
 save_state() {
     tmp="$STATE_FILE.tmp.$$"
-    jq -n \
+    if ! jq -n \
       --arg origin_addr "$ORIGIN_ADDR" \
       --arg origin_ipv6 "$ORIGIN_IPV6" \
       --arg preferred_ip "$PREFERRED_IP" \
       --arg preferred_ipv6 "$PREFERRED_IPV6" \
       --arg ws_server "$WS_SERVER" \
+      --arg enable_ss2022 "$ENABLE_SS2022" \
+      --arg ss2022_port "$SS2022_PORT" \
+      --arg ss2022_password "$SS2022_PASSWORD" \
+      --arg enable_ws_argo "$ENABLE_WS_ARGO" \
+      --arg argo_port "$ARGO_PORT" \
+      --arg argo_server "$ARGO_SERVER" \
+      --arg argo_uuid "$ARGO_UUID" \
+      --arg argo_path "$ARGO_PATH" \
+      --arg argo_host "$ARGO_HOST" \
+      --arg argo_tunnel_name "$ARGO_TUNNEL_NAME" \
       --arg tls_domain "$TLS_DOMAIN" \
       --arg ws_host "$WS_HOST" \
       --arg reality_sni "$REALITY_SNI" \
@@ -935,10 +1304,22 @@ save_state() {
       --arg cert_mode "$CERT_MODE" \
       --arg cf_zone_name "$CF_ZONE_NAME" \
       --arg node_label "$NODE_LABEL" \
-      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,anytls_port:($anytls_port|tonumber),ws_port:($ws_port|tonumber),reality_port:($reality_port|tonumber),naive_port:($naive_port|tonumber),anyreality_port:($anyreality_port|tonumber),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"
-    chmod 0600 "$tmp"
-    chown root:root "$tmp"
-    mv "$tmp" "$STATE_FILE"
+      --arg enable_anytls "$ENABLE_ANYTLS" \
+      --arg enable_ws_tls "$ENABLE_WS_TLS" \
+      --arg enable_vless_reality "$ENABLE_VLESS_REALITY" \
+      --arg enable_naive "$ENABLE_NAIVE" \
+      --arg enable_anytls_reality "$ENABLE_ANYTLS_REALITY" \
+      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,enabled_ws_argo:($enable_ws_argo=="1"),enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_password:$ss2022_password,argo_port:(if $enable_ws_argo=="1" then ($argo_port|tonumber) else null end),argo_server:$argo_server,argo_uuid:$argo_uuid,argo_path:$argo_path,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label}' > "$tmp"; then
+        rm -f "$tmp"
+        warn '无法生成 manager.json；原有管理状态未更改。'
+        return 1
+    fi
+    if ! chmod 0600 "$tmp" || ! chown root:root "$tmp" || ! mv "$tmp" "$STATE_FILE"; then
+        rm -f "$tmp"
+        warn '无法安全写入 manager.json；原有管理状态未更改。'
+        return 1
+    fi
+    return 0
 }
 
 load_state() {
@@ -948,15 +1329,32 @@ load_state() {
     PREFERRED_IP=$(jq -r '.preferred_ip // ""' "$STATE_FILE")
     PREFERRED_IPV6=$(jq -r '.preferred_ipv6 // ""' "$STATE_FILE")
     WS_SERVER=$(jq -r '.ws_server // ""' "$STATE_FILE")
-    if [ -z "$WS_SERVER" ]; then
-        if [ -n "$PREFERRED_IP" ]; then WS_SERVER=$PREFERRED_IP; else WS_SERVER=$PREFERRED_IPV6; fi
-    fi
-    TLS_DOMAIN=$(jq -r '.tls_domain' "$STATE_FILE")
-    WS_HOST=$(jq -r '.ws_host' "$STATE_FILE")
+    TLS_DOMAIN=$(jq -r '.tls_domain // ""' "$STATE_FILE")
+    WS_HOST=$(jq -r '.ws_host // ""' "$STATE_FILE")
     REALITY_SNI=$(jq -r '.reality_sni // "www.bing.com"' "$STATE_FILE")
-    ANYTLS_PORT=$(jq -r '.anytls_port' "$STATE_FILE")
-    WS_PORT=$(jq -r '.ws_port' "$STATE_FILE")
-    REALITY_PORT=$(jq -r '.reality_port' "$STATE_FILE")
+    ENABLE_ANYTLS=$(jq -r 'if has("enabled_anytls") then (if .enabled_anytls then "1" else "0" end) else "1" end' "$STATE_FILE")
+    ENABLE_WS_TLS=$(jq -r 'if has("enabled_ws_tls") then (if .enabled_ws_tls then "1" else "0" end) else "1" end' "$STATE_FILE")
+    ENABLE_VLESS_REALITY=$(jq -r 'if has("enabled_vless_reality") then (if .enabled_vless_reality then "1" else "0" end) else "1" end' "$STATE_FILE")
+    ENABLE_NAIVE=$(jq -r 'if has("enabled_naive") then (if .enabled_naive then "1" else "0" end) else "1" end' "$STATE_FILE")
+    ENABLE_ANYTLS_REALITY=$(jq -r 'if has("enabled_anytls_reality") then (if .enabled_anytls_reality then "1" else "0" end) else "1" end' "$STATE_FILE")
+    ENABLE_SS2022=$(jq -r 'if .enabled_ss2022 == true then "1" else "0" end' "$STATE_FILE")
+    SS2022_PORT=$(jq -r '.ss2022_port // ""' "$STATE_FILE")
+    SS2022_PASSWORD=$(jq -r '.ss2022_password // ""' "$STATE_FILE")
+    ENABLE_WS_ARGO=$(jq -r 'if .enabled_ws_argo == true then "1" else "0" end' "$STATE_FILE")
+    ARGO_PORT=$(jq -r '.argo_port // ""' "$STATE_FILE")
+    ARGO_SERVER=$(jq -r '.argo_server // ""' "$STATE_FILE")
+    ARGO_UUID=$(jq -r '.argo_uuid // ""' "$STATE_FILE")
+    ARGO_PATH=$(jq -r '.argo_path // ""' "$STATE_FILE")
+    ARGO_HOST=$(jq -r '.argo_host // ""' "$STATE_FILE")
+    ARGO_TUNNEL_NAME=$(jq -r '.argo_tunnel_name // ""' "$STATE_FILE")
+    if [ -z "$WS_SERVER" ]; then
+        if [ -n "$PREFERRED_IP" ]; then WS_SERVER=$PREFERRED_IP
+        elif [ -n "$PREFERRED_IPV6" ]; then WS_SERVER=$PREFERRED_IPV6
+        else WS_SERVER=$TLS_DOMAIN; fi
+    fi
+    ANYTLS_PORT=$(jq -r '.anytls_port // ""' "$STATE_FILE")
+    WS_PORT=$(jq -r '.ws_port // ""' "$STATE_FILE")
+    REALITY_PORT=$(jq -r '.reality_port // ""' "$STATE_FILE")
     NAIVE_PORT=$(jq -r '.naive_port // ""' "$STATE_FILE")
     NAIVE_USERNAME=$(jq -r '.naive_username // ""' "$STATE_FILE")
     NAIVE_PASSWORD=$(jq -r '.naive_password // ""' "$STATE_FILE")
@@ -965,34 +1363,64 @@ load_state() {
     ANYREALITY_PRIVATE=$(jq -r '.anyreality_private // ""' "$STATE_FILE")
     ANYREALITY_PUBLIC=$(jq -r '.anyreality_public // ""' "$STATE_FILE")
     ANYREALITY_SID=$(jq -r '.anyreality_sid // ""' "$STATE_FILE")
-    ANYTLS_PASSWORD=$(jq -r '.anytls_password' "$STATE_FILE")
-    WS_UUID=$(jq -r '.ws_uuid' "$STATE_FILE")
-    REALITY_UUID=$(jq -r '.reality_uuid' "$STATE_FILE")
-    REALITY_PRIVATE=$(jq -r '.reality_private' "$STATE_FILE")
-    REALITY_PUBLIC=$(jq -r '.reality_public' "$STATE_FILE")
-    REALITY_SID=$(jq -r '.reality_sid' "$STATE_FILE")
-    WS_PATH=$(jq -r '.ws_path' "$STATE_FILE")
-    CERT_FILE=$(jq -r '.cert_file' "$STATE_FILE")
-    KEY_FILE=$(jq -r '.key_file' "$STATE_FILE")
-    CERT_MODE=$(jq -r '.cert_mode' "$STATE_FILE")
+    ANYTLS_PASSWORD=$(jq -r '.anytls_password // ""' "$STATE_FILE")
+    WS_UUID=$(jq -r '.ws_uuid // ""' "$STATE_FILE")
+    REALITY_UUID=$(jq -r '.reality_uuid // ""' "$STATE_FILE")
+    REALITY_PRIVATE=$(jq -r '.reality_private // ""' "$STATE_FILE")
+    REALITY_PUBLIC=$(jq -r '.reality_public // ""' "$STATE_FILE")
+    REALITY_SID=$(jq -r '.reality_sid // ""' "$STATE_FILE")
+    WS_PATH=$(jq -r '.ws_path // ""' "$STATE_FILE")
+    CERT_FILE=$(jq -r '.cert_file // ""' "$STATE_FILE")
+    KEY_FILE=$(jq -r '.key_file // ""' "$STATE_FILE")
+    CERT_MODE=$(jq -r '.cert_mode // "none"' "$STATE_FILE")
     CF_ZONE_NAME=$(jq -r '.cf_zone_name // ""' "$STATE_FILE")
     NODE_LABEL=$(jq -r '.node_label // ""' "$STATE_FILE")
+    if [ "$ENABLE_WS_TLS" = 1 ] && jq -e 'has("enabled_ws_argo") | not' "$STATE_FILE" >/dev/null &&
+        [ "$(jq -r '.ws_mode // "direct"' "$STATE_FILE")" = argo ]; then
+        legacy_ws_server=$(jq -r '.ws_server // ""' "$STATE_FILE")
+        migrate_legacy_argo
+    fi
+    [ "$ENABLE_WS_TLS" = 1 ] || { WS_SERVER=""; WS_HOST=""; }
+    [ "$ENABLE_WS_ARGO" = 0 ] || ARGO_SERVER=${ARGO_SERVER:-$ARGO_HOST}
+    [ -s "$ARGO_TOKEN_FILE" ] && ARGO_TOKEN=$(cat "$ARGO_TOKEN_FILE") || ARGO_TOKEN=""
+}
+
+migrate_legacy_argo() {
+    ENABLE_WS_TLS=0
+    ENABLE_WS_ARGO=1
+    ARGO_SERVER=${legacy_ws_server:-${PREFERRED_IP:-${PREFERRED_IPV6:-$ARGO_HOST}}}
+    ARGO_PORT=$WS_PORT
+    ARGO_UUID=${WS_UUID:-}
+    ARGO_PATH=${WS_PATH:-}
+    WS_SERVER=""; WS_HOST=""; WS_PORT=""; WS_UUID=""; WS_PATH=""
+    PREFERRED_IP=""; PREFERRED_IPV6=""
+}
+
+derive_runtime_needs() {
+    NEED_CERT=0
+    NEED_ORIGIN=0
+    [ "$ENABLE_ANYTLS" = 1 ] && NEED_CERT=1 && NEED_ORIGIN=1
+    [ "$ENABLE_NAIVE" = 1 ] && NEED_CERT=1 && NEED_ORIGIN=1
+    [ "$ENABLE_VLESS_REALITY" = 1 ] && NEED_ORIGIN=1
+    [ "$ENABLE_ANYTLS_REALITY" = 1 ] && NEED_ORIGIN=1
+    [ "$ENABLE_SS2022" = 1 ] && NEED_ORIGIN=1
+    if [ "$ENABLE_WS_TLS" = 1 ]; then NEED_CERT=1; fi
 }
 
 build_config() {
     tmp="$CONFIG_FILE.tmp.$$"
-    if ipv6_kernel_enabled; then
-        # sing-box uses the generic TCP network for the IPv6 unspecified address.
-        # On Linux/Go this creates a dual-stack wildcard listener (IPv4-mapped + IPv6)
-        # when the kernel supports IPv4-mapped IPv6 sockets.
-        listen_addr="::"
-        msg 'IPv6 内核已启用：使用 :: 通配监听，支持 IPv4 + IPv6 双栈。'
-    else
-        listen_addr="0.0.0.0"
-        warn '系统内核未启用 IPv6，当前配置只能监听 IPv4。若需要双栈，请先在 VPS 系统/内核中启用 IPv6。'
-    fi
+    if ipv6_kernel_enabled; then listen_addr="::"; else listen_addr="0.0.0.0"; fi
+
     jq -n \
       --arg listen_addr "$listen_addr" \
+      --arg ss2022_port "$SS2022_PORT" \
+      --arg ss2022_method "$SS2022_METHOD" \
+      --arg ss2022_password "$SS2022_PASSWORD" \
+      --argjson enable_ss2022 "$([ "$ENABLE_SS2022" = 1 ] && printf true || printf false)" \
+      --arg argo_port "$ARGO_PORT" \
+      --arg argo_uuid "$ARGO_UUID" \
+      --arg argo_path "$ARGO_PATH" \
+      --argjson enable_ws_argo "$([ "$ENABLE_WS_ARGO" = 1 ] && printf true || printf false)" \
       --arg tls_domain "$TLS_DOMAIN" \
       --arg reality_sni "$REALITY_SNI" \
       --arg cert_file "$CERT_FILE" \
@@ -1013,30 +1441,66 @@ build_config() {
       --arg anyreality_password "$ANYREALITY_PASSWORD" \
       --arg anyreality_private "$ANYREALITY_PRIVATE" \
       --arg anyreality_sid "$ANYREALITY_SID" \
+      --argjson enable_anytls "$([ "$ENABLE_ANYTLS" = 1 ] && printf true || printf false)" \
+      --argjson enable_ws_tls "$([ "$ENABLE_WS_TLS" = 1 ] && printf true || printf false)" \
+      --argjson enable_vless_reality "$([ "$ENABLE_VLESS_REALITY" = 1 ] && printf true || printf false)" \
+      --argjson enable_naive "$([ "$ENABLE_NAIVE" = 1 ] && printf true || printf false)" \
+      --argjson enable_anytls_reality "$([ "$ENABLE_ANYTLS_REALITY" = 1 ] && printf true || printf false)" \
       '{log:{level:"info",timestamp:true},inbounds:[
-        {type:"anytls",tag:"anytls-in",listen:$listen_addr,listen_port:($anytls_port|tonumber),users:[{name:"primary",password:$anytls_password}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file}},
-        {type:"vless",tag:"vless-ws-tls-in",listen:$listen_addr,listen_port:($ws_port|tonumber),users:[{uuid:$ws_uuid}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file},transport:{type:"ws",path:$ws_path}},
-        {type:"vless",tag:"vless-reality-in",listen:$listen_addr,listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}},
-        {type:"naive",tag:"naive-in",network:"tcp",listen:$listen_addr,listen_port:($naive_port|tonumber),users:[{username:$naive_username,password:$naive_password}],tls:{enabled:true,certificate_path:$cert_file,key_path:$key_file}},
-        {type:"anytls",tag:"anytls-reality-in",listen:$listen_addr,listen_port:($anyreality_port|tonumber),users:[{name:"primary",password:$anyreality_password}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$anyreality_private,short_id:[$anyreality_sid]}}}
-      ],outbounds:[{type:"direct",tag:"direct"}]}' > "$tmp"
+        (if $enable_anytls then {type:"anytls",tag:"anytls-in",listen:$listen_addr,listen_port:($anytls_port|tonumber),users:[{name:"primary",password:$anytls_password}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file}} else empty end),
+        (if $enable_ws_tls then {type:"vless",tag:"vless-ws-tls-in",listen:$listen_addr,listen_port:($ws_port|tonumber),users:[{uuid:$ws_uuid}],tls:{enabled:true,server_name:$tls_domain,certificate_path:$cert_file,key_path:$key_file},transport:{type:"ws",path:$ws_path}} else empty end),
+        (if $enable_ss2022 then {type:"shadowsocks",tag:"ss2022-in",listen:$listen_addr,listen_port:($ss2022_port|tonumber),method:$ss2022_method,password:$ss2022_password} else empty end),
+        (if $enable_ws_argo then {type:"vless",tag:"vless-ws-argo-in",listen:"127.0.0.1",listen_port:($argo_port|tonumber),users:[{name:"primary",uuid:$argo_uuid}],transport:{type:"ws",path:$argo_path}} else empty end),
+        (if $enable_vless_reality then {type:"vless",tag:"vless-reality-in",listen:$listen_addr,listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}} else empty end),
+        (if $enable_naive then {type:"naive",tag:"naive-in",network:"tcp",listen:$listen_addr,listen_port:($naive_port|tonumber),users:[{username:$naive_username,password:$naive_password}],tls:{enabled:true,certificate_path:$cert_file,key_path:$key_file}} else empty end),
+        (if $enable_anytls_reality then {type:"anytls",tag:"anytls-reality-in",listen:$listen_addr,listen_port:($anyreality_port|tonumber),users:[{name:"primary",password:$anyreality_password}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$anyreality_private,short_id:[$anyreality_sid]}}} else empty end)
+      ],outbounds:[{type:"direct",tag:"direct"}]}' > "$tmp" || {
+        rm -f "$tmp"
+        warn '无法生成 sing-box 配置；原配置未更改。'
+        return 1
+    }
     if ! "$SB_BIN" check -c "$tmp"; then
         rm -f "$tmp"
         warn 'sing-box 配置检查失败，原配置未更改。'
         return 1
     fi
-    if [ -f "$CONFIG_FILE" ]; then cp "$CONFIG_FILE" "$CONFIG_FILE.bak"; fi
-    chown root:sing-box "$tmp"
-    chmod 0640 "$tmp"
-    mv "$tmp" "$CONFIG_FILE"
-    if ! service_restart; then
-        warn '新配置启动失败，正在回滚。'
-        if [ -f "$CONFIG_FILE.bak" ]; then cp "$CONFIG_FILE.bak" "$CONFIG_FILE"; fi
-        service_restart || true
-        warn '服务重启失败，已尝试恢复旧配置。请查看服务日志。'
+
+    config_backup="$CONFIG_FILE.rollback.$$"
+    state_backup="$STATE_FILE.rollback.$$"
+    had_config=0
+    had_state=0
+    if [ -f "$CONFIG_FILE" ]; then
+        cp -p "$CONFIG_FILE" "$config_backup" || { rm -f "$tmp" "$config_backup"; warn '无法备份现有 config.json；原配置未更改。'; return 1; }
+        had_config=1
+    fi
+    if [ -f "$STATE_FILE" ]; then
+        cp -p "$STATE_FILE" "$state_backup" || { rm -f "$tmp" "$config_backup" "$state_backup"; warn '无法备份现有 manager.json；原配置未更改。'; return 1; }
+        had_state=1
+    fi
+    if ! chown root:sing-box "$tmp" || ! chmod 0640 "$tmp" || ! mv "$tmp" "$CONFIG_FILE"; then
+        rm -f "$tmp"
+        [ "$had_config" -eq 0 ] || cp -p "$config_backup" "$CONFIG_FILE"
+        rm -f "$config_backup" "$state_backup"
+        warn '无法安全写入 config.json；原配置已保留。'
         return 1
     fi
-    save_state
+    if ! service_restart; then
+        warn '新配置启动失败，正在恢复旧配置和管理状态。'
+        if [ "$had_config" -eq 1 ]; then cp -p "$config_backup" "$CONFIG_FILE"; else rm -f "$CONFIG_FILE"; fi
+        if [ "$had_state" -eq 1 ]; then cp -p "$state_backup" "$STATE_FILE"; else rm -f "$STATE_FILE"; fi
+        service_restart || true
+        rm -f "$config_backup" "$state_backup"
+        return 1
+    fi
+    if ! save_state; then
+        warn '管理状态写入失败，正在恢复旧配置和管理状态。'
+        if [ "$had_config" -eq 1 ]; then cp -p "$config_backup" "$CONFIG_FILE"; else rm -f "$CONFIG_FILE"; fi
+        if [ "$had_state" -eq 1 ]; then cp -p "$state_backup" "$STATE_FILE"; else rm -f "$STATE_FILE"; fi
+        service_restart || true
+        rm -f "$config_backup" "$state_backup"
+        return 1
+    fi
+    rm -f "$config_backup" "$state_backup"
     msg '配置已检查并应用，sing-box 已重启。'
 }
 
@@ -1054,20 +1518,17 @@ node_tag() {
 }
 
 node_tag_single() {
-    protocol=$1
-    case "$WS_SERVER" in
+    case "$2" in
         *:*) family_lc=ipv6 ;;
         *[!0-9.]*) family_lc=domain ;;
         *) family_lc=ipv4 ;;
     esac
-    tag="${family_lc}-${WS_SERVER}"
-    [ -z "$NODE_LABEL" ] || tag="${tag}-${NODE_LABEL}"
-    printf '%s-%s' "$tag" "$protocol"
+    node_tag "$family_lc" "$2" "$1"
 }
 
 change_node_label() {
     printf '\n当前节点辨识符：%s\n' "${NODE_LABEL:-（未设置）}"
-    msg '该辨识符会添加到地址之后、协议名称之前；WS TLS 仍只有一个节点。'
+    msg '该辨识符会添加到地址之后、协议名称之前；每条启用的 WS 线路各生成一个节点。'
     msg '示例：填写 KC 后，节点名称变为 ipv4-23.147.232.192-KC-anytls、ipv6-2602:...-KC-anytls、ipv4-23.147.232.192-KC-vless+ws+tls。'
     msg '支持中文、英文字母和数字，可使用点、下划线、短横线；最多 20 个 Unicode 字符。'
     msg '示例：香港、东京、日本01、KC、LAX-01。留空可清除辨识符。'
@@ -1086,6 +1547,7 @@ change_node_label() {
 }
 
 write_anyreality_client_json() {
+    [ "$ENABLE_ANYTLS_REALITY" = 1 ] || { rm -f "$APP_DIR/anytls-reality-client.json"; return 0; }
     client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
     [ -n "$client_server" ] || return 0
     client_json_tmp="$APP_DIR/anytls-reality-client.json.tmp.$$"
@@ -1096,100 +1558,131 @@ write_anyreality_client_json() {
       --arg server_name "$REALITY_SNI" \
       --arg public_key "$ANYREALITY_PUBLIC" \
       --arg short_id "$ANYREALITY_SID" \
-      '{
-        type:"anytls",
-        tag:"anytls-reality",
-        server:$server,
-        server_port:($server_port|tonumber),
-        password:$password,
-        tls:{
-          enabled:true,
-          server_name:$server_name,
-          utls:{enabled:true,fingerprint:"chrome"},
-          reality:{enabled:true,public_key:$public_key,short_id:$short_id}
-        }
-      }' > "$client_json_tmp" || {
-        rm -f "$client_json_tmp"
-        return 1
-      }
+      '{type:"anytls",tag:"anytls-reality",server:$server,server_port:($server_port|tonumber),password:$password,tls:{enabled:true,server_name:$server_name,utls:{enabled:true,fingerprint:"chrome"},reality:{enabled:true,public_key:$public_key,short_id:$short_id}}}' > "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
     chmod 0600 "$client_json_tmp"
     chown root:root "$client_json_tmp"
     mv "$client_json_tmp" "$APP_DIR/anytls-reality-client.json"
+}
+
+# Build a standalone sing-box client configuration for NaiveProxy.
+# This is deliberately separate from the server config.json and contains
+# credentials, so it is written with owner-only permissions.
+write_naive_client_json() {
+    [ "$ENABLE_NAIVE" = 1 ] || { rm -f "$APP_DIR/naive-client.json"; return 0; }
+    client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
+    [ -n "$client_server" ] || return 1
+    client_json_tmp="$APP_DIR/naive-client.json.tmp.$$"
+    if ! jq -n \
+      --arg server "$client_server" \
+      --arg server_port "$NAIVE_PORT" \
+      --arg username "$NAIVE_USERNAME" \
+      --arg password "$NAIVE_PASSWORD" \
+      --arg server_name "$TLS_DOMAIN" \
+      '{log:{level:"info",timestamp:true},inbounds:[{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}],outbounds:[{type:"naive",tag:"naive-proxy",server:$server,server_port:($server_port|tonumber),username:$username,password:$password,tls:{enabled:true,server_name:$server_name}},{type:"direct",tag:"direct"}],route:{final:"naive-proxy"}}' > "$client_json_tmp"; then
+        rm -f "$client_json_tmp"
+        return 1
+    fi
+    chmod 0600 "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
+    chown root:root "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
+    mv -f "$client_json_tmp" "$APP_DIR/naive-client.json"
+}
+
+show_ss2022_node() {
+    ss_tag=$(node_tag "$1" "$2" ss2022)
+    ss_tag_uri=$(jq -nr --arg value "$ss_tag" '$value | @uri')
+    ss_key_uri=$(jq -nr --arg value "$SS2022_PASSWORD" '$value | @uri')
+    printf '[%s] Shadowsocks 2022 | TCP/UDP：%s\nss://%s:%s@%s:%s#%s\n\n' \
+        "$ss_tag" "$SS2022_PORT" "$SS2022_METHOD" "$ss_key_uri" "$(uri_host "$2")" "$SS2022_PORT" "$ss_tag_uri"
 }
 
 show_nodes() {
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
     nodes_tmp="$APP_DIR/nodes.txt.tmp.$$"
     {
-        printf 'sing-box 节点信息（节点名包含地址与协议；WS TLS 仅输出一个节点）\n辨识符：%s\n\n' "${NODE_LABEL:-未设置}"
+        printf 'sing-box 节点信息（仅显示已安装协议）\n辨识符：%s\n\n' "${NODE_LABEL:-未设置}"
 
         if [ -n "$ORIGIN_ADDR" ]; then
             origin_uri=$(uri_host "$ORIGIN_ADDR")
-            tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls)
-            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-            ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-            printf '[%s] AnyTLS | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYTLS_PORT" "$ANYTLS_LINK"
-
-            tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls+reality)
-            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-            ANYREALITY_LINK="anytls://${ANYREALITY_PASSWORD}@${origin_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
-            printf '[%s] AnyTLS + Reality | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYREALITY_PORT" "$ANYREALITY_LINK"
-
-            tag=$(node_tag IPv4 "$ORIGIN_ADDR" vless+reality)
-            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-            REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
-            printf '[%s] VLESS + Reality | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
+            [ "$ENABLE_SS2022" = 0 ] || show_ss2022_node IPv4 "$ORIGIN_ADDR"
+            if [ "$ENABLE_ANYTLS" = 1 ]; then
+                tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+                printf '[%s] AnyTLS | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYTLS_PORT" "$ANYTLS_LINK"
+            fi
+            if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+                tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                ANYREALITY_LINK="anytls://${ANYREALITY_PASSWORD}@${origin_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
+                printf '[%s] AnyTLS + Reality | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYREALITY_PORT" "$ANYREALITY_LINK"
+            fi
+            if [ "$ENABLE_VLESS_REALITY" = 1 ]; then
+                tag=$(node_tag IPv4 "$ORIGIN_ADDR" vless+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
+                printf '[%s] VLESS + Reality | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
+            fi
+            if [ "$ENABLE_NAIVE" = 1 ]; then
+                tag=$(node_tag IPv4 "$ORIGIN_ADDR" naiveproxy); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                NAIVE_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+                printf '[%s] NaiveProxy | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$NAIVE_PORT" "$NAIVE_LINK"
+            fi
         fi
 
-        # Exactly one WS TLS node, using the saved endpoint regardless of address family.
-        if [ -n "$WS_SERVER" ]; then
+        if [ "$ENABLE_WS_TLS" = 1 ]; then
             ws_server_uri=$(uri_host "$WS_SERVER")
-            tag=$(node_tag_single vless+ws+tls)
-            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            tag=$(node_tag_single vless+ws+tls "$WS_SERVER"); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             WS_LINK="vless://${WS_UUID}@${ws_server_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag_uri}"
-            printf '[%s] VLESS + WebSocket + TLS | 地址：%s | 端口：%s\n%s\n\n' "$tag" "$WS_SERVER" "$WS_PORT" "$WS_LINK"
+            printf '[%s] VLESS + WebSocket + TLS（直连） | 端口：%s\n%s\n\n' "$tag" "$WS_PORT" "$WS_LINK"
         fi
-
-        if [ -n "$ORIGIN_ADDR" ]; then
-            origin_uri=$(uri_host "$ORIGIN_ADDR")
-            tag=$(node_tag IPv4 "$ORIGIN_ADDR" naiveproxy)
-            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-            NAIVE_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-            printf '[%s] NaiveProxy | 地址：%s | TCP 端口：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$NAIVE_PORT" "$NAIVE_LINK"
+        if [ "$ENABLE_WS_ARGO" = 1 ]; then
+            argo_server_uri=$(uri_host "$ARGO_SERVER")
+            argo_path_enc=$(printf '%s' "$ARGO_PATH" | sed 's#/#%2F#g')
+            tag=$(node_tag_single vless+ws+tls-argo "$ARGO_SERVER"); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            ARGO_LINK="vless://${ARGO_UUID}@${argo_server_uri}:443?encryption=none&security=tls&sni=${ARGO_HOST}&type=ws&host=${ARGO_HOST}&path=${argo_path_enc}#${tag_uri}"
+            printf '[%s] VLESS + WebSocket + TLS（Argo） | 客户端端口：443 | 本机端口：%s\n%s\n\n' "$tag" "$ARGO_PORT" "$ARGO_LINK"
         fi
 
         if [ -n "$ORIGIN_IPV6" ]; then
             origin6_uri=$(uri_host "$ORIGIN_IPV6")
-            tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls)
-            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-            ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-            printf '[%s] AnyTLS | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYTLS_PORT" "$ANYTLS6_LINK"
-
-            tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls+reality)
-            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-            ANYREALITY6_LINK="anytls://${ANYREALITY_PASSWORD}@${origin6_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
-            printf '[%s] AnyTLS + Reality | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYREALITY_PORT" "$ANYREALITY6_LINK"
-
-            tag=$(node_tag IPv6 "$ORIGIN_IPV6" vless+reality)
-            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-            REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
-            printf '[%s] VLESS + Reality | 地址：[%s] | 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$REALITY_PORT" "$REALITY6_LINK"
-
-            tag=$(node_tag IPv6 "$ORIGIN_IPV6" naiveproxy)
-            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-            NAIVE6_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin6_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-            printf '[%s] NaiveProxy | 地址：[%s] | TCP 端口：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$NAIVE_PORT" "$NAIVE6_LINK"
+            [ "$ENABLE_SS2022" = 0 ] || show_ss2022_node IPv6 "$ORIGIN_IPV6"
+            if [ "$ENABLE_ANYTLS" = 1 ]; then
+                tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+                printf '[%s] AnyTLS | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYTLS_PORT" "$ANYTLS6_LINK"
+            fi
+            if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+                tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                ANYREALITY6_LINK="anytls://${ANYREALITY_PASSWORD}@${origin6_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
+                printf '[%s] AnyTLS + Reality | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYREALITY_PORT" "$ANYREALITY6_LINK"
+            fi
+            if [ "$ENABLE_VLESS_REALITY" = 1 ]; then
+                tag=$(node_tag IPv6 "$ORIGIN_IPV6" vless+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
+                printf '[%s] VLESS + Reality | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$REALITY_PORT" "$REALITY6_LINK"
+            fi
+            if [ "$ENABLE_NAIVE" = 1 ]; then
+                tag=$(node_tag IPv6 "$ORIGIN_IPV6" naiveproxy); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                NAIVE6_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin6_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+                printf '[%s] NaiveProxy | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$NAIVE_PORT" "$NAIVE6_LINK"
+            fi
+        fi
+        if [ "$ENABLE_WS_TLS" = 0 ] && [ "$ENABLE_WS_ARGO" = 0 ] && [ "$ENABLE_SS2022" = 0 ] && [ "$ENABLE_ANYTLS" = 0 ] && [ "$ENABLE_VLESS_REALITY" = 0 ] && [ "$ENABLE_NAIVE" = 0 ] && [ "$ENABLE_ANYTLS_REALITY" = 0 ]; then
+            printf '没有启用任何协议。\n'
         fi
     } > "$nodes_tmp"
     chmod 0600 "$nodes_tmp"
     mv "$nodes_tmp" "$APP_DIR/nodes.txt"
-
-    if write_anyreality_client_json; then
-        printf 'AnyTLS + Reality 客户端手动配置片段：%s/anytls-reality-client.json\n' "$APP_DIR"
+    if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+        if write_anyreality_client_json; then printf 'AnyTLS + Reality 客户端配置片段：%s/anytls-reality-client.json\n' "$APP_DIR"; else warn 'AnyTLS + Reality 客户端 JSON 片段生成失败。'; fi
+    else rm -f "$APP_DIR/anytls-reality-client.json"; fi
+    if [ "$ENABLE_NAIVE" = 1 ]; then
+        if write_naive_client_json; then
+            printf 'NaiveProxy sing-box 1.13+ 客户端配置：%s/naive-client.json\n' "$APP_DIR"
+            printf '注意：该 JSON 含 Naive 用户名和密码，请仅通过安全方式传到自己的客户端。\n'
+        else
+            warn 'NaiveProxy 客户端 JSON 生成失败；节点链接仍可用，请检查地址和凭据。'
+        fi
     else
-        warn 'AnyTLS + Reality 客户端 JSON 片段生成失败。'
+        rm -f "$APP_DIR/naive-client.json"
     fi
-
     msg '================ 节点信息 ================'
     cat "$APP_DIR/nodes.txt"
     printf '节点文件：%s/nodes.txt\n' "$APP_DIR"
@@ -1198,229 +1691,619 @@ show_nodes() {
 
 overlay_install() {
     need_root
-    msg '========== sing-box 覆盖安装（保留现有配置） =========='
+    msg '========== sing-box 覆盖安装（保留所选协议和现有凭据） =========='
+    [ -s "$STATE_FILE" ] || err '找不到现有 manager.json，不能执行覆盖安装。'
+    manager_state_is_valid || err '现有 manager.json 缺少已启用协议所需参数；为避免破坏原配置，停止覆盖安装。'
 
-    # The existing manager state and secret files are authoritative.
-    # Never ask for domains, SNI values, UUIDs, ports, or Cloudflare credentials
-    # during an overlay installation.
-    [ -s "$STATE_FILE" ] || err '找不到现有 manager.json，不能执行覆盖安装；请使用首次安装向导。'
-    [ -s "$CONFIG_FILE" ] || warn '现有 config.json 不存在或为空；将根据已保存状态重新生成。'
-
-    [ -n "$TLS_DOMAIN" ] && valid_cert_domain "$TLS_DOMAIN" ||
-        err '已保存的 TLS 证书域名无效；为避免覆盖错误配置，已停止。'
-    [ -n "$WS_HOST" ] && valid_domain "$WS_HOST" ||
-        err '已保存的 WS Host 无效；为避免覆盖错误配置，已停止。'
-    [ -n "$REALITY_SNI" ] && valid_domain "$REALITY_SNI" ||
-        err '已保存的 Reality SNI 无效；为避免覆盖错误配置，已停止。'
-    [ -n "$ANYTLS_PASSWORD" ] || err '现有 AnyTLS 密码缺失，不能安全覆盖安装。'
-    [ -n "$WS_UUID" ] || err '现有 WS UUID 缺失，不能安全覆盖安装。'
-    [ -n "$REALITY_UUID" ] || err '现有 Reality UUID 缺失，不能安全覆盖安装。'
-    [ -n "$REALITY_PRIVATE" ] && [ -n "$REALITY_PUBLIC" ] ||
-        err '现有 Reality 密钥缺失，不能安全覆盖安装。'
-    [ -n "$REALITY_SID" ] && [ -n "$WS_PATH" ] ||
-        err '现有 Reality short ID 或 WS 路径缺失，不能安全覆盖安装。'
-    valid_port "$ANYTLS_PORT" && valid_port "$WS_PORT" && valid_port "$REALITY_PORT" ||
-        err '已保存的端口配置无效，不能安全覆盖安装。'
-    [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] ||
-        err '已保存的源站地址为空，不能安全覆盖安装。'
-    [ -n "$WS_SERVER" ] ||
-        err '已保存的 WS 单一连接地址为空，不能安全覆盖安装。'
-
-    case "$CERT_MODE" in
-        cloudflare)
-            [ -n "$CF_ZONE_NAME" ] && valid_cert_domain "$CF_ZONE_NAME" ||
-                err '已保存的 Cloudflare DNS 区域无效；没有重新询问或覆盖任何配置。'
-            domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" ||
-                err "已保存的 TLS 域名不属于 Cloudflare 区域 $CF_ZONE_NAME；覆盖安装已停止。"
-            [ -s "$CF_TOKEN_FILE" ] ||
-                err "Cloudflare Token 文件不存在：$CF_TOKEN_FILE。为避免丢失凭据，本次没有重新询问 Token。请先恢复原 Token 文件。"
-            chmod 0600 "$CF_TOKEN_FILE"
-            chown root:root "$CF_TOKEN_FILE"
-            if [ -s "$CF_ZONE_ID_FILE" ]; then
-                saved_zone_id=$(cat "$CF_ZONE_ID_FILE")
-                case "$saved_zone_id" in *[!A-Fa-f0-9]*|'') err '已保存的 Cloudflare Zone ID 格式无效。' ;; esac
-                [ "${#saved_zone_id}" -eq 32 ] || err '已保存的 Cloudflare Zone ID 必须是 32 位十六进制字符串。'
-                chmod 0600 "$CF_ZONE_ID_FILE"
-                chown root:root "$CF_ZONE_ID_FILE"
-            fi
-            ;;
-        standalone|manual) ;;
-        *) err "不支持的已保存证书模式：$CERT_MODE" ;;
-    esac
-
-    msg '检测到已有安装：将保留原域名、SNI、WS Host、Cloudflare Token、Zone ID、证书、UUID、密码、Reality 密钥、手动端口和节点路径；自动补齐缺失协议。'
-    msg "TLS 域名：$TLS_DOMAIN"
-    msg "Reality SNI：$REALITY_SNI"
-    msg "Cloudflare 区域：${CF_ZONE_NAME:-不适用}"
-    msg 'Cloudflare Token：已保留（不会显示，也不会重新询问）。'
+    selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_WS_ARGO + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_SS2022))
+    [ "$selected_count" -gt 0 ] || err '当前没有启用的协议。'
+    derive_runtime_needs
+    if [ "$NEED_CERT" = 1 ]; then
+        [ -s "$CERT_FILE" ] && [ -s "$KEY_FILE" ] || err '现有 TLS 证书缺失；覆盖升级不会自动重新申请证书。'
+        check_cert_pair "$CERT_FILE" "$KEY_FILE" "$TLS_DOMAIN" || err '现有 TLS 证书或私钥无效。'
+        if [ "$CERT_MODE" = cloudflare ]; then
+            [ -s "$CF_TOKEN_FILE" ] || err 'Cloudflare DNS API Token 文件缺失，停止覆盖升级。'
+        fi
+        setup_reload_hook
+    fi
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        [ -s "$ARGO_TOKEN_FILE" ] || err 'Cloudflare Tunnel Token 文件缺失，停止覆盖升级。'
+    fi
 
     install_dependencies_and_core
     ensure_service_account
     enable_bbr
-
-    # Migrate installations created before NaiveProxy / AnyTLS + Reality support.
-    # Keep every existing protocol setting intact; create only missing Naive / AnyTLS-Reality data.
-    if [ -z "$NAIVE_PORT" ]; then
-        NAIVE_PORT=$(pick_random_range_port 10000 65535 "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$ANYREALITY_PORT") ||
-            err '无法为新增 NaiveProxy 分配随机 TCP 端口。'
-        msg "已为 NaiveProxy 分配新随机 TCP 端口：$NAIVE_PORT"
-    fi
-    if [ -z "$NAIVE_USERNAME" ] || [ -z "$NAIVE_PASSWORD" ]; then
-        NAIVE_USERNAME="naive-$(openssl rand -hex 6)"
-        NAIVE_PASSWORD=$(openssl rand -hex 24)
-        msg '已为 NaiveProxy 自动生成独立用户名和密码。'
-    fi
-    valid_port "$NAIVE_PORT" || err 'NaiveProxy 端口无效。'
-    [ -n "$NAIVE_USERNAME" ] && [ -n "$NAIVE_PASSWORD" ] ||
-        err 'NaiveProxy 用户名或密码为空，无法安全启用。'
-
-    # Migrate installations created before AnyTLS + Reality support.
-    # Existing AnyTLS, VLESS, Naive, TLS, Cloudflare and label settings remain unchanged.
-    if [ -z "$ANYREALITY_PORT" ]; then
-        ANYREALITY_PORT=$(pick_random_range_port 10000 65535 \
-            "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT") ||
-            err '无法为新增 AnyTLS + Reality 分配随机 TCP 端口。'
-        msg "已为 AnyTLS + Reality 分配新随机 TCP 端口：$ANYREALITY_PORT"
-    fi
-    valid_port "$ANYREALITY_PORT" || err 'AnyTLS + Reality 端口无效。'
-    if [ -z "$ANYREALITY_PASSWORD" ]; then
-        ANYREALITY_PASSWORD=$(openssl rand -hex 24)
-    fi
-    if [ -z "$ANYREALITY_PRIVATE" ] || [ -z "$ANYREALITY_PUBLIC" ] || [ -z "$ANYREALITY_SID" ]; then
-        anyreality_keypair=$("$SB_BIN" generate reality-keypair)
-        ANYREALITY_PRIVATE=$(printf '%s\n' "$anyreality_keypair" | awk '/PrivateKey/ {print $2}')
-        ANYREALITY_PUBLIC=$(printf '%s\n' "$anyreality_keypair" | awk '/PublicKey/ {print $2}')
-        ANYREALITY_SID=$("$SB_BIN" generate rand --hex 8)
-    fi
-    [ -n "$ANYREALITY_PASSWORD" ] && [ -n "$ANYREALITY_PRIVATE" ] &&
-    [ -n "$ANYREALITY_PUBLIC" ] && [ -n "$ANYREALITY_SID" ] ||
-        err 'AnyTLS + Reality 认证参数或密钥生成失败。'
-
-    [ "$NAIVE_PORT" != "$ANYTLS_PORT" ] &&
-    [ "$NAIVE_PORT" != "$WS_PORT" ] &&
-    [ "$NAIVE_PORT" != "$REALITY_PORT" ] &&
-    [ "$NAIVE_PORT" != "$ANYREALITY_PORT" ] &&
-    [ "$ANYREALITY_PORT" != "$ANYTLS_PORT" ] &&
-    [ "$ANYREALITY_PORT" != "$WS_PORT" ] &&
-    [ "$ANYREALITY_PORT" != "$REALITY_PORT" ] &&
-    [ "$ANYTLS_PORT" != "$WS_PORT" ] &&
-    [ "$ANYTLS_PORT" != "$REALITY_PORT" ] &&
-    [ "$WS_PORT" != "$REALITY_PORT" ] ||
-        err '五个协议的已保存端口存在重复，覆盖安装已停止。'
-
     create_service
-    setup_reload_hook
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        install_cloudflared
+        create_cloudflared_service
+    fi
+    build_config || err '覆盖安装未能应用当前所选协议配置。'
+    save_state || err '覆盖安装成功但管理状态保存失败。'
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        start_cloudflared_service || warn 'Cloudflare Tunnel 服务启动失败，请检查 Token 和 cloudflared 日志。'
+        msg "Cloudflare Tunnel 公网主机名：$ARGO_HOST → http://127.0.0.1:$ARGO_PORT"
+    fi
+    msg '覆盖升级完成：保留原有已选协议、UUID、密码、密钥、端口和节点路径。'
+    show_nodes
+}
 
-    # Reuse the installed certificate. Do not call --issue, --force, or
-    # --deactivate here: overlay installation must never trigger ACME issuance.
-    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$TLS_DOMAIN" ||
-        err '现有 TLS 证书或私钥无效/缺失。为避免重新申请证书或覆盖凭据，覆盖安装已停止。'
+add_pick_port() {
+    add_requested=$1
+    add_protocol=$2
+    add_port_mode=$3
+    add_reserved=$4
+
+    set -- $add_reserved
+    if [ -n "$add_requested" ]; then
+        add_requested=$(normalize_optional_port "$add_requested" "$add_protocol") ||
+            err "$add_protocol 端口必须是 1024–65535 的整数。"
+        if ! check_udp_port="$([ "$add_port_mode" = ss2022 ] && printf 1 || printf 0)" port_is_available "$add_requested" "$@"; then
+            err "$add_protocol 端口 $add_requested 已被现有节点或其他进程占用；为避免修改旧节点，请选择其他端口。"
+        fi
+        printf '%s\n' "$add_requested"
+        return 0
+    fi
+
+    if [ "$add_port_mode" = ws-direct ]; then
+        pick_random_ws_port "$@" || err '没有可用的 VLESS + WS 直连端口（2053、2083、2087、2096、8443）。'
+    elif [ "$add_port_mode" = ss2022 ]; then
+        check_udp_port=1 pick_random_range_port 10000 65535 "$@" || err '无法分配新的 Shadowsocks 2022 TCP/UDP 端口。'
+    else
+        pick_random_range_port 10000 65535 "$@" || err "无法为 $add_protocol 分配新的空闲 TCP 端口。"
+    fi
+}
+
+write_cf_credentials_for_add() {
+    add_cf_value=$1
+    add_zone_value=$2
+
+    if [ -n "$add_cf_value" ]; then
+        add_cf_tmp="${CF_TOKEN_FILE}.tmp.$$"
+        (umask 077; printf '%s' "$add_cf_value" > "$add_cf_tmp") || {
+            rm -f "$add_cf_tmp"
+            return 1
+        }
+        chown root:root "$add_cf_tmp" && chmod 0600 "$add_cf_tmp" &&
+            mv -f "$add_cf_tmp" "$CF_TOKEN_FILE" || {
+                rm -f "$add_cf_tmp"
+                return 1
+            }
+    fi
+
+    if [ -n "$add_zone_value" ]; then
+        add_zone_tmp="${CF_ZONE_ID_FILE}.tmp.$$"
+        (umask 077; printf '%s' "$add_zone_value" > "$add_zone_tmp") || {
+            rm -f "$add_zone_tmp"
+            return 1
+        }
+        chown root:root "$add_zone_tmp" && chmod 0600 "$add_zone_tmp" &&
+            mv -f "$add_zone_tmp" "$CF_ZONE_ID_FILE" || {
+                rm -f "$add_zone_tmp"
+                return 1
+            }
+    else
+        rm -f "$CF_ZONE_ID_FILE"
+    fi
+}
+
+prepare_add_certificate() {
+    CERT_FILE=${CERT_FILE:-$CERT_DIR/fullchain.pem}
+    KEY_FILE=${KEY_FILE:-$CERT_DIR/privkey.pem}
+    add_cert_valid=0
+
+    if [ -n "$TLS_DOMAIN" ] &&
+       check_cert_pair "$CERT_FILE" "$KEY_FILE" "$TLS_DOMAIN" >/dev/null 2>&1; then
+        add_cert_valid=1
+    fi
+
+    if [ "$add_cert_valid" -eq 1 ] && { [ "$CERT_MODE" = none ] || [ -z "$CERT_MODE" ]; }; then
+        CERT_MODE=manual
+    fi
+
+    if [ "$add_cert_valid" -eq 0 ]; then
+        if [ "$add_old_need_cert" -eq 0 ]; then
+            msg '当前安装没有可复用的有效源站 TLS 证书，需要为新节点配置证书。'
+            ask_value '证书方式：1=Cloudflare DNS-01，2=HTTP-01，3=手动导入' '1'
+            case "$REPLY" in
+                1) CERT_MODE=cloudflare ;;
+                2) CERT_MODE=standalone ;;
+                3) CERT_MODE=manual ;;
+                *) err '证书方式只能选择 1、2 或 3。' ;;
+            esac
+            if [ "$CERT_MODE" = cloudflare ]; then
+                ask_value 'Cloudflare DNS 区域根域名（例如 mouwei.dpdns.org）' "$CF_ZONE_NAME"
+                CF_ZONE_NAME=$(trim_value "$REPLY")
+            else
+                CF_ZONE_NAME=""
+            fi
+            ask_value 'TLS 证书域名（例如 hinet.mouwei.dpdns.org）' "$TLS_DOMAIN"
+            TLS_DOMAIN=$(trim_value "$REPLY")
+        else
+            valid_cert_domain "$TLS_DOMAIN" ||
+                err '现有 TLS 节点的证书域名无效；为保护现有节点，不允许在增量添加时擅自更换域名。'
+            if [ "$CERT_MODE" = none ] || [ -z "$CERT_MODE" ]; then
+                msg '现有 TLS 节点没有记录证书签发方式。'
+                ask_value '请选择证书方式：1=Cloudflare DNS-01，2=HTTP-01，3=手动导入' '1'
+                case "$REPLY" in
+                    1) CERT_MODE=cloudflare ;;
+                    2) CERT_MODE=standalone ;;
+                    3) CERT_MODE=manual ;;
+                    *) err '证书方式只能选择 1、2 或 3。' ;;
+                esac
+            fi
+            if [ "$CERT_MODE" = cloudflare ] && [ -z "$CF_ZONE_NAME" ]; then
+                ask_value 'Cloudflare DNS 区域根域名' ''
+                CF_ZONE_NAME=$(trim_value "$REPLY")
+            fi
+        fi
+    fi
+
+    valid_cert_domain "$TLS_DOMAIN" || err 'TLS 证书域名无效；请输入你拥有或获准管理的域名。'
 
     case "$CERT_MODE" in
         cloudflare)
-            if [ -x /root/.acme.sh/acme.sh ]; then
-                start_cron
-            else
-                warn '找不到现有 acme.sh；当前证书仍会继续使用，但自动续期尚未恢复。覆盖安装不会重新申请证书。'
+            if [ -z "$CF_ZONE_NAME" ]; then
+                ask_value 'Cloudflare DNS 区域根域名' ''
+                CF_ZONE_NAME=$(trim_value "$REPLY")
             fi
+            valid_cert_domain "$CF_ZONE_NAME" || err 'Cloudflare 区域根域名格式无效。'
+            domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" ||
+                err "TLS 证书域名 $TLS_DOMAIN 不属于 Cloudflare 区域 $CF_ZONE_NAME。"
+
+            add_cf_existing=""
+            [ ! -s "$CF_TOKEN_FILE" ] || add_cf_existing=$(cat "$CF_TOKEN_FILE")
+            ask_secret 'Cloudflare DNS API Token（直接回车保留现有；不是 Tunnel Token）'
+            add_cf_new=$(trim_value "$REPLY")
+            if [ -z "$add_cf_new" ] && [ -z "$add_cf_existing" ]; then
+                err 'Cloudflare DNS API Token 不能为空。'
+            fi
+
+            add_zone_existing=$(cat "$CF_ZONE_ID_FILE" 2>/dev/null || true)
+            ask_value 'Cloudflare Zone ID（可留空自动识别）' "$add_zone_existing"
+            add_zone_new=$(trim_value "$REPLY")
+            if [ -n "$add_zone_new" ]; then
+                case "$add_zone_new" in *[!A-Fa-f0-9]*) err 'Cloudflare Zone ID 必须是 32 位十六进制字符串。' ;; esac
+                [ "${#add_zone_new}" -eq 32 ] || err 'Cloudflare Zone ID 必须是 32 位十六进制字符串。'
+            fi
+
+            setup_reload_hook
+            install_acme ""
+
+            add_cf_backup_dir=""
+            add_cf_token_had_old=0
+            add_cf_zone_had_old=0
+            if [ -n "$add_cf_new" ] || [ "$add_zone_new" != "$add_zone_existing" ]; then
+                add_cf_backup_dir=$(mktemp -d) || err '无法创建 Cloudflare 凭据备份目录。'
+                if [ -s "$CF_TOKEN_FILE" ]; then
+                    cp -p "$CF_TOKEN_FILE" "$add_cf_backup_dir/cloudflare.token" ||
+                        { rm -rf "$add_cf_backup_dir"; err '无法备份原 DNS API Token；没有修改凭据。'; }
+                    add_cf_token_had_old=1
+                fi
+                if [ -s "$CF_ZONE_ID_FILE" ]; then
+                    cp -p "$CF_ZONE_ID_FILE" "$add_cf_backup_dir/cloudflare-zone-id" ||
+                        { rm -rf "$add_cf_backup_dir"; err '无法备份原 Zone ID；没有修改凭据。'; }
+                    add_cf_zone_had_old=1
+                fi
+                if ! write_cf_credentials_for_add "$add_cf_new" "$add_zone_new"; then
+                    if [ "$add_cf_token_had_old" -eq 1 ]; then cp -p "$add_cf_backup_dir/cloudflare.token" "$CF_TOKEN_FILE"; else rm -f "$CF_TOKEN_FILE"; fi
+                    if [ "$add_cf_zone_had_old" -eq 1 ]; then cp -p "$add_cf_backup_dir/cloudflare-zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+                    rm -rf "$add_cf_backup_dir"
+                    err '无法安全保存 Cloudflare DNS API 凭据；已恢复原凭据。'
+                fi
+            fi
+
+            add_cf_current=$(cat "$CF_TOKEN_FILE" 2>/dev/null || true)
+            add_zone_current=$(cat "$CF_ZONE_ID_FILE" 2>/dev/null || true)
+            if [ "$add_cert_valid" -eq 0 ] ||
+               [ -n "$add_cf_new" ] ||
+               [ "$add_zone_new" != "$add_zone_existing" ] ||
+               ! acme_cf_credentials_match "$TLS_DOMAIN" "$add_cf_current" "$add_zone_current"; then
+                add_cert_backup_dir=$(mktemp -d) || err '无法创建证书备份目录。'
+                [ ! -s "$CERT_FILE" ] || cp -p "$CERT_FILE" "$add_cert_backup_dir/fullchain.pem" ||
+                    { rm -rf "$add_cert_backup_dir"; err '无法备份现有证书；停止 DNS-01 更新。'; }
+                [ ! -s "$KEY_FILE" ] || cp -p "$KEY_FILE" "$add_cert_backup_dir/privkey.pem" ||
+                    { rm -rf "$add_cert_backup_dir"; err '无法备份现有私钥；停止 DNS-01 更新。'; }
+                if ! issue_cloudflare_cert "$TLS_DOMAIN"; then
+                    if [ -s "$add_cert_backup_dir/fullchain.pem" ]; then cp -p "$add_cert_backup_dir/fullchain.pem" "$CERT_FILE"; fi
+                    if [ -s "$add_cert_backup_dir/privkey.pem" ]; then cp -p "$add_cert_backup_dir/privkey.pem" "$KEY_FILE"; fi
+                    chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
+                    chmod 0644 "$CERT_FILE" 2>/dev/null || true
+                    chmod 0640 "$KEY_FILE" 2>/dev/null || true
+                    if [ -n "$add_cf_backup_dir" ]; then
+                        if [ "$add_cf_token_had_old" -eq 1 ]; then cp -p "$add_cf_backup_dir/cloudflare.token" "$CF_TOKEN_FILE"; else rm -f "$CF_TOKEN_FILE"; fi
+                        if [ "$add_cf_zone_had_old" -eq 1 ]; then cp -p "$add_cf_backup_dir/cloudflare-zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+                        rm -rf "$add_cf_backup_dir"
+                    fi
+                    rm -rf "$add_cert_backup_dir"
+                    err 'Cloudflare DNS-01 证书处理失败。请检查 DNS API Token 的 Zone:DNS:Edit 权限、Zone ID、DNS 托管状态及 ACME 日志。'
+                fi
+                rm -rf "$add_cert_backup_dir"
+            fi
+            [ -z "$add_cf_backup_dir" ] || rm -rf "$add_cf_backup_dir"
             ;;
         standalone)
-            if [ -x /root/.acme.sh/acme.sh ]; then
-                start_cron
-            else
-                warn '找不到现有 acme.sh；当前证书仍会继续使用，但自动续期尚未恢复。'
+            if [ "$add_cert_valid" -eq 0 ]; then
+                setup_reload_hook
+                issue_http_cert "$TLS_DOMAIN" ||
+                    err 'HTTP-01 证书申请失败；请确认域名解析到 VPS 且公网 TCP 80 可访问。'
             fi
             ;;
         manual)
-            msg '当前使用手动证书；覆盖安装不会更换证书。'
+            if [ "$add_cert_valid" -eq 0 ]; then
+                setup_reload_hook
+                install_manual_cert "$TLS_DOMAIN"
+            fi
+            ;;
+        *)
+            err '当前证书签发方式无效，请重新选择 Cloudflare DNS-01、HTTP-01 或手动导入。'
             ;;
     esac
 
-    msg '正在根据原有配置重建 sing-box 配置……'
-    build_config || err '覆盖安装未能应用原有配置。旧配置已按构建流程尝试回滚，请检查服务日志。'
+    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$TLS_DOMAIN" ||
+        err '新节点使用的 TLS 证书校验失败；没有继续修改 sing-box 配置。'
+}
 
-    msg '========== 覆盖安装完成 =========='
-    msg '原有节点参数已保留；NaiveProxy 复用现有证书，AnyTLS + Reality 使用独立随机 TCP 端口和独立 Reality 密钥。'
-    msg '现在显示全部可用节点：'
+add_missing_protocols() {
+    need_root
+    [ -s "$STATE_FILE" ] || err '找不到现有 manager.json；请先完成首次安装。'
+    manager_state_is_valid || err '现有 manager.json 无效；为避免覆盖或丢失节点凭据，停止增量添加。'
+
+    load_state
+    derive_runtime_needs
+
+    add_old_anytls=$ENABLE_ANYTLS
+    add_old_ws=$ENABLE_WS_TLS
+    add_old_reality=$ENABLE_VLESS_REALITY
+    add_old_naive=$ENABLE_NAIVE
+    add_old_anyreality=$ENABLE_ANYTLS_REALITY
+    add_old_need_cert=$NEED_CERT
+    add_old_need_origin=$NEED_ORIGIN
+    add_old_anytls_port=$ANYTLS_PORT
+    add_old_ws_port=$WS_PORT
+    add_old_reality_port=$REALITY_PORT
+    add_old_naive_port=$NAIVE_PORT
+    add_old_anyreality_port=$ANYREALITY_PORT
+
+    add_anytls=0
+    add_argo=0
+    add_ss2022=0
+    add_ws=0
+    add_reality=0
+    add_naive=0
+    add_anyreality=0
+
+    msg '========== 增量添加 sing-box 节点 =========='
+    msg '只会添加尚未部署的协议；现有节点的密码、UUID、密钥、端口和 WS 路径不会重新生成。'
+    printf '当前状态：AnyTLS=%s，直连 WS=%s，VLESS Reality=%s，NaiveProxy=%s，AnyTLS Reality=%s\n' \
+        "$([ "$ENABLE_ANYTLS" = 1 ] && printf 已安装 || printf 未安装)" \
+        "$([ "$ENABLE_WS_TLS" = 1 ] && printf 已安装 || printf 未安装)" \
+        "$([ "$ENABLE_VLESS_REALITY" = 1 ] && printf 已安装 || printf 未安装)" \
+        "$([ "$ENABLE_NAIVE" = 1 ] && printf 已安装 || printf 未安装)" \
+        "$([ "$ENABLE_ANYTLS_REALITY" = 1 ] && printf 已安装 || printf 未安装)"
+
+    printf 'Argo WS：%s；Shadowsocks 2022：%s\n' \
+        "$([ "$ENABLE_WS_ARGO" = 1 ] && printf 已安装 || printf 未安装)" \
+        "$([ "$ENABLE_SS2022" = 1 ] && printf 已安装 || printf 未安装)"
+
+    if [ "$ENABLE_ANYTLS" = 0 ]; then
+        ask_value '添加普通 AnyTLS？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_anytls=1; ENABLE_ANYTLS=1 ;; esac
+    fi
+    if [ "$ENABLE_SS2022" = 0 ]; then
+        ask_value '添加 Shadowsocks 2022？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_ss2022=1; ENABLE_SS2022=1 ;; esac
+    fi
+    if [ "$ENABLE_WS_ARGO" = 0 ]; then
+        ask_value '添加 VLESS + WS + TLS Argo？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_argo=1; ENABLE_WS_ARGO=1 ;; esac
+    fi
+    if [ "$ENABLE_WS_TLS" = 0 ]; then
+        ask_value '添加 VLESS + WS + TLS 直连？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_ws=1; ENABLE_WS_TLS=1 ;; esac
+    fi
+    if [ "$ENABLE_VLESS_REALITY" = 0 ]; then
+        ask_value '添加 VLESS + Reality？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_reality=1; ENABLE_VLESS_REALITY=1 ;; esac
+    fi
+    if [ "$ENABLE_NAIVE" = 0 ]; then
+        ask_value '添加 NaiveProxy？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_naive=1; ENABLE_NAIVE=1 ;; esac
+    fi
+    if [ "$ENABLE_ANYTLS_REALITY" = 0 ]; then
+        ask_value '添加 AnyTLS + Reality？(y/N)' 'n'
+        case "$REPLY" in y|Y|yes|YES) add_anyreality=1; ENABLE_ANYTLS_REALITY=1 ;; esac
+    fi
+
+    add_selected=$((add_anytls + add_ws + add_argo + add_reality + add_naive + add_anyreality + add_ss2022))
+    if [ "$add_selected" -eq 0 ]; then
+        msg '没有选择新增协议，现有配置保持不变。'
+        return 0
+    fi
+
+    [ "$add_argo" -eq 0 ] || ask_argo_install_fields
+    if [ "$add_ws" -eq 1 ]; then
+        ask_value '直连客户端连接地址 / 优选 IP（留空使用证书域名）' ''
+        WS_SERVER=$(trim_value "$REPLY")
+    fi
+
+    derive_runtime_needs
+
+    if [ "$add_reality" -eq 1 ] || [ "$add_anyreality" -eq 1 ]; then
+        if [ "$add_old_reality" = 0 ] && [ "$add_old_anyreality" = 0 ]; then
+            ask_value 'Reality SNI / 握手目标域名' "${REALITY_SNI:-www.bing.com}"
+            REALITY_SNI=$(trim_value "$REPLY")
+        fi
+        valid_domain "$REALITY_SNI" || err 'Reality SNI 必须是有效域名。'
+    fi
+
+    if [ "$NEED_ORIGIN" = 1 ] && [ "$add_old_need_origin" -eq 0 ]; then
+        msg '新节点需要源站公网地址。留空时脚本会尝试通过 IPv4 / IPv6 外部检测服务自动识别。'
+        ask_value '源站 IPv4 / 域名（留空自动检测）' "$ORIGIN_ADDR"
+        ORIGIN_ADDR=$(trim_value "$REPLY")
+        ask_value '源站 IPv6（留空自动检测）' "$ORIGIN_IPV6"
+        ORIGIN_IPV6=$(trim_value "$REPLY")
+    fi
+
+    install_dependencies_and_core
+    ensure_service_account
+    enable_bbr
+    SB_BIN=$(resolve_sing_box_binary 2>/dev/null || printf '%s' "$SB_BIN")
+    [ -x "$SB_BIN" ] || err '找不到可执行的 sing-box。'
+
+    if [ "$NEED_CERT" = 1 ]; then
+        prepare_add_certificate
+        resolve_install_domains
+        setup_reload_hook
+    else
+        resolve_install_domains
+    fi
+
+    if [ "$add_ws" -eq 1 ]; then
+        ask_value 'VLESS + WS HTTP Host（默认使用 TLS 证书域名）' "$TLS_DOMAIN"
+        WS_HOST=$(trim_value "$REPLY")
+        valid_domain "$WS_HOST" || err 'VLESS + WS HTTP Host 格式无效。'
+        [ -n "$WS_SERVER" ] || WS_SERVER=$TLS_DOMAIN
+    fi
+
+    resolve_install_addresses
+
+    add_reserved_ports="$ARGO_PORT $SS2022_PORT"
+    [ "$add_old_anytls" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_anytls_port"
+    [ "$add_old_ws" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_ws_port"
+    [ "$add_old_reality" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_reality_port"
+    [ "$add_old_naive" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_naive_port"
+    [ "$add_old_anyreality" = 0 ] || add_reserved_ports="$add_reserved_ports $add_old_anyreality_port"
+
+    if [ "$add_anytls" -eq 1 ]; then
+        ask_value '新增 AnyTLS TCP 端口（留空自动分配）' ''
+        ANYTLS_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'AnyTLS' tcp "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $ANYTLS_PORT"
+    fi
+    if [ "$add_ws" -eq 1 ]; then
+        ask_value '新增 VLESS + WS 直连 TCP 端口（留空自动分配）' ''
+        WS_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS + WS 直连' ws-direct "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $WS_PORT"
+    fi
+    if [ "$add_argo" -eq 1 ]; then
+        ask_value '新增 Argo 本机 WS 端口（留空自动分配）' ''
+        ARGO_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS + WS Argo' argo "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $ARGO_PORT"
+    fi
+    if [ "$add_reality" -eq 1 ]; then
+        ask_value '新增 VLESS Reality TCP 端口（留空自动分配）' ''
+        REALITY_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'VLESS Reality' tcp "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $REALITY_PORT"
+    fi
+    if [ "$add_naive" -eq 1 ]; then
+        ask_value '新增 NaiveProxy TCP 端口（留空自动分配）' ''
+        NAIVE_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'NaiveProxy' tcp "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $NAIVE_PORT"
+    fi
+    if [ "$add_anyreality" -eq 1 ]; then
+        ask_value '新增 AnyTLS + Reality TCP 端口（留空自动分配）' ''
+        ANYREALITY_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'AnyTLS + Reality' tcp "$add_reserved_ports")
+        add_reserved_ports="$add_reserved_ports $ANYREALITY_PORT"
+    fi
+
+    if [ "$add_ss2022" -eq 1 ]; then
+        ask_value '新增 Shadowsocks 2022 TCP/UDP 端口（留空自动分配）' ''
+        SS2022_PORT=$(add_pick_port "$(trim_value "$REPLY")" 'Shadowsocks 2022' ss2022 "$add_reserved_ports")
+        SS2022_PASSWORD=$(openssl rand -base64 16)
+    fi
+    if [ "$add_anytls" -eq 1 ]; then
+        ANYTLS_PASSWORD=$(openssl rand -hex 24)
+    fi
+    if [ "$add_argo" -eq 1 ]; then
+        ARGO_UUID=$("$SB_BIN" generate uuid)
+        ARGO_PATH="/ws-$(openssl rand -hex 8)"
+    fi
+    if [ "$add_ws" -eq 1 ]; then
+        WS_UUID=$("$SB_BIN" generate uuid)
+        WS_PATH="/ws-$(openssl rand -hex 8)"
+    fi
+    if [ "$add_reality" -eq 1 ]; then
+        REALITY_UUID=$("$SB_BIN" generate uuid)
+        add_reality_keypair=$("$SB_BIN" generate reality-keypair)
+        REALITY_PRIVATE=$(printf '%s\n' "$add_reality_keypair" | awk '/PrivateKey/ {print $2}')
+        REALITY_PUBLIC=$(printf '%s\n' "$add_reality_keypair" | awk '/PublicKey/ {print $2}')
+        REALITY_SID=$("$SB_BIN" generate rand --hex 8)
+        [ -n "$REALITY_PRIVATE" ] && [ -n "$REALITY_PUBLIC" ] && [ -n "$REALITY_SID" ] ||
+            err 'VLESS Reality 密钥生成失败。'
+    fi
+    if [ "$add_naive" -eq 1 ]; then
+        NAIVE_USERNAME="naive-$(openssl rand -hex 6)"
+        NAIVE_PASSWORD=$(openssl rand -hex 24)
+    fi
+    if [ "$add_anyreality" -eq 1 ]; then
+        ANYREALITY_PASSWORD=$(openssl rand -hex 24)
+        add_anyreality_keypair=$("$SB_BIN" generate reality-keypair)
+        ANYREALITY_PRIVATE=$(printf '%s\n' "$add_anyreality_keypair" | awk '/PrivateKey/ {print $2}')
+        ANYREALITY_PUBLIC=$(printf '%s\n' "$add_anyreality_keypair" | awk '/PublicKey/ {print $2}')
+        ANYREALITY_SID=$("$SB_BIN" generate rand --hex 8)
+        [ -n "$ANYREALITY_PRIVATE" ] && [ -n "$ANYREALITY_PUBLIC" ] && [ -n "$ANYREALITY_SID" ] ||
+            err 'AnyTLS + Reality 密钥生成失败。'
+    fi
+
+    add_argo_token_backup=""
+    add_argo_token_had_old=0
+    if [ "$add_argo" -eq 1 ]; then
+        install_cloudflared
+        if [ -s "$ARGO_TOKEN_FILE" ]; then
+            add_argo_token_backup="${ARGO_TOKEN_FILE}.add-backup.$$"
+            cp -p "$ARGO_TOKEN_FILE" "$add_argo_token_backup" ||
+                err '无法备份现有 Tunnel Token；为避免丢失凭据，停止添加。'
+            add_argo_token_had_old=1
+        fi
+        write_argo_token_file "$ARGO_TOKEN" || err '无法安全保存 Cloudflare Tunnel Token。'
+    fi
+
+    create_service
+    if ! build_config; then
+        if [ "$add_argo" -eq 1 ]; then
+            if [ "$add_argo_token_had_old" -eq 1 ]; then
+                cp -p "$add_argo_token_backup" "$ARGO_TOKEN_FILE"
+                chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+            else
+                rm -f "$ARGO_TOKEN_FILE"
+            fi
+            rm -f "$add_argo_token_backup"
+        fi
+        load_state
+        derive_runtime_needs
+        warn '新增协议未能通过配置检查或启动检查；原有 manager.json 和 sing-box 配置已回滚。'
+        return 0
+    fi
+
+    if [ "$add_argo" -eq 1 ]; then
+        rm -f "$add_argo_token_backup"
+        create_cloudflared_service
+        if start_cloudflared_service; then
+            msg '新增的 Cloudflare Tunnel 服务已启动。'
+        else
+            warn 'Argo WS 配置已写入，但 cloudflared 未能启动；请检查 Tunnel Token、出站网络及日志。'
+        fi
+        msg "请在 Cloudflare Zero Trust 添加/确认 Public Hostname：$ARGO_HOST → http://127.0.0.1:$ARGO_PORT"
+    fi
+
+    msg '增量添加完成。旧节点参数保持不变；以下为当前全部已安装节点：'
     show_nodes
-    msg '请确认云厂商安全组和系统防火墙仍放行以下 TCP 端口：'
-    printf '  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
-    msg '管理命令：/usr/local/sbin/sb-manager'
-    msg '节点文件：/etc/sing-box/nodes.txt'
+    msg '新增协议需要在防火墙 / NAT 服务商开放或映射的 TCP 端口：'
+    [ "$add_anytls" -eq 0 ] || printf '  AnyTLS：%s/tcp\n' "$ANYTLS_PORT"
+    [ "$add_reality" -eq 0 ] || printf '  VLESS Reality：%s/tcp\n' "$REALITY_PORT"
+    [ "$add_naive" -eq 0 ] || printf '  NaiveProxy：%s/tcp\n' "$NAIVE_PORT"
+    [ "$add_anyreality" -eq 0 ] || printf '  AnyTLS + Reality：%s/tcp\n' "$ANYREALITY_PORT"
+    [ "$add_ss2022" -eq 0 ] || printf '  Shadowsocks 2022：%s/tcp + udp\n' "$SS2022_PORT"
+    [ "$add_ws" -eq 0 ] || printf '  VLESS + WS 直连：%s/tcp\n' "$WS_PORT"
+    [ "$add_argo" -eq 0 ] || msg 'VLESS + WS Argo 客户端公网端口为 443；本机 WS 端口不需要 NAT 入站映射。'
+}
+
+ask_argo_install_fields() {
+    ask_value 'Cloudflare Tunnel Public Hostname（例如 tunnel.example.com）' ''
+    ARGO_HOST=$(trim_value "$REPLY")
+    ask_value 'Tunnel 备注名（可选）' ''
+    ARGO_TUNNEL_NAME=$(trim_value "$REPLY")
+    ask_secret 'Cloudflare Tunnel Token（粘贴完整 eyJ... Token；不是 DNS API Token）'
+    ARGO_TOKEN=$(trim_value "$REPLY")
+    valid_argo_token "$ARGO_TOKEN" || err 'Cloudflare Tunnel Token 格式无效。'
+    ask_value 'Argo 客户端连接地址 / 优选 IP（留空使用 Public Hostname）' "$ARGO_HOST"
+    ARGO_SERVER=$(trim_value "$REPLY")
 }
 
 install_wizard() {
     need_root
-    ORIGIN_ADDR=""
-    ORIGIN_IPV6=""
-    WS_SERVER=""
-    WS_HOST=""
+    ORIGIN_ADDR=""; ORIGIN_IPV6=""; WS_SERVER=""; WS_HOST=""
+    ENABLE_ANYTLS=0; ENABLE_WS_TLS=0; ENABLE_WS_ARGO=0; ENABLE_SS2022=0; ENABLE_VLESS_REALITY=0; ENABLE_NAIVE=0; ENABLE_ANYTLS_REALITY=0
+    msg '========== sing-box 选择性安装向导 =========='
+    ask_value '安装普通 AnyTLS？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_ANYTLS=1 ;; esac
+    ask_value '安装 VLESS + WS + TLS 直连？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_WS_TLS=1 ;; esac
+    ask_value '安装 VLESS + WS + TLS Argo？(Y/n)' 'y'; case "$REPLY" in y|Y|yes|YES) ENABLE_WS_ARGO=1 ;; esac
+    ask_value '安装 VLESS + Reality？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_VLESS_REALITY=1 ;; esac
+    ask_value '安装 NaiveProxy？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_NAIVE=1 ;; esac
+    ask_value '安装 Shadowsocks 2022？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_SS2022=1 ;; esac
+    ask_value '安装 AnyTLS + Reality？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_ANYTLS_REALITY=1 ;; esac
+    selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_WS_ARGO + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_SS2022))
+    [ "$selected_count" -gt 0 ] || err '至少选择一种协议。'
 
-    msg '========== sing-box 一键安装向导（IPv4 + IPv6 双栈，五种协议配置） =========='
-    msg '证书方式：'
-    printf '  1. Cloudflare DNS-01：使用 API Token 自动签发和续期。\n'
-    printf '  2. HTTP-01：域名必须解析到本机，公网 TCP 80 必须可访问且空闲。\n'
-    printf '  3. 手动导入已有证书。\n'
-    ask_value '请选择证书方式（1/2/3）' '2'
-    case "$REPLY" in
-        1) CERT_MODE=cloudflare ;;
-        2) CERT_MODE=standalone ;;
-        3) CERT_MODE=manual ;;
-        *) err '证书方式只能选择 1、2 或 3。' ;;
-    esac
+    ARGO_HOST=""; ARGO_TUNNEL_NAME=""; ARGO_TOKEN=""; ARGO_SERVER=""
+    [ "$ENABLE_WS_ARGO" = 0 ] || ask_argo_install_fields
 
-    if [ "$CERT_MODE" = cloudflare ]; then
-        ask_value 'Cloudflare DNS 区域根域名（例如 example.com）' ''
-        CF_ZONE_NAME=$(trim_value "$REPLY")
-        valid_cert_domain "$CF_ZONE_NAME" || err '请输入有效的 Cloudflare DNS 区域根域名。'
-        ask_value '已解析到本机的完整域名（留空使用根域名）' "$CF_ZONE_NAME"
+    derive_runtime_needs
+    if [ "$NEED_CERT" = 1 ]; then
+        msg '所选协议需要 TLS 证书。证书方式：1=Cloudflare DNS-01，2=HTTP-01，3=手动导入。'
+        ask_value '请选择证书方式（1/2/3）' '1'
+        case "$REPLY" in 1) CERT_MODE=cloudflare ;; 2) CERT_MODE=standalone ;; 3) CERT_MODE=manual ;; *) err '证书方式只能选择 1、2 或 3。' ;; esac
+        if [ "$CERT_MODE" = cloudflare ]; then
+            ask_value 'Cloudflare DNS 区域根域名（例如 example.com）' ''
+            CF_ZONE_NAME=$(trim_value "$REPLY")
+            ask_value 'TLS 证书域名（例如 node.example.com）' "$CF_ZONE_NAME"
+            TLS_DOMAIN=$(trim_value "$REPLY")
+            ask_secret 'Cloudflare DNS API Token（Zone:DNS:Edit）'
+            cf_token=$(trim_value "$REPLY")
+            ask_value '证书账户邮箱（可留空）' ''; cert_email=$(trim_value "$REPLY")
+            ask_value 'Cloudflare Zone ID（可选）' ''; zone_id=$(trim_value "$REPLY")
+        else
+            CF_ZONE_NAME=""
+            ask_value 'TLS 证书域名（例如 node.example.com）' ''
+            TLS_DOMAIN=$(trim_value "$REPLY")
+            if [ "$CERT_MODE" = manual ]; then
+                msg '稍后会要求输入现有证书链和私钥文件路径。'
+            fi
+        fi
     else
-        ask_value 'TLS 证书域名（例如 node.example.com）' ''
+        CERT_MODE=none; TLS_DOMAIN=""; CF_ZONE_NAME=""; cf_token=""; cert_email=""; zone_id=""
     fi
-    TLS_DOMAIN=$(trim_value "$REPLY")
-    resolve_install_domains
-    confirm_domain_control "$TLS_DOMAIN" || err '未确认域名所有权，已停止证书申请。'
 
-    ask_value '优选 IP/域名（可留空，默认使用证书域名；IPv6 不加方括号）' ''
-    WS_SERVER=$(trim_value "$REPLY")
-
-    ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'
-    REALITY_SNI=$(trim_value "$REPLY")
+    if [ "$ENABLE_WS_TLS" = 1 ]; then
+        ask_value 'WS 客户端连接地址/优选 IP（可留空使用 TLS 域名）' "$TLS_DOMAIN"
+        WS_SERVER=$(trim_value "$REPLY")
+    fi
+    if [ "$ENABLE_VLESS_REALITY" = 1 ] || [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+        ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'
+        REALITY_SNI=$(trim_value "$REPLY")
+    else REALITY_SNI=""; fi
     ask_value '节点辨识符（支持中文；可留空）' ''
     NODE_LABEL=$(trim_value "$REPLY")
     ask_ports
-
-    if [ "$CERT_MODE" = cloudflare ]; then
-        ask_secret 'Cloudflare API Token（输入时不会显示）'
-        cf_token=$(trim_value "$REPLY")
-        while :; do
-            ask_value '证书账户邮箱（可留空）' ''
-            cert_email=$(trim_value "$REPLY")
-            [ -z "$cert_email" ] && break
-            valid_email "$cert_email" && break
-            warn '邮箱格式不正确。请填写真实邮箱地址，或直接按 Enter 留空。'
-        done
-        ask_value 'Cloudflare Zone ID（可选，留空时 Token 还需 Zone:Zone:Read 权限）' ''
-        zone_id=$(trim_value "$REPLY")
-    fi
     install_from_config
 }
 
 resolve_install_domains() {
-    if [ "$CERT_MODE" = cloudflare ]; then
-        valid_cert_domain "$CF_ZONE_NAME" || err '请输入有效的 Cloudflare DNS 区域根域名。'
-        TLS_DOMAIN=${TLS_DOMAIN:-${WS_SERVER:-$CF_ZONE_NAME}}
-        domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" ||
-            err "TLS 证书域名 $TLS_DOMAIN 必须属于 Cloudflare 区域 $CF_ZONE_NAME。"
+    if [ "$NEED_CERT" = 1 ]; then
+        case "$CERT_MODE" in
+            cloudflare)
+                valid_cert_domain "$CF_ZONE_NAME" || err '请输入有效的 Cloudflare DNS 区域根域名。'
+                TLS_DOMAIN=${TLS_DOMAIN:-$CF_ZONE_NAME}
+                valid_cert_domain "$TLS_DOMAIN" || err '请输入有效的 TLS 证书域名。'
+                domain_belongs_to_zone "$TLS_DOMAIN" "$CF_ZONE_NAME" || err "TLS 证书域名 $TLS_DOMAIN 必须属于 Cloudflare 区域 $CF_ZONE_NAME。"
+                ;;
+            standalone|manual) valid_cert_domain "$TLS_DOMAIN" || err '请输入有效的 TLS 证书域名。' ;;
+            *) err '所选协议需要 TLS 证书，但证书方式无效。' ;;
+        esac
+    else
+        TLS_DOMAIN=""
+        WS_HOST=""
     fi
-    valid_cert_domain "$TLS_DOMAIN" || err '请输入有效的 TLS 证书域名，例如 node.example.com。'
-    WS_SERVER=${WS_SERVER:-$TLS_DOMAIN}
-    WS_HOST=${WS_HOST:-$TLS_DOMAIN}
-    valid_domain "$WS_HOST" || err 'WS HTTP Host 必须是有效域名。'
+
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        valid_cert_domain "$ARGO_HOST" || err '请输入有效且已接入 Cloudflare 的 Argo 公网主机名。'
+        ARGO_SERVER=${ARGO_SERVER:-$ARGO_HOST}
+    else ARGO_SERVER=""; fi
+    if [ "$ENABLE_WS_TLS" = 1 ]; then
+        WS_SERVER=${WS_SERVER:-$TLS_DOMAIN}
+        WS_HOST=${WS_HOST:-$TLS_DOMAIN}
+        valid_domain "$WS_HOST" || err 'WS HTTP Host 必须是有效域名。'
+        if [ "$ENABLE_WS_ARGO" = 1 ] && [ "$(printf '%s' "$ARGO_HOST" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$WS_HOST" | tr '[:upper:]' '[:lower:]')" ]; then
+            warn '两条线路使用相同的 WS Host；若均通过 DNS 访问，请为直连和 Argo 分别配置不同的主机名。'
+        fi
+    else
+        WS_SERVER=""; WS_HOST=""
+    fi
 }
 
 resolve_install_addresses() {
-    if [ -z "$ORIGIN_ADDR" ] && [ -z "$ORIGIN_IPV6" ]; then
+    if [ "$NEED_ORIGIN" = 1 ] && [ -z "$ORIGIN_ADDR" ] && [ -z "$ORIGIN_IPV6" ]; then
         ORIGIN_ADDR=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
         if ! valid_ipv4_address "$ORIGIN_ADDR"; then ORIGIN_ADDR=""; fi
         if ipv6_kernel_enabled; then
@@ -1430,181 +2313,302 @@ resolve_install_addresses() {
     fi
     [ "$ORIGIN_ADDR" = "-" ] && ORIGIN_ADDR=""
     [ "$ORIGIN_IPV6" = "-" ] && ORIGIN_IPV6=""
-    if [ -n "$ORIGIN_ADDR" ]; then valid_main_address "$ORIGIN_ADDR" || err '源站主地址必须是 IPv4 地址或域名。'; fi
-    if [ -n "$ORIGIN_IPV6" ]; then
-        ipv6_kernel_enabled || err '检测到系统未启用 IPv6，不能配置 IPv6 源站地址。'
-        valid_ipv6_address "$ORIGIN_IPV6" || err '源站 IPv6 地址格式不正确，或服务器没有到该地址的 IPv6 路由。'
+    if [ "$NEED_ORIGIN" = 1 ]; then
+        if [ -n "$ORIGIN_ADDR" ]; then valid_main_address "$ORIGIN_ADDR" || err '源站主地址必须是 IPv4 地址或域名。'; fi
+        if [ -n "$ORIGIN_IPV6" ]; then
+            ipv6_kernel_enabled || err '检测到系统未启用 IPv6，不能配置 IPv6 源站地址。'
+            valid_ipv6_address "$ORIGIN_IPV6" || err '源站 IPv6 地址格式不正确，或服务器没有到该地址的 IPv6 路由。'
+        fi
+        [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] || err '所选直连协议需要公网 IPv4 或 IPv6；未能检测到源站地址。'
+    else
+        ORIGIN_ADDR=""
+        ORIGIN_IPV6=""
     fi
-    [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] || err '未能检测到 VPS 公网 IPv4 或 IPv6。请检查 VPS 的公网网络后重试。'
-    msg "源站地址：IPv4=${ORIGIN_ADDR:-未检测到}，IPv6=${ORIGIN_IPV6:-未检测到}"
 
-    case "$WS_SERVER" in
-        *:*)
-            ipv6_kernel_enabled || err '检测到系统未启用 IPv6，不能使用 IPv6 作为 WS 连接地址。'
-            valid_ipv6_address "$WS_SERVER" || err 'WS TLS IPv6 地址格式不正确，或服务器没有到该地址的 IPv6 路由。'
-            PREFERRED_IP=""
-            PREFERRED_IPV6=$WS_SERVER
-            ;;
-        *)
-            valid_main_address "$WS_SERVER" || err 'WS TLS 地址应为 IPv4 或域名；IPv6 请填写不带方括号的 IPv6 地址。'
-            PREFERRED_IP=$WS_SERVER
-            PREFERRED_IPV6=""
-            ;;
-    esac
+    PREFERRED_IP=""
+    PREFERRED_IPV6=""
+    if [ "$ENABLE_WS_TLS" = 1 ] && [ -n "$WS_SERVER" ]; then
+        case "$WS_SERVER" in
+            *:*)
+                valid_ipv6_literal "$WS_SERVER" || err 'WS 客户端 IPv6 地址格式不正确。'
+                PREFERRED_IPV6=$WS_SERVER
+                ;;
+            *)
+                valid_main_address "$WS_SERVER" || err 'WS TLS 地址应为 IPv4 或域名；IPv6 请填写不带方括号的 IPv6 地址。'
+                PREFERRED_IP=$WS_SERVER
+                ;;
+        esac
+    fi
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        case "$ARGO_SERVER" in
+            *:*) valid_ipv6_literal "$ARGO_SERVER" || err 'Argo 客户端 IPv6 地址格式不正确。' ;;
+            *) valid_main_address "$ARGO_SERVER" || err 'Argo 客户端连接地址应为 IPv4、IPv6 或域名。' ;;
+        esac
+    fi
+    msg "源站地址：IPv4=${ORIGIN_ADDR:-不需要/未检测到}，IPv6=${ORIGIN_IPV6:-未设置}"
 }
 
 install_from_config() {
-    resolve_install_domains
-    REALITY_SNI=${REALITY_SNI:-www.bing.com}
-    valid_domain "$REALITY_SNI" || err 'Reality SNI 必须是有效域名。'
-    if [ "$CERT_MODE" = cloudflare ]; then
-        [ -n "$cf_token" ] || err 'Cloudflare API Token 不能为空。'
-        [ -z "$cert_email" ] || valid_email "$cert_email" || err '证书账户邮箱格式不正确。'
-        if [ -n "$zone_id" ]; then
-            case "$zone_id" in *[!A-Fa-f0-9]*) err 'Zone ID 必须是 32 位十六进制字符串。' ;; esac
-            [ "${#zone_id}" -eq 32 ] || err 'Zone ID 必须是 32 位十六进制字符串。'
-        fi
+    selected_count=0
+    for enabled in "$ENABLE_ANYTLS" "$ENABLE_WS_TLS" "$ENABLE_WS_ARGO" "$ENABLE_VLESS_REALITY" "$ENABLE_NAIVE" "$ENABLE_ANYTLS_REALITY" "$ENABLE_SS2022"; do
+        [ "$enabled" = 1 ] && selected_count=$((selected_count + 1))
+    done
+    [ "$selected_count" -gt 0 ] || err '至少选择一种协议。'
+
+    derive_runtime_needs
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        valid_argo_token "$ARGO_TOKEN" || err 'Cloudflare Tunnel Token 格式无效；请粘贴完整的 eyJ... Token。'
     fi
 
-    install_dependencies_and_core
+    if [ "$NEED_CERT" = 1 ]; then
+        resolve_install_domains
+        case "$CERT_MODE" in
+            cloudflare)
+                [ -n "$cf_token" ] || err 'Cloudflare DNS-01 API Token 不能为空。'
+                [ -z "$cert_email" ] || valid_email "$cert_email" || err '证书账户邮箱格式不正确。'
+                if [ -n "$zone_id" ]; then
+                    case "$zone_id" in *[!A-Fa-f0-9]*) err 'Zone ID 必须是 32 位十六进制字符串。' ;; esac
+                    [ "${#zone_id}" -eq 32 ] || err 'Zone ID 必须是 32 位十六进制字符串。'
+                fi
+                ;;
+            standalone|manual) ;;
+            *) err '所选协议需要 TLS 证书，请选择 Cloudflare DNS-01、HTTP-01 或手动证书。' ;;
+        esac
+    else
+        CERT_MODE=none
+        TLS_DOMAIN=""
+        CF_ZONE_NAME=""
+        cf_token=""
+        cert_email=""
+        zone_id=""
+    fi
+
+    if [ "$ENABLE_VLESS_REALITY" = 1 ] || [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+        REALITY_SNI=${REALITY_SNI:-www.bing.com}
+        valid_domain "$REALITY_SNI" || err 'Reality SNI 必须是有效域名。'
+    else REALITY_SNI=""; fi
+
+    resolve_install_domains
     resolve_install_addresses
-    PREVIOUS_ANYTLS_PORT=""
-    PREVIOUS_WS_PORT=""
-    PREVIOUS_REALITY_PORT=""
-    PREVIOUS_NAIVE_PORT=""
-    PREVIOUS_ANYREALITY_PORT=""
+
+    if [ ! -e "$STATE_FILE" ] && [ -d "$APP_DIR" ]; then backup_existing_install; fi
+    install_dependencies_and_core
+    PREVIOUS_ANYTLS_PORT=""; PREVIOUS_WS_PORT=""; PREVIOUS_REALITY_PORT=""; PREVIOUS_NAIVE_PORT=""; PREVIOUS_ANYREALITY_PORT=""
     assign_ports
 
     if [ -n "$NODE_LABEL" ]; then
         label_length=$(jq -nr --arg node_label "$NODE_LABEL" '$node_label | length')
         [ "$label_length" -le 20 ] || err '节点辨识符最多 20 个字符。'
-        jq -ne --arg node_label "$NODE_LABEL" '$node_label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
-            err '节点辨识符仅支持中文、英文字母、数字、点、下划线和短横线。'
+        jq -ne --arg node_label "$NODE_LABEL" '$node_label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 || err '节点辨识符仅支持中文、英文字母、数字、点、下划线和短横线。'
     fi
+
     ensure_service_account
     enable_bbr
     create_service
-    setup_reload_hook
+    if [ "$NEED_CERT" = 1 ]; then
+        setup_reload_hook
+        case "$CERT_MODE" in
+            cloudflare)
+                printf '%s' "$cf_token" > "$CF_TOKEN_FILE"; chmod 0600 "$CF_TOKEN_FILE"; chown root:root "$CF_TOKEN_FILE"
+                rm -f "$CF_ZONE_ID_FILE"
+                if [ -n "$zone_id" ]; then printf '%s' "$zone_id" > "$CF_ZONE_ID_FILE"; chmod 0600 "$CF_ZONE_ID_FILE"; fi
+                install_acme "$cert_email"
+                issue_cloudflare_cert "$TLS_DOMAIN" || err 'Cloudflare DNS-01 证书处理失败；请检查 Token 权限、Zone ID 和域名托管状态。'
+                ;;
+            standalone)
+                CF_ZONE_NAME=""; rm -f "$CF_TOKEN_FILE" "$CF_ZONE_ID_FILE"
+                issue_http_cert "$TLS_DOMAIN" || err 'HTTP-01 证书申请失败；请确认域名解析到 VPS，且公网 TCP 80 可访问。'
+                ;;
+            manual)
+                CF_ZONE_NAME=""; rm -f "$CF_TOKEN_FILE" "$CF_ZONE_ID_FILE"
+                install_manual_cert "$TLS_DOMAIN"
+                ;;
+        esac
+    else
+        rm -f "$CF_TOKEN_FILE" "$CF_ZONE_ID_FILE"
+    fi
 
-    case "$CERT_MODE" in
-        cloudflare)
-            printf '%s' "$cf_token" > "$CF_TOKEN_FILE"
-            chmod 0600 "$CF_TOKEN_FILE"
-            chown root:root "$CF_TOKEN_FILE"
-            rm -f "$CF_ZONE_ID_FILE"
-            if [ -n "$zone_id" ]; then
-                printf '%s' "$zone_id" > "$CF_ZONE_ID_FILE"
-                chmod 0600 "$CF_ZONE_ID_FILE"
-            fi
-            install_acme "$cert_email"
-            issue_cloudflare_cert "$TLS_DOMAIN" || err 'Cloudflare DNS-01 证书处理失败。请检查 Token 是否有效、Zone ID 是否属于该区域、Token 是否有该区域 DNS Edit 权限，以及该域名是否真的由 Cloudflare 托管。'
-            ;;
-        standalone)
-            CF_ZONE_NAME=""
-            rm -f "$CF_TOKEN_FILE" "$CF_ZONE_ID_FILE"
-            issue_http_cert "$TLS_DOMAIN" || err 'HTTP-01 证书申请失败。请确认域名 A/AAAA 记录、TCP 80 入站和端口占用情况。'
-            ;;
-        manual)
-            CF_ZONE_NAME=""
-            rm -f "$CF_TOKEN_FILE" "$CF_ZONE_ID_FILE"
-            install_manual_cert "$TLS_DOMAIN"
-            ;;
-    esac
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        write_argo_token_file "$ARGO_TOKEN" || err '无法安全写入 Cloudflare Tunnel Token 文件；请检查 /etc/sing-box 权限。'
+    fi
 
-    ANYTLS_PASSWORD=$(openssl rand -hex 24)
-    WS_UUID=$("$SB_BIN" generate uuid)
-    REALITY_UUID=$("$SB_BIN" generate uuid)
-    keypair=$("$SB_BIN" generate reality-keypair)
-    REALITY_PRIVATE=$(printf '%s\n' "$keypair" | awk '/PrivateKey/ {print $2}')
-    REALITY_PUBLIC=$(printf '%s\n' "$keypair" | awk '/PublicKey/ {print $2}')
-    [ -n "$REALITY_PRIVATE" ] && [ -n "$REALITY_PUBLIC" ] || err 'Reality 密钥生成失败。'
-    REALITY_SID=$("$SB_BIN" generate rand --hex 8)
-    WS_PATH="/ws-$(openssl rand -hex 8)"
-    NAIVE_USERNAME="naive-$(openssl rand -hex 6)"
-    NAIVE_PASSWORD=$(openssl rand -hex 24)
-    ANYREALITY_PASSWORD=$(openssl rand -hex 24)
-    anyreality_keypair=$("$SB_BIN" generate reality-keypair)
-    ANYREALITY_PRIVATE=$(printf '%s\n' "$anyreality_keypair" | awk '/PrivateKey/ {print $2}')
-    ANYREALITY_PUBLIC=$(printf '%s\n' "$anyreality_keypair" | awk '/PublicKey/ {print $2}')
-    ANYREALITY_SID=$("$SB_BIN" generate rand --hex 8)
-    [ -n "$ANYREALITY_PRIVATE" ] && [ -n "$ANYREALITY_PUBLIC" ] && [ -n "$ANYREALITY_SID" ] ||
-        err 'AnyTLS + Reality 密钥生成失败。'
+    ANYTLS_PASSWORD=""; WS_UUID=""; REALITY_UUID=""; REALITY_PRIVATE=""; REALITY_PUBLIC=""; REALITY_SID=""
+    NAIVE_USERNAME=""; NAIVE_PASSWORD=""; ANYREALITY_PASSWORD=""; ANYREALITY_PRIVATE=""; ANYREALITY_PUBLIC=""; ANYREALITY_SID=""
+    WS_PATH=""
+    [ "$ENABLE_SS2022" = 0 ] || SS2022_PASSWORD=$(openssl rand -base64 16)
+    [ "$ENABLE_ANYTLS" = 0 ] || ANYTLS_PASSWORD=$(openssl rand -hex 24)
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then ARGO_UUID=$("$SB_BIN" generate uuid); ARGO_PATH="/ws-$(openssl rand -hex 8)"; fi
+    if [ "$ENABLE_WS_TLS" = 1 ]; then WS_UUID=$("$SB_BIN" generate uuid); WS_PATH="/ws-$(openssl rand -hex 8)"; fi
+    if [ "$ENABLE_VLESS_REALITY" = 1 ]; then
+        REALITY_UUID=$("$SB_BIN" generate uuid); keypair=$("$SB_BIN" generate reality-keypair)
+        REALITY_PRIVATE=$(printf '%s\n' "$keypair" | awk '/PrivateKey/ {print $2}')
+        REALITY_PUBLIC=$(printf '%s\n' "$keypair" | awk '/PublicKey/ {print $2}')
+        REALITY_SID=$("$SB_BIN" generate rand --hex 8)
+        [ -n "$REALITY_PRIVATE" ] && [ -n "$REALITY_PUBLIC" ] && [ -n "$REALITY_SID" ] || err 'VLESS Reality 密钥生成失败。'
+    fi
+    if [ "$ENABLE_NAIVE" = 1 ]; then NAIVE_USERNAME="naive-$(openssl rand -hex 6)"; NAIVE_PASSWORD=$(openssl rand -hex 24); fi
+    if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+        ANYREALITY_PASSWORD=$(openssl rand -hex 24); anyreality_keypair=$("$SB_BIN" generate reality-keypair)
+        ANYREALITY_PRIVATE=$(printf '%s\n' "$anyreality_keypair" | awk '/PrivateKey/ {print $2}')
+        ANYREALITY_PUBLIC=$(printf '%s\n' "$anyreality_keypair" | awk '/PublicKey/ {print $2}')
+        ANYREALITY_SID=$("$SB_BIN" generate rand --hex 8)
+        [ -n "$ANYREALITY_PRIVATE" ] && [ -n "$ANYREALITY_PUBLIC" ] && [ -n "$ANYREALITY_SID" ] || err 'AnyTLS + Reality 密钥生成失败。'
+    fi
+
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        install_cloudflared
+        create_cloudflared_service
+    fi
 
     build_config || err '配置未能成功应用，请检查 sing-box 日志。'
-    save_state
-    msg '安装完成。正在显示全部五种协议节点……'
+    save_state || err 'sing-box 已启动，但管理状态保存失败；请检查磁盘空间和 /etc/sing-box 权限。'
+
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        if start_cloudflared_service; then
+            msg 'Cloudflare Tunnel 服务已启动。'
+        else
+            warn 'Cloudflare Tunnel 未能启动；请检查 cloudflared 日志和 Token。'
+        fi
+        msg "Cloudflare Tunnel 路由必须设置：Public Hostname $ARGO_HOST → http://127.0.0.1:$ARGO_PORT"
+        msg 'Argo 模式客户端使用 TLS 443；本机 WS 监听端口不需要 NAT 入站映射。'
+    fi
+
+    msg '安装完成。仅显示已选择的协议节点：'
     show_nodes
-    msg '请在云厂商安全组和系统防火墙放行以下 TCP 端口：'
-    printf '  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n  %s/tcp\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
+    msg '需要公网入站放行的 TCP 端口（Argo WS 不需要 NAT 入站端口）：'
+    [ "$ENABLE_ANYTLS" = 0 ] || printf '  AnyTLS: %s/tcp\n' "$ANYTLS_PORT"
+    [ "$ENABLE_VLESS_REALITY" = 0 ] || printf '  VLESS Reality: %s/tcp\n' "$REALITY_PORT"
+    [ "$ENABLE_NAIVE" = 0 ] || printf '  NaiveProxy: %s/tcp\n' "$NAIVE_PORT"
+    [ "$ENABLE_ANYTLS_REALITY" = 0 ] || printf '  AnyTLS Reality: %s/tcp\n' "$ANYREALITY_PORT"
+    [ "$ENABLE_SS2022" = 0 ] || printf '  Shadowsocks 2022: %s/tcp + udp\n' "$SS2022_PORT"
+    [ "$ENABLE_WS_TLS" = 0 ] || printf '  VLESS WS TLS: %s/tcp\n' "$WS_PORT"
+    [ "$ENABLE_WS_ARGO" = 0 ] || msg '  VLESS WS Argo: 无需公网入站端口（cloudflared 主动出站连接）'
     msg '管理命令：/usr/local/sbin/sb-manager'
 }
 
-
 web_string() {
     trim_value "$(jq -r --arg key "$1" '.[$key] // ""' "$web_cfg")"
+}
+
+backup_existing_install() {
+    [ -d "$APP_DIR" ] || return 0
+
+    backup_root=/var/backups/sb-manager
+    backup_stamp=$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || printf unknown)
+    backup_dir="$backup_root/pre-install-$backup_stamp-$$"
+    install -d -m 0700 "$backup_root" || err "无法创建备份目录：$backup_root"
+    install -d -m 0700 "$backup_dir" || err "无法创建备份目录：$backup_dir"
+
+    if ! cp -a "$APP_DIR" "$backup_dir/sing-box"; then
+        rm -rf "$backup_dir"
+        err '备份现有 /etc/sing-box 失败；为避免覆盖数据，已停止安装。'
+    fi
+    [ ! -f /etc/systemd/system/sing-box.service ] || cp -p /etc/systemd/system/sing-box.service "$backup_dir/systemd-sing-box.service" || {
+        rm -rf "$backup_dir"
+        err '备份现有 systemd 服务文件失败；为避免覆盖数据，已停止安装。'
+    }
+    [ ! -f /etc/init.d/sing-box ] || cp -p /etc/init.d/sing-box "$backup_dir/openrc-sing-box" || {
+        rm -rf "$backup_dir"
+        err '备份现有 OpenRC 服务文件失败；为避免覆盖数据，已停止安装。'
+    }
+    [ ! -f "$RELOAD_HOOK" ] || cp -p "$RELOAD_HOOK" "$backup_dir/sing-box-cert-reload" || {
+        rm -rf "$backup_dir"
+        err '备份现有证书重载钩子失败；为避免覆盖数据，已停止安装。'
+    }
+    chmod -R go-rwx "$backup_dir" 2>/dev/null || true
+    msg "已备份原有 sing-box 数据及服务文件：$backup_dir"
+}
+
+manager_state_is_valid() {
+    [ -s "$STATE_FILE" ] || return 1
+    jq -e '
+      def enabled($k): if has($k) then .[$k] == true else true end;
+      def nonempty($v): ($v | type == "string" and length > 0);
+      type == "object" and
+      ((enabled("enabled_anytls") | not) or (nonempty(.anytls_password) and (.anytls_port | type == "number"))) and
+      ((enabled("enabled_ws_tls") | not) or (nonempty(.ws_uuid) and (.ws_port | type == "number") and nonempty(.ws_path) and
+        (if .ws_mode == "argo" then nonempty(.argo_host) else nonempty(.tls_domain) and nonempty(.ws_host) end))) and
+      ((.enabled_ss2022 != true) or (nonempty(.ss2022_password) and (.ss2022_port | type == "number"))) and
+      ((.enabled_ws_argo != true) or (nonempty(.argo_host) and nonempty(.argo_uuid) and (.argo_port | type == "number") and nonempty(.argo_path))) and
+      ((enabled("enabled_vless_reality") | not) or (nonempty(.reality_uuid) and nonempty(.reality_private) and nonempty(.reality_public) and nonempty(.reality_sid) and (.reality_port | type == "number") and nonempty(.reality_sni))) and
+      ((enabled("enabled_naive") | not) or (nonempty(.naive_username) and nonempty(.naive_password) and (.naive_port | type == "number") and nonempty(.tls_domain))) and
+      ((enabled("enabled_anytls_reality") | not) or (nonempty(.anyreality_password) and nonempty(.anyreality_private) and nonempty(.anyreality_public) and nonempty(.anyreality_sid) and (.anyreality_port | type == "number") and nonempty(.reality_sni))) and
+      (if (.enabled_ss2022 == true or enabled("enabled_anytls") or enabled("enabled_naive") or enabled("enabled_vless_reality") or enabled("enabled_anytls_reality")) then (nonempty(.origin_addr) or nonempty(.origin_ipv6)) else true end) and
+      (if (enabled("enabled_anytls") or enabled("enabled_naive") or (enabled("enabled_ws_tls") and (.ws_mode // "direct") == "direct")) then nonempty(.tls_domain) and nonempty(.cert_file) and nonempty(.key_file) and nonempty(.cert_mode) else true end)
+    ' "$STATE_FILE" >/dev/null 2>&1
 }
 
 install_web_config() {
     need_root
     web_cfg=${1:-}
     [ -n "$web_cfg" ] && [ -s "$web_cfg" ] || err '请提供网页生成的 JSON 配置文件。'
-    [ ! -e "$STATE_FILE" ] || err '此 VPS 已有 sing-box 管理配置。运行 /usr/local/sbin/sb-manager nodes 查看现有节点。若要用网页配置替换，请先备份现有配置，再运行 /usr/local/sbin/sb-manager uninstall --yes，然后重新执行网页安装命令。'
-
     if ! command -v jq >/dev/null 2>&1; then
-        if [ -f /etc/alpine-release ]; then
-            apk add --no-cache jq
-        elif [ -f /etc/debian_version ]; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y jq
-        else
-            err '网页配置安装仅支持 Debian/Ubuntu 和 Alpine。'
-        fi
+        if [ -f /etc/alpine-release ]; then apk add --no-cache jq curl openssl ca-certificates
+        elif [ -f /etc/debian_version ]; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y jq curl openssl ca-certificates
+        else err '网页配置安装仅支持 Debian/Ubuntu 和 Alpine。'; fi
+    fi
+    if [ -e "$STATE_FILE" ]; then
+        if ! manager_state_is_valid; then backup_existing_install; err '现有 manager.json 无效；已备份原目录，停止覆盖。'; fi
+        load_state
+        overlay_install
+        return 0
     fi
 
-    jq -e 'def text: type == "string" and (test("[\u0000\r\n]") | not);
-      type == "object" and
-      ([.origin_ipv4,.origin_ipv6,.ws_server,.tls_domain,.ws_host,.reality_sni,.node_label,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
+    jq -e '
+      def text: type == "string" and (explode | all(. != 0 and . != 10 and . != 13));
+      type == "object" and (.schema == 5 or .schema == 6) and
+      (.protocols | type == "object") and
+      ([.origin_ipv4,.origin_ipv6,.ws_server,.argo_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
         | all(. == null or text)) and
-      (.ports | . == null or (type == "object" and
-        ([.anytls,.ws_tls,.vless_reality,.naive,.anytls_reality] | all(. == null or type == "number" or text))))' \
-      "$web_cfg" >/dev/null 2>&1 ||
-        err '网页配置 JSON 格式不正确或字段包含非法换行。请从网页重新生成配置。'
+      (.ports | type == "object")
+    ' "$web_cfg" >/dev/null 2>&1 || err '网页配置 JSON 格式不正确或版本不匹配，请刷新最新版 HTML 后重新生成命令。'
 
-    ORIGIN_ADDR=$(web_string origin_ipv4)
-    ORIGIN_IPV6=$(web_string origin_ipv6)
+    ENABLE_ANYTLS=$(jq -r 'if .protocols.anytls == true then "1" else "0" end' "$web_cfg")
+    ENABLE_WS_TLS=$(jq -r 'if .protocols.ws_tls == true then "1" else "0" end' "$web_cfg")
+    ENABLE_VLESS_REALITY=$(jq -r 'if .protocols.vless_reality == true then "1" else "0" end' "$web_cfg")
+    ENABLE_NAIVE=$(jq -r 'if .protocols.naive == true then "1" else "0" end' "$web_cfg")
+    ENABLE_ANYTLS_REALITY=$(jq -r 'if .protocols.anytls_reality == true then "1" else "0" end' "$web_cfg")
+    ENABLE_SS2022=$(jq -r 'if .schema == 6 and .protocols.ss2022 == true then "1" else "0" end' "$web_cfg")
+    SS2022_PORT=$(jq -r '.ports.ss2022 // ""' "$web_cfg")
+    ENABLE_WS_ARGO=$(jq -r 'if .schema == 6 and .protocols.ws_argo == true then "1" else "0" end' "$web_cfg")
+    ARGO_HOST=$(web_string argo_host)
+    ARGO_TUNNEL_NAME=$(web_string argo_tunnel_name)
+    ARGO_TOKEN=$(web_string argo_token)
+    ORIGIN_ADDR=$(web_string origin_ipv4); ORIGIN_IPV6=$(web_string origin_ipv6)
     WS_SERVER=$(web_string ws_server)
-    TLS_DOMAIN=$(web_string tls_domain)
-    WS_HOST=$(web_string ws_host)
-    REALITY_SNI=$(web_string reality_sni)
-    NODE_LABEL=$(web_string node_label)
+    TLS_DOMAIN=$(web_string tls_domain); WS_HOST=$(web_string ws_host)
+    REALITY_SNI=$(web_string reality_sni); NODE_LABEL=$(web_string node_label)
     ANYTLS_PORT=$(jq -r '.ports.anytls // ""' "$web_cfg")
     WS_PORT=$(jq -r '.ports.ws_tls // ""' "$web_cfg")
+    ARGO_PORT=$(jq -r '.ports.ws_argo // ""' "$web_cfg")
+    ARGO_SERVER=$(web_string argo_server)
+    if [ "$(jq -r '.schema' "$web_cfg")" = 5 ] && [ "$ENABLE_WS_TLS" = 1 ]; then
+        case "$(web_string ws_mode)" in
+            argo) legacy_ws_server=$WS_SERVER; migrate_legacy_argo ;;
+            direct|'') ;;
+            *) err '不支持的旧版 WS 接入方式。' ;;
+        esac
+    fi
     REALITY_PORT=$(jq -r '.ports.vless_reality // ""' "$web_cfg")
     NAIVE_PORT=$(jq -r '.ports.naive // ""' "$web_cfg")
     ANYREALITY_PORT=$(jq -r '.ports.anytls_reality // ""' "$web_cfg")
-    cert_mode=$(web_string cert_mode)
-    CF_ZONE_NAME=$(web_string cf_zone_name)
-    cf_token=$(web_string cf_token)
-    cert_email=$(web_string cf_email)
-    zone_id=$(web_string cf_zone_id)
+    cert_mode=$(web_string cert_mode); CF_ZONE_NAME=$(web_string cf_zone_name)
+    cf_token=$(web_string cf_token); cert_email=$(web_string cf_email); zone_id=$(web_string cf_zone_id)
+    case "$cert_mode" in cloudflare) CERT_MODE=cloudflare ;; http01) CERT_MODE=standalone ;; none|'') CERT_MODE=none ;; *) err '不支持的证书方式。' ;; esac
 
-    case "${cert_mode:-cloudflare}" in
-        cloudflare) CERT_MODE=cloudflare ;;
-        http01) CERT_MODE=standalone ;;
-        *) err '网页批量部署目前支持 Cloudflare DNS-01 或 HTTP-01 证书方式。' ;;
-    esac
-
-    if [ "$CERT_MODE" = cloudflare ] && [ -z "$cf_token" ]; then
-        ask_secret 'Cloudflare API Token（输入时不会显示）'
-        cf_token=$(trim_value "$REPLY")
+    selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_WS_ARGO + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_SS2022))
+    [ "$selected_count" -gt 0 ] || err '请至少选择一种协议。'
+    derive_runtime_needs
+    if [ "$NEED_CERT" = 1 ] && [ "$CERT_MODE" = cloudflare ] && [ -z "$cf_token" ]; then
+        ask_secret 'Cloudflare DNS API Token（网页未提供；输入时不会显示）'; cf_token=$(trim_value "$REPLY")
     fi
-
-    msg '正在使用网页配置启动 sing-box 安装流程……'
+    msg '正在使用网页选择的协议和参数启动 sing-box 安装流程……'
     install_from_config
 }
 
 change_tls_sni() {
-    msg '此域名用于普通 AnyTLS、VLESS + WS + TLS 和 NaiveProxy 的 TLS SNI，必须是你拥有/获准管理且有匹配证书的域名。'
+    if [ "$NEED_CERT" = 0 ]; then warn '当前所选协议不使用源站 TLS 证书；Argo WS 的 TLS SNI 由 Argo 公网主机名决定。'; return 0; fi
+    msg '此域名用于普通 AnyTLS、直连 VLESS + WS + TLS 和 NaiveProxy 的 TLS SNI，必须是你拥有/获准管理且有匹配证书的域名。'
     msg 'www.bing.com 只作为 Reality SNI 默认值；不能用它申请 AnyTLS / WS TLS 证书。'
     ask_value '新的 TLS 证书域名 / TLS SNI（自己的域名）' "$TLS_DOMAIN"
     new_domain=$REPLY
@@ -1613,7 +2617,7 @@ change_tls_sni() {
         [ -n "$CF_ZONE_NAME" ] || { warn '缺少 Cloudflare 区域主域名，请先使用菜单 6 设置 Cloudflare 绑定区域。'; return 0; }
         domain_belongs_to_zone "$new_domain" "$CF_ZONE_NAME" || { warn "新域名必须属于 Cloudflare 区域 $CF_ZONE_NAME。"; return 0; }
     fi
-    confirm_domain_control "$new_domain" || { warn '未确认域名所有权，未修改 TLS 域名。'; return 0; }
+    msg "将为 $new_domain 使用 TLS 证书。请确保你拥有或获准管理该域名。"
 
     old_domain=$TLS_DOMAIN
     old_ws_host=$WS_HOST
@@ -1682,6 +2686,8 @@ change_tls_sni() {
     rm -rf "$backup_dir"
     msg "TLS SNI 已更新为：$TLS_DOMAIN"
     msg "WS HTTP Host 当前为：$WS_HOST（若原来跟随 TLS 域名，已自动同步）"
+    # Refresh share links and the generated Naive client JSON with the new SNI.
+    show_nodes
 }
 
 change_cloudflare_zone() {
@@ -1689,7 +2695,8 @@ change_cloudflare_zone() {
         warn '当前证书模式不是 Cloudflare DNS-01。请先使用 Cloudflare DNS-01 申请证书，才能修改 Cloudflare 绑定区域。'
         return 0
     fi
-    [ -s "$CF_TOKEN_FILE" ] || { warn 'Cloudflare Token 文件不存在，请重新配置 Cloudflare DNS-01。'; return 0; }
+    cf_token_exists=0
+    [ ! -s "$CF_TOKEN_FILE" ] || cf_token_exists=1
 
     msg '修改 Cloudflare 绑定域名会重新申请 TLS 证书。脚本只管理 ACME 验证 TXT 记录，不会自动修改 A/AAAA 解析记录。'
     msg 'Token 必须具有新区域的 Zone:DNS:Edit 权限；若 Token 只授权旧区域，申请会失败。'
@@ -1723,19 +2730,27 @@ change_cloudflare_zone() {
     else
         current_zone_id=""
     fi
-    ask_value '新 Cloudflare Zone ID（建议填写；更换区域时必须填写）' "$current_zone_id"
+    ask_value '新 Cloudflare Zone ID（留空保留当前；输入 - 自动查询）' "$current_zone_id"
     new_zone_id=$(trim_value "$REPLY")
-    case "$new_zone_id" in
-        ''|*[!A-Fa-f0-9]*) warn 'Zone ID 必须是 32 位十六进制字符串。'; return 0 ;;
-    esac
-    [ "${#new_zone_id}" -eq 32 ] || { warn 'Zone ID 必须是 32 位十六进制字符串。'; return 0; }
+    [ "$new_zone_id" = '-' ] && new_zone_id=""
+    if [ -n "$new_zone_id" ]; then
+        case "$new_zone_id" in *[!A-Fa-f0-9]*) warn 'Zone ID 必须是 32 位十六进制字符串。'; return 0 ;; esac
+        [ "${#new_zone_id}" -eq 32 ] || { warn 'Zone ID 必须是 32 位十六进制字符串，或留空自动查询。'; return 0; }
+    fi
+    ask_secret '新的 Cloudflare DNS API Token（留空保留当前 Token；若当前缺失则必须填写）'
+    new_cf_token=$(trim_value "$REPLY")
+    if [ -z "$new_cf_token" ] && [ "$cf_token_exists" -eq 0 ]; then
+        warn '当前没有保存 Cloudflare DNS API Token；必须输入新 Token 才能申请证书。'
+        return 0
+    fi
 
-    confirm_domain_control "$new_cert_domain" || { warn '未确认域名所有权，未修改 Cloudflare 配置。'; return 0; }
+    msg "将为 $new_cert_domain 使用 Cloudflare DNS-01 签发 TLS 证书。Zone ID 可自动查询；DNS API Token 留空则沿用当前 Token。"
 
-    backup_dir=$(mktemp -d) || { warn '无法创建临时备份目录。'; return 0; }
+    backup_dir=$(mktemp -d) || { warn '无法创建临时证书备份目录。'; return 0; }
     cp -p "$CERT_FILE" "$backup_dir/fullchain.pem" 2>/dev/null || true
     cp -p "$KEY_FILE" "$backup_dir/privkey.pem" 2>/dev/null || true
     cp -p "$CF_ZONE_ID_FILE" "$backup_dir/zone-id" 2>/dev/null || true
+    cp -p "$CF_TOKEN_FILE" "$backup_dir/cloudflare.token" 2>/dev/null || true
 
     old_zone=$CF_ZONE_NAME
     old_tls_domain=$TLS_DOMAIN
@@ -1743,9 +2758,27 @@ change_cloudflare_zone() {
     old_ws_server=$WS_SERVER
     old_preferred_ip=$PREFERRED_IP
 
-    printf '%s' "$new_zone_id" > "$CF_ZONE_ID_FILE"
-    chmod 0600 "$CF_ZONE_ID_FILE"
-    chown root:root "$CF_ZONE_ID_FILE"
+    if [ -n "$new_zone_id" ]; then
+        printf '%s' "$new_zone_id" > "$CF_ZONE_ID_FILE"
+        chmod 0600 "$CF_ZONE_ID_FILE"
+        chown root:root "$CF_ZONE_ID_FILE"
+    else
+        rm -f "$CF_ZONE_ID_FILE"
+    fi
+    if [ -n "$new_cf_token" ]; then
+        token_tmp="$CF_TOKEN_FILE.tmp.$$"
+        printf '%s' "$new_cf_token" > "$token_tmp" || {
+            rm -f "$token_tmp"
+            if [ -s "$backup_dir/zone-id" ]; then cp -p "$backup_dir/zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+            if [ -s "$backup_dir/cloudflare.token" ]; then cp -p "$backup_dir/cloudflare.token" "$CF_TOKEN_FILE"; else rm -f "$CF_TOKEN_FILE"; fi
+            rm -rf "$backup_dir"
+            warn '无法写入新的 Cloudflare DNS API Token；已恢复原凭据。'
+            return 0
+        }
+        chmod 0600 "$token_tmp"
+        chown root:root "$token_tmp"
+        mv -f "$token_tmp" "$CF_TOKEN_FILE"
+    fi
     CF_ZONE_NAME=$new_zone
     TLS_DOMAIN=$new_cert_domain
     WS_HOST=$new_ws_host
@@ -1763,6 +2796,7 @@ change_cloudflare_zone() {
         if [ -s "$backup_dir/fullchain.pem" ]; then cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"; fi
         if [ -s "$backup_dir/privkey.pem" ]; then cp -p "$backup_dir/privkey.pem" "$KEY_FILE"; fi
         if [ -s "$backup_dir/zone-id" ]; then cp -p "$backup_dir/zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+        if [ -s "$backup_dir/cloudflare.token" ]; then cp -p "$backup_dir/cloudflare.token" "$CF_TOKEN_FILE"; else rm -f "$CF_TOKEN_FILE"; fi
         chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
         chmod 0644 "$CERT_FILE" 2>/dev/null || true
         chmod 0640 "$KEY_FILE" 2>/dev/null || true
@@ -1781,6 +2815,7 @@ change_cloudflare_zone() {
         if [ -s "$backup_dir/fullchain.pem" ]; then cp -p "$backup_dir/fullchain.pem" "$CERT_FILE"; fi
         if [ -s "$backup_dir/privkey.pem" ]; then cp -p "$backup_dir/privkey.pem" "$KEY_FILE"; fi
         if [ -s "$backup_dir/zone-id" ]; then cp -p "$backup_dir/zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+        if [ -s "$backup_dir/cloudflare.token" ]; then cp -p "$backup_dir/cloudflare.token" "$CF_TOKEN_FILE"; else rm -f "$CF_TOKEN_FILE"; fi
         chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || true
         chmod 0644 "$CERT_FILE" 2>/dev/null || true
         chmod 0640 "$KEY_FILE" 2>/dev/null || true
@@ -1795,6 +2830,7 @@ change_cloudflare_zone() {
 }
 
 change_reality_sni() {
+    if [ "$ENABLE_VLESS_REALITY" = 0 ] && [ "$ENABLE_ANYTLS_REALITY" = 0 ]; then warn '当前没有安装 Reality 协议。'; return 0; fi
     ask_value '新的 Reality SNI / 握手目标域名' "$REALITY_SNI"
     new_sni=$REPLY
     valid_domain "$new_sni" || { warn '域名格式无效。'; return; }
@@ -1809,10 +2845,21 @@ change_reality_sni() {
 }
 
 change_preferred_ip() {
-    ask_value '新的 VLESS WS TLS 单一连接地址（IPv4 / IPv6 / 域名；输入 - 清空）' "$WS_SERVER"
+    [ "$ENABLE_WS_TLS" = 1 ] || { warn '当前未安装 VLESS + WS。'; return 0; }
+    ask_value '新的 VLESS WS TLS 单一连接地址（IPv4 / IPv6 / 域名；输入 - 恢复证书域名）' "$WS_SERVER"
     new_ws_server=$REPLY
-    [ "$new_ws_server" = "-" ] && new_ws_server=""
-    [ -n "$new_ws_server" ] || { warn 'WS TLS 必须保留一个连接地址。'; return; }
+    if [ "$new_ws_server" = "-" ]; then
+        new_ws_server=""
+    fi
+    if [ -z "$new_ws_server" ]; then
+        WS_SERVER=$TLS_DOMAIN
+        PREFERRED_IP=""
+        PREFERRED_IPV6=""
+        save_state
+        show_nodes
+        msg "WS TLS 连接地址已恢复为证书域名：$TLS_DOMAIN"
+        return 0
+    fi
 
     case "$new_ws_server" in
         *:*)
@@ -1833,25 +2880,342 @@ change_preferred_ip() {
     show_nodes
 }
 
-change_ws_host() {
-    msg 'WS HTTP Host 是 WebSocket HTTP 请求头，不是 TLS SNI。默认建议与 TLS 证书域名相同。'
-    ask_value '新的 VLESS WS HTTP Host（不是 SNI）' "$WS_HOST"
-    new_host=$REPLY
-    valid_domain "$new_host" || { warn '域名格式无效。'; return; }
-    WS_HOST=$new_host
-    save_state
+change_argo_address() {
+    ask_value '新的 Argo 连接地址（IPv4 / IPv6 / 域名；输入 - 恢复 Public Hostname）' "$ARGO_SERVER"
+    new_argo_server=$(trim_value "$REPLY")
+    [ "$new_argo_server" != '-' ] || new_argo_server=$ARGO_HOST
+    case "$new_argo_server" in
+        *:*) valid_ipv6_literal "$new_argo_server" || { warn 'IPv6 地址格式无效。'; return 0; } ;;
+        *) valid_main_address "$new_argo_server" || { warn 'IPv4 地址 / 域名格式无效。'; return 0; } ;;
+    esac
+    old_argo_server=$ARGO_SERVER
+    ARGO_SERVER=$new_argo_server
+    if ! save_state; then ARGO_SERVER=$old_argo_server; return 0; fi
     show_nodes
 }
 
+change_argo_binding() {
+    [ "$ENABLE_WS_ARGO" = 1 ] || {
+        warn '当前未启用 VLESS + WS 固定 Argo Tunnel。'
+        return 0
+    }
+    old_argo_token_exists=0
+    [ ! -s "$ARGO_TOKEN_FILE" ] || old_argo_token_exists=1
+
+    msg '修改固定 Tunnel 的 Public Hostname、备注名或轮换 Token。'
+    msg 'Token 留空表示保留当前 Token；不会显示或回显现有 Token。'
+    old_argo_host=$ARGO_HOST
+    old_argo_name=$ARGO_TUNNEL_NAME
+    old_argo_server=$ARGO_SERVER
+    backup_dir=$(mktemp -d) || { warn '无法创建临时备份目录。'; return 0; }
+    if [ "$old_argo_token_exists" -eq 1 ] && ! cp -p "$ARGO_TOKEN_FILE" "$backup_dir/cloudflared.token"; then
+        rm -rf "$backup_dir"
+        warn '无法备份当前 Tunnel Token；没有修改任何配置。'
+        return 0
+    fi
+
+    ask_value '新的固定 Tunnel Public Hostname' "$ARGO_HOST"
+    new_argo_host=$(trim_value "$REPLY")
+    valid_cert_domain "$new_argo_host" || {
+        rm -rf "$backup_dir"
+        warn 'Public Hostname 格式无效；请输入你在 Cloudflare 管理的域名，例如 ws.example.com。'
+        return 0
+    }
+    ask_value 'Tunnel 备注名（留空保持；输入 - 清除备注）' "$ARGO_TUNNEL_NAME"
+    new_argo_name=$(trim_value "$REPLY")
+    [ "$new_argo_name" = '-' ] && new_argo_name=""
+    ask_secret '新的 Cloudflare Tunnel Token（留空保留当前 Token；若当前缺失则必须填写）'
+    new_argo_token=$(trim_value "$REPLY")
+    if [ -z "$new_argo_token" ] && [ "$old_argo_token_exists" -eq 0 ]; then
+        rm -rf "$backup_dir"
+        warn '当前 Tunnel Token 缺失；必须输入新的 Tunnel Token。'
+        return 0
+    fi
+    if [ -n "$new_argo_token" ] && ! valid_argo_token "$new_argo_token"; then
+        rm -rf "$backup_dir"
+        warn '新 Tunnel Token 格式无效；没有修改任何配置。'
+        return 0
+    fi
+
+    ARGO_HOST=$new_argo_host
+    ARGO_TUNNEL_NAME=$new_argo_name
+    if [ -z "$old_argo_server" ] || [ "$old_argo_server" = "$old_argo_host" ]; then
+        ARGO_SERVER=$new_argo_host
+        PREFERRED_IP=""
+        PREFERRED_IPV6=""
+    fi
+
+    if [ -n "$new_argo_token" ]; then
+        if ! write_argo_token_file "$new_argo_token"; then
+            ARGO_HOST=$old_argo_host
+            ARGO_TUNNEL_NAME=$old_argo_name
+            ARGO_SERVER=$old_argo_server
+            rm -rf "$backup_dir"
+            warn '新 Token 无法安全写入；原配置保持不变。'
+            return 0
+        fi
+        if ! start_cloudflared_service; then
+            if [ "$old_argo_token_exists" -eq 1 ]; then cp -p "$backup_dir/cloudflared.token" "$ARGO_TOKEN_FILE"; else rm -f "$ARGO_TOKEN_FILE"; fi
+            chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+            chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+            start_cloudflared_service >/dev/null 2>&1 || true
+            ARGO_HOST=$old_argo_host
+            ARGO_TUNNEL_NAME=$old_argo_name
+            ARGO_SERVER=$old_argo_server
+            rm -rf "$backup_dir"
+            warn 'Tunnel 服务重启失败，已恢复本机旧 Token 文件和旧节点参数。若你已在 Cloudflare 控制台执行 Rotate Token，旧 Token 可能已失效，请重新输入新 Token。'
+            return 0
+        fi
+        sleep 3
+        if [ "$SERVICE_KIND" = systemd ]; then
+            if ! systemctl is-active --quiet "$CLOUDFLARED_SERVICE"; then
+                if [ "$old_argo_token_exists" -eq 1 ]; then cp -p "$backup_dir/cloudflared.token" "$ARGO_TOKEN_FILE"; else rm -f "$ARGO_TOKEN_FILE"; fi
+                chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                start_cloudflared_service >/dev/null 2>&1 || true
+                ARGO_HOST=$old_argo_host
+                ARGO_TUNNEL_NAME=$old_argo_name
+                ARGO_SERVER=$old_argo_server
+                rm -rf "$backup_dir"
+                warn '新 Token 启动后服务未处于 active，已恢复本机旧 Token 文件和旧节点参数。若 Cloudflare 已轮换 Token，旧 Token 可能已失效。'
+                return 0
+            fi
+        elif [ "$SERVICE_KIND" = openrc ]; then
+            if ! rc-service "$CLOUDFLARED_SERVICE" status >/dev/null 2>&1; then
+                if [ "$old_argo_token_exists" -eq 1 ]; then cp -p "$backup_dir/cloudflared.token" "$ARGO_TOKEN_FILE"; else rm -f "$ARGO_TOKEN_FILE"; fi
+                chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+                start_cloudflared_service >/dev/null 2>&1 || true
+                ARGO_HOST=$old_argo_host
+                ARGO_TUNNEL_NAME=$old_argo_name
+                ARGO_SERVER=$old_argo_server
+                rm -rf "$backup_dir"
+                warn '新 Token 启动后 OpenRC 服务未运行，已恢复本机旧 Token 文件和旧节点参数。若 Cloudflare 已轮换 Token，旧 Token 可能已失效。'
+                return 0
+            fi
+        fi
+    fi
+
+    if ! save_state; then
+        if [ "$old_argo_token_exists" -eq 1 ]; then cp -p "$backup_dir/cloudflared.token" "$ARGO_TOKEN_FILE"; else rm -f "$ARGO_TOKEN_FILE"; fi
+        chown root:sing-box "$ARGO_TOKEN_FILE" 2>/dev/null || true
+        chmod 0640 "$ARGO_TOKEN_FILE" 2>/dev/null || true
+        start_cloudflared_service >/dev/null 2>&1 || true
+        ARGO_HOST=$old_argo_host
+        ARGO_TUNNEL_NAME=$old_argo_name
+        ARGO_SERVER=$old_argo_server
+        rm -rf "$backup_dir"
+        warn '保存管理状态失败；已尽力恢复旧 Token 和节点参数。'
+        return 0
+    fi
+
+    rm -rf "$backup_dir"
+    show_nodes
+    if [ "$old_argo_host" != "$ARGO_HOST" ]; then
+        msg "Public Hostname 已更新为 $ARGO_HOST。请在 Cloudflare Zero Trust 的该 Tunnel 中同步添加/修改 Public Hostname，并将 Service URL 指向 http://127.0.0.1:$ARGO_PORT。"
+    fi
+    if [ -n "$new_argo_token" ]; then
+        msg '新 Tunnel Token 已写入受限权限文件并重启 cloudflared。请在 Cloudflare 控制台确认 Connector 状态为 Healthy。'
+    else
+        msg 'Tunnel 节点参数已保存；现有 Token 保持不变。'
+    fi
+}
+
+change_ws_host() {
+    [ "$ENABLE_WS_TLS" = 1 ] || { warn '当前未安装直连 WS；Argo 的 Host 由 Public Hostname 决定。'; return 0; }
+    msg 'WS HTTP Host 是 WebSocket HTTP 请求头，不是 TLS SNI。默认建议与 TLS 证书域名相同。'
+    ask_value '新的 VLESS WS HTTP Host（留空保持；输入 - 恢复默认域名）' "$WS_HOST"
+    new_host=$(trim_value "$REPLY")
+    [ "$new_host" = '-' ] && new_host=$TLS_DOMAIN
+    valid_domain "$new_host" || { warn '域名格式无效。'; return; }
+    old_host=$WS_HOST
+    WS_HOST=$new_host
+    if ! save_state; then WS_HOST=$old_host; warn '保存 WS Host 失败，原值保持不变。'; return 0; fi
+    show_nodes
+}
+
+
+change_single_port() {
+    selected_choice=${1:-}
+    if [ -z "$selected_choice" ]; then
+        printf '\n当前协议端口：\n'
+        printf '1. AnyTLS              %s/tcp\n' "$ANYTLS_PORT"
+        printf '2. VLESS + WS + TLS 直连 %s/tcp\n' "$WS_PORT"
+        printf '3. VLESS + Reality     %s/tcp\n' "$REALITY_PORT"
+        printf '4. NaiveProxy          %s/tcp\n' "$NAIVE_PORT"
+        printf '5. AnyTLS + Reality    %s/tcp\n' "$ANYREALITY_PORT"
+        printf '6. VLESS + WS + TLS Argo %s/tcp（本机）\n' "$ARGO_PORT"
+        printf '7. Shadowsocks 2022     %s/tcp + udp\n' "$SS2022_PORT"
+        printf '0. 返回\n'
+        printf '请选择要修改端口的单个节点：'
+        IFS= read -r selected_choice || selected_choice=0
+    fi
+
+    case "$selected_choice" in
+        1)
+            [ "$ENABLE_ANYTLS" = 1 ] || { warn '当前未安装 AnyTLS。'; return 0; }
+            selected_name='AnyTLS'
+            selected_current=$ANYTLS_PORT
+            other_ports="$SS2022_PORT $ARGO_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT"
+            selected_kind=range
+            ;;
+        2)
+            [ "$ENABLE_WS_TLS" = 1 ] || { warn '当前未安装 VLESS + WS + TLS。'; return 0; }
+            selected_name='VLESS + WS + TLS'
+            selected_current=$WS_PORT
+            other_ports="$SS2022_PORT $ARGO_PORT $ANYTLS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT"
+            selected_kind=ws
+            ;;
+        6)
+            [ "$ENABLE_WS_ARGO" = 1 ] || { warn '当前未安装 Argo WS。'; return 0; }
+            selected_name='VLESS + WS + TLS Argo'
+            selected_current=$ARGO_PORT
+            other_ports="$SS2022_PORT $ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT"
+            selected_kind=argo
+            ;;
+        3)
+            [ "$ENABLE_VLESS_REALITY" = 1 ] || { warn '当前未安装 VLESS + Reality。'; return 0; }
+            selected_name='VLESS + Reality'
+            selected_current=$REALITY_PORT
+            other_ports="$SS2022_PORT $ARGO_PORT $ANYTLS_PORT $WS_PORT $NAIVE_PORT $ANYREALITY_PORT"
+            selected_kind=range
+            ;;
+        4)
+            [ "$ENABLE_NAIVE" = 1 ] || { warn '当前未安装 NaiveProxy。'; return 0; }
+            selected_name='NaiveProxy'
+            selected_current=$NAIVE_PORT
+            other_ports="$SS2022_PORT $ARGO_PORT $ANYTLS_PORT $WS_PORT $REALITY_PORT $ANYREALITY_PORT"
+            selected_kind=range
+            ;;
+        5)
+            [ "$ENABLE_ANYTLS_REALITY" = 1 ] || { warn '当前未安装 AnyTLS + Reality。'; return 0; }
+            selected_name='AnyTLS + Reality'
+            selected_current=$ANYREALITY_PORT
+            other_ports="$SS2022_PORT $ARGO_PORT $ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT"
+            selected_kind=range
+            ;;
+        7)
+            [ "$ENABLE_SS2022" = 1 ] || { warn '当前未安装 Shadowsocks 2022。'; return 0; }
+            selected_name='Shadowsocks 2022'
+            selected_current=$SS2022_PORT
+            other_ports="$ARGO_PORT $ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT"
+            selected_kind=ss2022
+            ;;
+        0) return 0 ;;
+        *) warn '无效选择。'; return 0 ;;
+    esac
+
+    selected_udp=0
+    selected_transport=tcp
+    if [ "$selected_kind" = ss2022 ]; then selected_udp=1; selected_transport='tcp + udp'; fi
+    printf '\n当前 %s 端口：%s/%s\n' "$selected_name" "$selected_current" "$selected_transport"
+    if [ "$selected_kind" = ws ]; then
+        msg '直连 Cloudflare 橙云 WS TLS 端口请使用 443、2053、2083、2087、2096 或 8443。'
+        ask_value '输入新端口（留空自动随机）' ''
+    elif [ "$selected_kind" = argo ]; then
+        msg 'Argo 模式该端口是 VPS 本机 127.0.0.1 监听端口，不是公网端口。修改后需同步更新 Cloudflare Tunnel Public Hostname 的 Service URL。'
+        ask_value '输入新的本机 WS 端口（留空自动随机）' ''
+    elif [ "$selected_kind" = range ] || [ "$selected_kind" = ss2022 ]; then
+        ask_value '输入新端口（1024–65535；留空自动随机）' ''
+    fi
+    requested_port=$(trim_value "$REPLY")
+
+    if [ -n "$requested_port" ]; then
+        if ! valid_port "$requested_port"; then
+            warn '端口必须是 1024–65535 的整数；没有修改任何配置。'
+            return 0
+        fi
+        requested_port=$(printf '%s\n' "$requested_port" | sed 's/^0*//')
+        if [ "$requested_port" = "$selected_current" ]; then
+            msg "$selected_name 已经使用端口 $selected_current，无需修改。"
+            return 0
+        fi
+
+        case " $other_ports " in
+            *" $requested_port "*)
+                warn "端口 $requested_port 已被本脚本的其他协议使用；将为 $selected_name 自动选择备用端口。"
+                requested_port=""
+                ;;
+        esac
+    fi
+
+    if [ -n "$requested_port" ] && check_udp_port="$selected_udp" port_listening "$requested_port"; then
+        warn "端口 $requested_port 已被其他进程监听；将为 $selected_name 自动选择备用端口。"
+        requested_port=""
+    fi
+
+    if [ -z "$requested_port" ]; then
+        if [ "$selected_kind" = ws ]; then
+            if ! selected_new_port=$(pick_random_ws_port $other_ports "$selected_current"); then
+                warn '没有可用的 Cloudflare WS TLS 代理端口（2053、2083、2087、2096、8443）；原配置保持不变。'
+                return 0
+            fi
+        else
+            if ! selected_new_port=$(check_udp_port="$selected_udp" pick_random_range_port 10000 65535 $other_ports "$selected_current"); then
+                warn "无法为 $selected_name 找到空闲端口；原配置保持不变。"
+                return 0
+            fi
+        fi
+        msg "$selected_name 的新端口已自动分配：$selected_new_port/$selected_transport"
+    else
+        selected_new_port=$requested_port
+    fi
+
+    if [ "$selected_kind" = ws ]; then
+        case " 443 2053 2083 2087 2096 8443 " in
+            *" $selected_new_port "*) ;;
+            *)
+                warn "端口 $selected_new_port 不在 Cloudflare 橙云 HTTPS 代理端口列表内；仅适合 DNS Only/直连，橙云代理可能无法连接。"
+                ;;
+        esac
+    fi
+
+    old_selected_port=$selected_current
+    case "$selected_choice" in
+        1) ANYTLS_PORT=$selected_new_port ;;
+        2) WS_PORT=$selected_new_port ;;
+        6) ARGO_PORT=$selected_new_port ;;
+        7) SS2022_PORT=$selected_new_port ;;
+        3) REALITY_PORT=$selected_new_port ;;
+        4) NAIVE_PORT=$selected_new_port ;;
+        5) ANYREALITY_PORT=$selected_new_port ;;
+    esac
+
+    msg "正在仅修改 $selected_name 端口，并检查完整 sing-box 配置……"
+    if ! build_config; then
+        case "$selected_choice" in
+            1) ANYTLS_PORT=$old_selected_port ;;
+            2) WS_PORT=$old_selected_port ;;
+            6) ARGO_PORT=$old_selected_port ;;
+            7) SS2022_PORT=$old_selected_port ;;
+            3) REALITY_PORT=$old_selected_port ;;
+            4) NAIVE_PORT=$old_selected_port ;;
+            5) ANYREALITY_PORT=$old_selected_port ;;
+        esac
+        warn "$selected_name 端口修改失败；已恢复原端口 $old_selected_port，其他节点参数未修改。"
+        return 0
+    fi
+
+    msg "$selected_name 端口修改成功：$old_selected_port → $selected_new_port"
+    show_nodes
+    if [ "$selected_choice" = 6 ]; then msg "请在 Cloudflare Tunnel Public Hostname 中将 $ARGO_HOST 的 Service URL 更新为 http://127.0.0.1:$ARGO_PORT。Argo WS 本机端口不需要 NAT 入站映射。"; else msg '请同步更新系统防火墙、云安全组及 NAT 服务商公网端口映射。'; fi
+}
+
 change_ports() {
+    [ "$ENABLE_WS_ARGO" = 0 ] || printf 'Argo 本机端口：%s/tcp\n' "$ARGO_PORT"
+    [ "$ENABLE_SS2022" = 0 ] || printf 'Shadowsocks 2022 端口：%s/tcp + udp\n' "$SS2022_PORT"
     printf '当前端口：AnyTLS=%s, WS+TLS=%s, VLESS Reality=%s, NaiveProxy=%s, AnyTLS Reality=%s\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
     old_anytls=$ANYTLS_PORT
     old_ws=$WS_PORT
+    old_argo=$ARGO_PORT
+    old_ss2022=$SS2022_PORT
     old_reality=$REALITY_PORT
     old_naive=$NAIVE_PORT
     old_anyreality=$ANYREALITY_PORT
     PREVIOUS_ANYTLS_PORT=$old_anytls
     PREVIOUS_WS_PORT=$old_ws
+    PREVIOUS_ARGO_PORT=$old_argo
+    PREVIOUS_SS2022_PORT=$old_ss2022
     PREVIOUS_REALITY_PORT=$old_reality
     PREVIOUS_NAIVE_PORT=$old_naive
     PREVIOUS_ANYREALITY_PORT=$old_anyreality
@@ -1860,28 +3224,353 @@ change_ports() {
     if ! build_config; then
         ANYTLS_PORT=$old_anytls
         WS_PORT=$old_ws
+        ARGO_PORT=$old_argo
+        SS2022_PORT=$old_ss2022
         REALITY_PORT=$old_reality
         NAIVE_PORT=$old_naive
         ANYREALITY_PORT=$old_anyreality
         return 0
     fi
     show_nodes
-    msg '请同步修改云安全组和系统防火墙规则。'
+    if [ "$ENABLE_WS_ARGO" = 1 ]; then msg "如 WS 本机端口发生变化，请将 Cloudflare Tunnel Service URL 更新为 http://127.0.0.1:$ARGO_PORT。Argo WS 不需要公网入站映射。"; fi
+    msg '请同步修改其他已安装直连协议的云安全组、系统防火墙和 NAT 映射。'
 }
 
-confirm_uninstall() {
-    if [ "${1:-}" = "--yes" ] || [ "${1:-}" = "-y" ]; then
+change_origin_addresses() {
+    [ "$NEED_ORIGIN" = 1 ] || { warn '当前已安装协议不需要源站地址。'; return 0; }
+    msg '源站 IPv4 / IPv6 是直连协议共用的连接地址；修改后会影响 AnyTLS、NaiveProxy、Reality 等使用源站地址的节点。'
+    msg '留空保持当前值；输入 - 清除此地址；输入 auto 重新自动检测该地址。'
+    old_ipv4=$ORIGIN_ADDR
+    old_ipv6=$ORIGIN_IPV6
+    ask_value '新的源站 IPv4 / 域名' "$ORIGIN_ADDR"
+    new_ipv4=$(trim_value "$REPLY")
+    ask_value '新的源站 IPv6' "$ORIGIN_IPV6"
+    new_ipv6=$(trim_value "$REPLY")
+
+    if [ "$new_ipv4" = '-' ]; then new_ipv4=""; fi
+    if [ "$new_ipv6" = '-' ]; then new_ipv6=""; fi
+    if [ "$new_ipv4" = 'auto' ]; then
+        new_ipv4=$(curl -4 -fsS --max-time 6 https://api.ipify.org 2>/dev/null || true)
+        valid_ipv4_address "$new_ipv4" || new_ipv4=""
+    fi
+    if [ "$new_ipv6" = 'auto' ]; then
+        if ipv6_kernel_enabled; then
+            new_ipv6=$(curl -6 -fsS --max-time 6 https://api64.ipify.org 2>/dev/null || true)
+            valid_ipv6_address "$new_ipv6" || new_ipv6=""
+        else new_ipv6=""; fi
+    fi
+    [ -n "$new_ipv4" ] || [ -n "$new_ipv6" ] || {
+        warn '至少需要一个可用的源站 IPv4 / IPv6 地址；NAT VPS 请填写服务商提供的实际公网入口地址。'
+        return 0
+    }
+    if [ -n "$new_ipv4" ]; then
+        valid_main_address "$new_ipv4" || { warn '源站 IPv4 / 域名格式无效。'; return 0; }
+    fi
+    if [ -n "$new_ipv6" ]; then
+        ipv6_kernel_enabled || { warn '系统未启用 IPv6，不能设置 IPv6 地址。'; return 0; }
+        valid_ipv6_address "$new_ipv6" || { warn '源站 IPv6 格式无效，或 VPS 没有到该地址的 IPv6 路由。'; return 0; }
+    fi
+    ORIGIN_ADDR=$new_ipv4
+    ORIGIN_IPV6=$new_ipv6
+    if ! save_state; then
+        ORIGIN_ADDR=$old_ipv4
+        ORIGIN_IPV6=$old_ipv6
+        warn '保存源站地址失败；已保留旧地址。'
         return 0
     fi
-    printf '\n即将卸载 sing-box，并删除本脚本的配置、证书副本和节点信息。\n'
-    printf '同时会尝试卸载 sing-box 软件包；不会删除系统防火墙规则、云安全组、其他 cron 任务或 /root/.acme.sh。\n'
-    printf '确认卸载请输入大写 YES：'
-    IFS= read -r answer || answer=""
-    [ "$answer" = "YES" ] || {
-        msg '已取消卸载。'
-        return 1
-    }
-    return 0
+    show_nodes
+    msg '源站地址已更新。注意：NAT VPS 的出站检测 IP 不一定等于服务商分配的入站映射 IP，请核对公网映射。'
+}
+
+print_protocol_field_guide() {
+    case "$1" in
+        1)
+            msg 'AnyTLS 参数说明：'
+            printf '  必填：TLS 证书域名 / SNI（与 Naive、直连 WS 共用证书域名）。\n'
+            printf '  必填：至少一个源站 IPv4 / IPv6（可尝试自动检测；NAT 映射地址建议手动填写）。\n'
+            printf '  自动生成：AnyTLS 密码。可在“专属参数”中自定义或重新生成。\n'
+            printf '  可选：TCP 监听端口；留空时自动分配。Cloudflare Zone ID 可自动查询。\n' ;;
+        2)
+            msg '直连 VLESS WS TLS：需要源站 TLS 证书，可修改连接地址、HTTP Host、端口、UUID 和路径。' ;;
+        6)
+            msg 'Argo VLESS WS TLS：需要 Tunnel Public Hostname 和 Token，可修改连接地址、备注、本机端口、UUID 和路径。'
+            msg '客户端使用 Cloudflare TLS 443；源站不需要 TLS 证书或公网入站端口。' ;;
+        7) msg 'Shadowsocks 2022 不需要证书或 SNI；使用源站地址与 TCP/UDP 端口，密钥可在专属参数中轮换。' ;;
+        3)
+            msg 'VLESS + Reality 参数说明：'
+            printf '  必填：Reality SNI / 握手目标域名；默认 www.bing.com。\n'
+            printf '  必填：至少一个源站 IPv4 / IPv6（可尝试自动检测）。\n'
+            printf '  自动生成：UUID、Reality 密钥对和 Short ID。\n'
+            printf '  可选：TCP 监听端口；留空时自动分配。\n'
+            if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then printf '  注意：当前 Reality SNI 与 AnyTLS + Reality 共用。\n'; fi ;;
+        4)
+            msg 'NaiveProxy 参数说明：'
+            printf '  必填：TLS 证书域名 / SNI 和有效证书。\n'
+            printf '  必填：至少一个源站 IPv4 / IPv6（可尝试自动检测）。\n'
+            printf '  自动生成：Naive 用户名和密码；可在“专属参数”中自定义或重新生成。\n'
+            printf '  可选：TCP 监听端口；留空时自动分配。\n' ;;
+        5)
+            msg 'AnyTLS + Reality 参数说明：'
+            printf '  必填：Reality SNI / 握手目标域名；默认 www.bing.com。\n'
+            printf '  必填：至少一个源站 IPv4 / IPv6（可尝试自动检测）。\n'
+            printf '  自动生成：密码、Reality 密钥对和 Short ID。\n'
+            printf '  可选：TCP 监听端口；留空时自动分配。\n'
+            if [ "$ENABLE_VLESS_REALITY" = 1 ]; then printf '  注意：当前 Reality SNI 与 VLESS + Reality 共用。\n'; fi ;;
+    esac
+}
+
+change_protocol_extra_settings() {
+    selected_protocol=$1
+    case "$selected_protocol" in
+        1)
+            old_secret=$ANYTLS_PASSWORD
+            ask_secret '新的 AnyTLS 密码（留空保持；输入 - 随机生成）'
+            new_secret=$(trim_value "$REPLY")
+            [ -n "$new_secret" ] || return 0
+            if [ "$new_secret" = '-' ]; then new_secret=$(openssl rand -hex 24); fi
+            case "$new_secret" in *[!A-Za-z0-9._~-]*) warn '密码只允许字母、数字、点、下划线、波浪线和短横线。'; return 0 ;; esac
+            [ "${#new_secret}" -ge 8 ] && [ "${#new_secret}" -le 128 ] || { warn '密码长度必须为 8–128 个字符。'; return 0; }
+            ANYTLS_PASSWORD=$new_secret
+            ;;
+        7)
+            ask_value '重新生成 Shadowsocks 2022 密钥？旧客户端需要更新节点。(y/N)' 'n'
+            case "$REPLY" in y|Y|yes|YES) SS2022_PASSWORD=$(openssl rand -base64 16) ;; *) return 0 ;; esac
+            ;;
+        2|6)
+            if [ "$selected_protocol" = 2 ]; then
+                ask_value 'WS HTTP Host（留空保持；输入 - 恢复 TLS 域名默认值）' "$WS_HOST"
+                new_host=$(trim_value "$REPLY")
+                [ "$new_host" = '-' ] && new_host=$TLS_DOMAIN
+                valid_domain "$new_host" || { warn 'WS HTTP Host 必须是有效域名。'; return 0; }
+                WS_HOST=$new_host
+            else
+                msg 'Argo 模式的 HTTP Host 与 Public Hostname 绑定，不能单独修改；请修改 Cloudflare Tunnel Public Hostname。'
+            fi
+            if [ "$selected_protocol" = 6 ]; then current_ws_path=$ARGO_PATH; current_ws_uuid=$ARGO_UUID
+            else current_ws_path=$WS_PATH; current_ws_uuid=$WS_UUID; fi
+            ask_value 'WS Path（留空保持；输入 - 随机生成）' "$current_ws_path"
+            new_path=$(trim_value "$REPLY")
+            if [ "$new_path" = '-' ]; then new_path="/ws-$(openssl rand -hex 8)"; fi
+            case "$new_path" in /*) ;; *) warn 'WS Path 必须以 / 开头。'; return 0 ;; esac
+            case "$new_path" in *[!A-Za-z0-9/_~-]*) warn 'WS Path 只允许字母、数字、斜线、下划线、短横线和波浪线。'; return 0 ;; esac
+            [ "${#new_path}" -le 160 ] || { warn 'WS Path 最长 160 个字符。'; return 0; }
+            ask_value 'WS UUID（留空保持；输入 - 自动生成新 UUID）' "$current_ws_uuid"
+            new_uuid=$(trim_value "$REPLY")
+            if [ "$new_uuid" = '-' ]; then new_uuid=$("$SB_BIN" generate uuid); fi
+            if [ -n "$new_uuid" ]; then
+                printf '%s\n' "$new_uuid" | grep -Eq '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-8][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$' || { warn 'UUID 格式无效。'; return 0; }
+            fi
+            if [ "$selected_protocol" = 6 ]; then ARGO_PATH=$new_path; ARGO_UUID=${new_uuid:-$current_ws_uuid}
+            else WS_PATH=$new_path; WS_UUID=${new_uuid:-$current_ws_uuid}; fi
+            ;;
+        3)
+            ask_value 'VLESS Reality UUID（留空保持；输入 - 自动生成）' "$REALITY_UUID"
+            new_uuid=$(trim_value "$REPLY")
+            if [ "$new_uuid" = '-' ]; then new_uuid=$("$SB_BIN" generate uuid); fi
+            if [ -n "$new_uuid" ]; then
+                printf '%s\n' "$new_uuid" | grep -Eq '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-8][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$' || { warn 'UUID 格式无效。'; return 0; }
+                REALITY_UUID=$new_uuid
+            fi
+            ask_value '是否重新生成 Reality 密钥对和 Short ID？(y/N)' 'n'
+            case "$REPLY" in
+                y|Y|yes|YES)
+                    pair=$($SB_BIN generate reality-keypair)
+                    new_private=$(printf '%s\n' "$pair" | awk '/PrivateKey/ {print $2}')
+                    new_public=$(printf '%s\n' "$pair" | awk '/PublicKey/ {print $2}')
+                    new_sid=$($SB_BIN generate rand --hex 8)
+                    [ -n "$new_private" ] && [ -n "$new_public" ] && [ -n "$new_sid" ] || { warn 'Reality 密钥生成失败。'; return 0; }
+                    REALITY_PRIVATE=$new_private; REALITY_PUBLIC=$new_public; REALITY_SID=$new_sid
+                    msg 'Reality 密钥已轮换；所有使用旧公钥的客户端必须更新节点。'
+                    ;;
+            esac
+            ;;
+        4)
+            ask_value 'NaiveProxy 用户名（留空保持；输入 - 随机生成）' "$NAIVE_USERNAME"
+            new_username=$(trim_value "$REPLY")
+            if [ "$new_username" = '-' ]; then new_username="naive-$(openssl rand -hex 6)"; fi
+            if [ -n "$new_username" ]; then
+                case "$new_username" in *[!A-Za-z0-9._-]*) warn '用户名只允许字母、数字、点、下划线和短横线。'; return 0 ;; esac
+                [ "${#new_username}" -ge 3 ] && [ "${#new_username}" -le 64 ] || { warn '用户名长度必须为 3–64 个字符。'; return 0; }
+                NAIVE_USERNAME=$new_username
+            fi
+            ask_secret 'NaiveProxy 密码（留空保持；输入 - 随机生成）'
+            new_secret=$(trim_value "$REPLY")
+            if [ "$new_secret" = '-' ]; then new_secret=$(openssl rand -hex 24); fi
+            if [ -n "$new_secret" ]; then
+                case "$new_secret" in *[!A-Za-z0-9._~-]*) warn '密码只允许字母、数字、点、下划线、波浪线和短横线。'; return 0 ;; esac
+                [ "${#new_secret}" -ge 8 ] && [ "${#new_secret}" -le 128 ] || { warn '密码长度必须为 8–128 个字符。'; return 0; }
+                NAIVE_PASSWORD=$new_secret
+            fi
+            ;;
+        5)
+            ask_secret '新的 AnyTLS + Reality 密码（留空保持；输入 - 随机生成）'
+            new_secret=$(trim_value "$REPLY")
+            if [ "$new_secret" = '-' ]; then new_secret=$(openssl rand -hex 24); fi
+            if [ -n "$new_secret" ]; then
+                case "$new_secret" in *[!A-Za-z0-9._~-]*) warn '密码只允许字母、数字、点、下划线、波浪线和短横线。'; return 0 ;; esac
+                [ "${#new_secret}" -ge 8 ] && [ "${#new_secret}" -le 128 ] || { warn '密码长度必须为 8–128 个字符。'; return 0; }
+                ANYREALITY_PASSWORD=$new_secret
+            fi
+            ask_value '是否重新生成 AnyTLS + Reality 密钥对和 Short ID？(y/N)' 'n'
+            case "$REPLY" in
+                y|Y|yes|YES)
+                    pair=$($SB_BIN generate reality-keypair)
+                    new_private=$(printf '%s\n' "$pair" | awk '/PrivateKey/ {print $2}')
+                    new_public=$(printf '%s\n' "$pair" | awk '/PublicKey/ {print $2}')
+                    new_sid=$($SB_BIN generate rand --hex 8)
+                    [ -n "$new_private" ] && [ -n "$new_public" ] && [ -n "$new_sid" ] || { warn 'AnyTLS + Reality 密钥生成失败。'; return 0; }
+                    ANYREALITY_PRIVATE=$new_private; ANYREALITY_PUBLIC=$new_public; ANYREALITY_SID=$new_sid
+                    msg 'AnyTLS + Reality 密钥已轮换；客户端必须更新公钥和 Short ID。'
+                    ;;
+            esac
+            ;;
+        *) warn '未知协议。'; return 0 ;;
+    esac
+
+    if ! build_config; then
+        load_state
+        derive_runtime_needs
+        warn '新参数未能通过配置检查或服务启动检查；已恢复原配置。'
+        return 0
+    fi
+    show_nodes
+}
+
+remove_cloudflared_local_service() {
+    if [ "$SERVICE_KIND" = systemd ]; then
+        systemctl disable --now "$CLOUDFLARED_SERVICE" >/dev/null 2>&1 || true
+        rm -f "/etc/systemd/system/$CLOUDFLARED_SERVICE.service"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    elif [ "$SERVICE_KIND" = openrc ]; then
+        rc-service "$CLOUDFLARED_SERVICE" stop >/dev/null 2>&1 || true
+        rc-update del "$CLOUDFLARED_SERVICE" default >/dev/null 2>&1 || true
+        rm -f "/etc/init.d/$CLOUDFLARED_SERVICE"
+    fi
+    rm -f "$CLOUDFLARED_RUN" "$ARGO_TOKEN_FILE"
+}
+
+remove_protocol() {
+    need_root
+    removed_argo=0
+    load_state
+    derive_runtime_needs
+    msg '========== 删除已安装协议 =========='
+    printf '1. AnyTLS              %s\n' "$([ "$ENABLE_ANYTLS" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '2. VLESS WS TLS 直连   %s\n' "$([ "$ENABLE_WS_TLS" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '3. VLESS + Reality     %s\n' "$([ "$ENABLE_VLESS_REALITY" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '4. NaiveProxy          %s\n' "$([ "$ENABLE_NAIVE" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '5. AnyTLS + Reality    %s\n' "$([ "$ENABLE_ANYTLS_REALITY" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '6. VLESS WS TLS Argo   %s\n' "$([ "$ENABLE_WS_ARGO" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '7. Shadowsocks 2022    %s\n' "$([ "$ENABLE_SS2022" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '0. 返回\n'
+    printf '选择要删除的协议：'
+    IFS= read -r remove_choice || remove_choice=0
+    case "$remove_choice" in
+        1) [ "$ENABLE_ANYTLS" = 1 ] || { warn 'AnyTLS 当前未安装。'; return 0; }; ENABLE_ANYTLS=0; ANYTLS_PORT=""; ANYTLS_PASSWORD="" ;;
+        2) [ "$ENABLE_WS_TLS" = 1 ] || { warn '直连 WS 当前未安装。'; return 0; }; ENABLE_WS_TLS=0; WS_PORT=""; WS_UUID=""; WS_PATH=""; WS_SERVER=""; WS_HOST=""; PREFERRED_IP=""; PREFERRED_IPV6="" ;;
+        6) [ "$ENABLE_WS_ARGO" = 1 ] || { warn 'Argo WS 当前未安装。'; return 0; }; ENABLE_WS_ARGO=0; removed_argo=1; ARGO_PORT=""; ARGO_UUID=""; ARGO_PATH=""; ARGO_SERVER=""; ARGO_HOST=""; ARGO_TUNNEL_NAME=""; ARGO_TOKEN="" ;;
+        7) [ "$ENABLE_SS2022" = 1 ] || { warn 'Shadowsocks 2022 当前未安装。'; return 0; }; ENABLE_SS2022=0; SS2022_PORT=""; SS2022_PASSWORD="" ;;
+        3) [ "$ENABLE_VLESS_REALITY" = 1 ] || { warn 'VLESS + Reality 当前未安装。'; return 0; }; ENABLE_VLESS_REALITY=0; REALITY_PORT=""; REALITY_UUID=""; REALITY_PRIVATE=""; REALITY_PUBLIC=""; REALITY_SID="" ;;
+        4) [ "$ENABLE_NAIVE" = 1 ] || { warn 'NaiveProxy 当前未安装。'; return 0; }; ENABLE_NAIVE=0; NAIVE_PORT=""; NAIVE_USERNAME=""; NAIVE_PASSWORD="" ;;
+        5) [ "$ENABLE_ANYTLS_REALITY" = 1 ] || { warn 'AnyTLS + Reality 当前未安装。'; return 0; }; ENABLE_ANYTLS_REALITY=0; ANYREALITY_PORT=""; ANYREALITY_PASSWORD=""; ANYREALITY_PRIVATE=""; ANYREALITY_PUBLIC=""; ANYREALITY_SID="" ;;
+        0) return 0 ;;
+        *) warn '无效选择。'; return 0 ;;
+    esac
+
+    remaining_protocols=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_WS_ARGO + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_SS2022))
+    if [ "$remaining_protocols" -eq 0 ]; then
+        load_state
+        derive_runtime_needs
+        warn '不能删除最后一个协议。若要移除整个 sing-box 安装，请使用菜单 11 或执行 sb-manager uninstall。'
+        return 0
+    fi
+    if [ "$ENABLE_VLESS_REALITY" = 0 ] && [ "$ENABLE_ANYTLS_REALITY" = 0 ]; then REALITY_SNI=www.bing.com; fi
+    msg '即将只删除所选协议；其他协议的 UUID、密码、密钥、端口和证书配置保持不变。'
+    ask_value '确认删除？输入 DELETE 继续' ''
+    [ "$REPLY" = DELETE ] || { load_state; derive_runtime_needs; msg '已取消删除。'; return 0; }
+    if ! build_config; then
+        load_state
+        derive_runtime_needs
+        warn '删除未能通过配置检查或服务重启检查；已恢复原协议状态。'
+        return 0
+    fi
+    if [ "${removed_argo:-0}" -eq 1 ]; then
+        remove_cloudflared_local_service
+        msg '已停止并移除本机 Cloudflare Tunnel 服务和 Token 文件；Cloudflare 控制台中的 Tunnel / DNS 路由不会被删除。'
+    fi
+    derive_runtime_needs
+    show_nodes
+    msg '协议删除完成。'
+}
+
+edit_selected_protocol() {
+    need_root
+    load_state
+    derive_runtime_needs
+    msg '========== 选择协议并修改参数 =========='
+    printf '1. AnyTLS              %s\n' "$([ "$ENABLE_ANYTLS" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '2. VLESS WS TLS 直连   %s\n' "$([ "$ENABLE_WS_TLS" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '3. VLESS + Reality     %s\n' "$([ "$ENABLE_VLESS_REALITY" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '4. NaiveProxy          %s\n' "$([ "$ENABLE_NAIVE" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '5. AnyTLS + Reality    %s\n' "$([ "$ENABLE_ANYTLS_REALITY" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '6. VLESS WS TLS Argo   %s\n' "$([ "$ENABLE_WS_ARGO" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '7. Shadowsocks 2022    %s\n' "$([ "$ENABLE_SS2022" = 1 ] && printf 已安装 || printf 未安装)"
+    printf '0. 返回\n'
+    printf '选择要修改的协议：'
+    IFS= read -r selected_protocol || selected_protocol=0
+    case "$selected_protocol" in
+        1) [ "$ENABLE_ANYTLS" = 1 ] || { warn 'AnyTLS 当前未安装。'; return 0; } ;;
+        2) [ "$ENABLE_WS_TLS" = 1 ] || { warn '直连 WS 当前未安装。'; return 0; } ;;
+        6) [ "$ENABLE_WS_ARGO" = 1 ] || { warn 'Argo WS 当前未安装。'; return 0; } ;;
+        7) [ "$ENABLE_SS2022" = 1 ] || { warn 'Shadowsocks 2022 当前未安装。'; return 0; } ;;
+        3) [ "$ENABLE_VLESS_REALITY" = 1 ] || { warn 'VLESS + Reality 当前未安装。'; return 0; } ;;
+        4) [ "$ENABLE_NAIVE" = 1 ] || { warn 'NaiveProxy 当前未安装。'; return 0; } ;;
+        5) [ "$ENABLE_ANYTLS_REALITY" = 1 ] || { warn 'AnyTLS + Reality 当前未安装。'; return 0; } ;;
+        0) return 0 ;;
+        *) warn '无效选择。'; return 0 ;;
+    esac
+
+    print_protocol_field_guide "$selected_protocol"
+    while :; do
+        printf '\n---------- 协议参数修改 ----------\n'
+        printf '1. 修改 SNI / TLS 证书域名\n'
+        printf '2. 修改连接地址 / WS 优选 IP\n'
+        printf '3. 修改 Cloudflare 绑定域名 / Tunnel Public Hostname\n'
+        printf '4. 修改该协议端口\n'
+        printf '5. 修改该协议专属必填值 / 可选值 / 凭据\n'
+        printf '0. 返回协议列表\n'
+        printf '请选择：'
+        IFS= read -r edit_choice || edit_choice=0
+        case "$edit_choice" in
+            1)
+                case "$selected_protocol" in
+                    1|4) change_tls_sni ;;
+                    2) change_tls_sni ;;
+                    6) change_argo_binding ;;
+                    3|5) change_reality_sni ;;
+                    7) msg 'Shadowsocks 2022 不使用 TLS 证书或 SNI。' ;;
+                esac
+                ;;
+            2)
+                case "$selected_protocol" in 2) change_preferred_ip ;; 6) change_argo_address ;; *) change_origin_addresses ;; esac
+                ;;
+            3)
+                if [ "$selected_protocol" = 6 ]; then
+                    change_argo_binding
+                elif [ "$CERT_MODE" = cloudflare ] && { [ "$selected_protocol" = 1 ] || [ "$selected_protocol" = 4 ] || [ "$selected_protocol" = 2 ]; }; then
+                    change_cloudflare_zone
+                else
+                    warn '当前协议没有可编辑的 Cloudflare 域名绑定：Argo WS 修改 Public Hostname；DNS-01 TLS 协议修改 Cloudflare Zone / 证书域名。'
+                fi
+                ;;
+            4) change_single_port "$selected_protocol" ;;
+            5) change_protocol_extra_settings "$selected_protocol" ;;
+            0) return 0 ;;
+            *) warn '无效选项。' ;;
+        esac
+        load_state
+        derive_runtime_needs
+    done
 }
 
 remove_acme_cron_entry() {
@@ -1897,9 +3586,22 @@ remove_acme_cron_entry() {
 
 uninstall_manager() {
     need_root
-    confirm_uninstall "${1:-}" || return 0
-
-    msg '正在停止 sing-box 服务……'
+    msg '========== 即将立即卸载 sing-box 管理器 =========='
+    printf '%s\n' '将删除：/etc/sing-box、/usr/local/sbin/sb-manager、sing-box 服务文件、Argo 专用 cloudflared 服务及本脚本安装的软件包/二进制。'
+    printf '%s\n' '不会删除：/root/.acme.sh、系统依赖包、系统防火墙规则、云厂商安全组或其他 cron 任务。'
+    printf '%s\n' '卸载将直接继续执行；请确认当前连接的是正确的 VPS。'
+    cf_managed=0; [ ! -f "$APP_DIR/cloudflared-managed" ] || cf_managed=1
+    msg '正在停止 sing-box / Cloudflare Tunnel 服务……'
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now "$CLOUDFLARED_SERVICE" >/dev/null 2>&1 || true
+        rm -f "/etc/systemd/system/$CLOUDFLARED_SERVICE.service"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    elif command -v rc-service >/dev/null 2>&1; then
+        rc-service "$CLOUDFLARED_SERVICE" stop >/dev/null 2>&1 || true
+        rc-update del "$CLOUDFLARED_SERVICE" default >/dev/null 2>&1 || true
+        rm -f "/etc/init.d/$CLOUDFLARED_SERVICE"
+    fi
+    rm -f "$CLOUDFLARED_RUN"
     if command -v systemctl >/dev/null 2>&1; then
         systemctl disable --now sing-box >/dev/null 2>&1 || true
         rm -f /etc/systemd/system/sing-box.service
@@ -1917,6 +3619,7 @@ uninstall_manager() {
     msg '正在删除 sing-box 配置、证书副本和管理脚本……'
     rm -f "$RELOAD_HOOK"
     rm -rf "$APP_DIR"
+    [ "$cf_managed" -eq 0 ] || rm -f "$CLOUDFLARED_BIN"
     rm -f /usr/local/sbin/sb-manager
 
     if [ -f /etc/alpine-release ]; then
@@ -1944,14 +3647,17 @@ uninstall_manager() {
 show_logs() {
     if [ "$SERVICE_KIND" = systemd ]; then
         journalctl -u sing-box -n 80 --no-pager || true
+        if [ "$ENABLE_WS_ARGO" = 1 ]; then journalctl -u "$CLOUDFLARED_SERVICE" -n 80 --no-pager || true; fi
     else
         tail -n 80 /var/log/messages 2>/dev/null || true
         rc-service sing-box status || true
+        if [ "$ENABLE_WS_ARGO" = 1 ]; then tail -n 80 /var/log/messages 2>/dev/null | grep -i cloudflared || true; rc-service "$CLOUDFLARED_SERVICE" status || true; fi
     fi
 }
 
 
 diagnose_naive() {
+    [ "$ENABLE_NAIVE" = 1 ] || { warn '当前未安装 NaiveProxy。'; return 1; }
     need_root
     msg '========== NaiveProxy 本机诊断 =========='
     printf '端口：%s/tcp\nTLS 域名：%s\n' "$NAIVE_PORT" "$TLS_DOMAIN"
@@ -1989,24 +3695,29 @@ diagnose_naive() {
 menu() {
     need_root
     load_state
+    derive_runtime_needs
     enable_bbr
     while :; do
         printf '\n========== sing-box 节点管理 ==========' 
         printf '\n源站 IPv4/域名：%s | 源站 IPv6：%s' "${ORIGIN_ADDR:-未设置}" "${ORIGIN_IPV6:-未设置}"
         printf '\nWS 单一连接地址：%s' "${WS_SERVER:-未设置}"
-        printf '\nTLS 证书域名 / TLS SNI（普通 AnyTLS + WS TLS + NaiveProxy）：%s' "$TLS_DOMAIN"
-        printf '\nWS HTTP Host（不是 SNI，默认跟随 TLS 证书域名）：%s' "$WS_HOST"
+        printf '\nTLS 证书域名 / TLS SNI（证书协议）：%s' "${TLS_DOMAIN:-不需要（Argo WS 使用 $ARGO_HOST）}"
+        printf '\n直连 WS HTTP Host：%s' "${WS_HOST:-未设置}"
+        if [ "$ENABLE_WS_ARGO" = 1 ]; then
+            printf '\n固定 Tunnel：%s | Public Hostname：%s | 连接地址：%s | 本机端口：%s' "${ARGO_TUNNEL_NAME:-未命名}" "$ARGO_HOST" "$ARGO_SERVER" "$ARGO_PORT"
+        fi
+        [ "$ENABLE_SS2022" = 0 ] || printf '\nShadowsocks 2022：%s/tcp + udp' "$SS2022_PORT"
         printf '\nReality SNI（VLESS Reality + AnyTLS Reality；默认 www.bing.com）：%s' "$REALITY_SNI" 
         printf '\n节点辨识符：%s' "${NODE_LABEL:-未设置}"
         printf '\n端口：AnyTLS %s | WS TLS %s | VLESS Reality %s | NaiveProxy %s/TCP | AnyTLS Reality %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
         printf '\n---------------------------------------\n'
-        printf '1. 查看五种协议节点链接（WS TLS 仅一个节点）\n'
-        printf '2. 修改 TLS 证书域名 / TLS SNI（普通 AnyTLS + WS TLS + NaiveProxy）\n'
+        printf '1. 查看已安装协议节点链接\n'
+        printf '2. 修改 TLS 证书域名 / TLS SNI（AnyTLS + 直连 WS + NaiveProxy）\n'
         printf '3. 修改 Reality SNI（VLESS Reality + AnyTLS Reality；新安装默认 www.bing.com）\n'
-        printf '4. 修改 VLESS WS TLS 单一连接地址（IPv4/IPv6/域名）\n'
-        printf '5. 修改 VLESS WS HTTP Host（不是 SNI；默认跟随 TLS 域名）\n'
+        printf '4. 修改直连 VLESS WS TLS 客户端连接地址（优选 IP/域名）\n'
+        printf '5. 修改 VLESS WS HTTP Host（直连模式；Argo Host 由 Tunnel 主机名决定）\n'
         printf '6. 修改 Cloudflare DNS 区域 / TLS 证书域名（WS Host 自动跟随）\n'
-        printf '7. 修改五个协议端口（留空随机）\n'
+        printf '7. 选择单个协议节点并修改端口（其他节点不变）\n'
         printf '8. 重启 sing-box\n'
         printf '9. 查看服务状态\n'
         printf '10. 查看最近日志\n'
@@ -2014,6 +3725,12 @@ menu() {
         printf '12. 查看 TCP BBR 加速状态\n'
         printf '13. 自定义节点辨识符\n'
         printf '14. 诊断 NaiveProxy（本机监听 / TLS 证书 / HTTP2）\n'
+        printf '15. 批量修改已安装协议端口（留空随机）\n'
+        printf '16. 查看 Cloudflare Tunnel 状态（Argo 模式）\n'
+        printf '17. 修改固定 Argo Tunnel 域名 / 备注 / Token\n'
+        printf '18. 添加尚未部署的协议节点（增量添加，不影响现有节点）\n'
+        printf '19. 删除已安装协议（只删除所选协议，不影响其他节点）\n'
+        printf '20. 选择协议修改 SNI / WS 优选 IP / Cloudflare 域名 / 端口 / 凭据\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -2024,14 +3741,20 @@ menu() {
             4) change_preferred_ip ;;
             5) change_ws_host ;;
             6) change_cloudflare_zone ;;
-            7) change_ports ;;
+            7) change_single_port ;;
+            15) change_ports ;;
             8) service_restart && msg '服务已重启。' ;;
             9) service_status ;;
             10) show_logs ;;
             11) uninstall_manager || true; exit 0 ;;
             12) show_bbr_status ;;
             13) change_node_label ;;
-            14) diagnose_naive || true ;;
+            14) [ "$ENABLE_NAIVE" = 1 ] && diagnose_naive || warn '当前未安装 NaiveProxy。' ;;
+            16) [ "$ENABLE_WS_ARGO" = 1 ] && cloudflared_status || warn '当前未启用 Argo Tunnel。' ;;
+            17) change_argo_binding ;;
+            18) add_missing_protocols ;;
+            19) remove_protocol ;;
+            20) edit_selected_protocol ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac
@@ -2086,16 +3809,25 @@ main() {
         return 0
     fi
     install_manager_command
-    if [ -f "$STATE_FILE" ]; then
+    if [ -e "$STATE_FILE" ]; then
+        if ! manager_state_is_valid; then
+            backup_existing_install
+            err "检测到现有 manager.json 为空或格式损坏。原数据已备份；为避免丢失节点凭据，未自动重置。请先检查备份后再决定如何恢复。"
+        fi
         load_state
+        derive_runtime_needs
         if [ -f /etc/alpine-release ]; then OS_FAMILY=alpine; SERVICE_KIND=openrc; else OS_FAMILY=debian; SERVICE_KIND=systemd; fi
-        SB_BIN="$(command -v sing-box 2>/dev/null || printf /usr/bin/sing-box)"
+        SB_BIN="$(resolve_sing_box_binary 2>/dev/null || printf /usr/bin/sing-box)"
         case "${1:-}" in
             install|--install) overlay_install ;;
+            add|add-node|add-nodes) add_missing_protocols ;;
             *) menu ;;
         esac
     else
-        install_wizard
+        case "${1:-}" in
+            add|add-node|add-nodes) err '增量添加需要已有 sing-box 安装；请先完成首次安装。' ;;
+            *) install_wizard ;;
+        esac
     fi
 }
 
