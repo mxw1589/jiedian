@@ -114,6 +114,7 @@
   <div class="commandgrid">
     <div class="commandcard">
       <div class="commandhead">安装命令 <span>配置完整后自动生成</span></div>
+      <div class="footnote">已有安装：勾选的协议会新增或更新，未勾选的旧节点会移除。请把要保留的协议都勾上。</div>
       <div id="formStatus" class="status">正在等待配置。</div>
       <textarea id="commandOutput" class="command" rows="7" readonly placeholder="选择协议并填写必填项后，安装命令会自动显示在这里。"></textarea>
       <div class="actions">
@@ -178,7 +179,7 @@ function cfgFromForm(){
   const wsHost=p.ws_tls?(v("directWsHost")||tlsDomain):"";
   const wsServer=p.ws_tls?(v("wsServer")||tlsDomain):"";
   return {
-    schema:6,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?(v("argoServer")||argoHost):"",
+    schema:7,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?(v("argoServer")||argoHost):"",
     argo_tunnel_name:p.ws_argo?v("argoTunnelName"):"",
     argo_token:p.ws_argo?v("argoToken"):"",
     origin_ipv4:needsOrigin(p)?v("originIPv4"):"",
@@ -247,7 +248,7 @@ if command -v curl >/dev/null 2>&1; then curl -fsSL '${RAW_URL}' -o "$SH"
 else wget -qO "$SH" '${RAW_URL}'; fi
 head -n 1 "$SH" | grep -qx '#!/bin/sh'
 grep -q 'WEB_CONFIG_MODE=1' "$SH"
-grep -q 'WEB_CONFIG_SCHEMA=6' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
+grep -q 'WEB_CONFIG_SCHEMA=7' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
 install -m 700 "$SH" /usr/local/sbin/sb-manager
 rm -f "$SH"
 /usr/local/sbin/sb-manager install-web-config "$CFG"
@@ -285,7 +286,7 @@ function render(){
   syncUI();
   const status=$("formStatus"),out=$("commandOutput"),buttons=["copyOutput","downloadOutput","exportConfig","downloadBoth"];
   $("uninstallText").value=UNINSTALL_COMMAND;
-  try{const c=validate(cfgFromForm());out.value="# 安装命令（请以 root 登录目标 VPS 执行）\n# 该命令包含敏感 Token，不要公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="配置完整：安装命令已自动生成。";buttons.forEach(id=>$(id).disabled=false);}
+  try{const c=validate(cfgFromForm());out.value="# 安装 / 同步命令（以 root 执行；已有安装会移除未勾选的旧节点）\n# 该命令包含敏感 Token，不要公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="命令已生成：只保留当前勾选的协议。";buttons.forEach(id=>$(id).disabled=false);}
   catch(e){out.value="";status.className="status error";status.textContent=e.message;buttons.forEach(id=>$(id).disabled=true);}
 }
 ids.forEach(id=>{$(id).addEventListener("input",render);$(id).addEventListener("change",render);});

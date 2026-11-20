@@ -153,7 +153,9 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
 
 网页命令会携带 Base64 编码的 JSON 配置。Base64 不是加密；命令中可能包含 Cloudflare DNS API Token 或 Tunnel Token。不要公开分享命令、截图或提交到 GitHub。
 
-如果 VPS 已经存在本脚本的有效安装，网页安装入口会执行覆盖升级并保留原有节点凭据和配置，不会使用网页新参数覆盖现有节点。已安装节点需要更换固定 Tunnel Token 时，请使用管理菜单 `17`；需要增加首次未部署的协议时，请使用菜单 `18` 或 `/usr/local/sbin/sb-manager add`，不要依赖网页覆盖升级。
+如果 VPS 已经有本脚本的安装，新版网页命令会先做本机备份，再按当前勾选同步：**未安装的所选协议会新增，已安装的所选协议会使用网页值更新，未勾选的旧协议会移除**。要保留的协议都要勾选。更新旧节点时保留密码、UUID、密钥和 WS 路径；网页端口留空则保留原端口，填写端口则使用指定值。有冲突时停止，不会悄悄改用其他端口。
+
+勾选 Argo 就会生成独立的 Argo 节点链接（客户端端口 `443`）。按终端显示的回源地址配置 Cloudflare Tunnel 的 Service URL。取消勾选 Argo 会移除本机专用 Tunnel 服务，但不会删除 Cloudflare 控制台里的 Tunnel 或 DNS 路由。同步完成后请用新输出更新客户端连接；参数变动可能导致旧链接不再可用。
 
 ## 三、NAT VPS 使用 Cloudflare Tunnel（Argo）为 VLESS + WS 接入
 
@@ -295,7 +297,7 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 
 如果菜单 `18` 显示所有协议均已安装，说明所有协议选项都已部署，无需重复添加。若新增 Argo WS，仍需在 Cloudflare Zero Trust 中把 Public Hostname 的 Service URL 指向脚本显示的 `http://127.0.0.1:<本机 WS 端口>`。
 
-网页生成的一键安装命令在检测到已有 `manager.json` 时仍按“保留现有配置的覆盖升级”处理，不会把网页中新勾选的协议直接叠加到现有节点；已有 VPS 要增加节点，请使用上述菜单 `18` 或 `sb-manager add`。
+只想新增节点、不改旧节点配置，也不删除其他节点时，使用菜单 `18` 或 `sb-manager add`。从新版网页复制的命令会同步整个协议选择；旧版网页命令只覆盖升级，需要刷新页面重新生成。
 
 ## 五、NaiveProxy 与 Linux 客户端
 
