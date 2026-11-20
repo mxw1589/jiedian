@@ -97,7 +97,7 @@ jiedian/
 - 支持 Cloudflare **固定 Tunnel（Argo）** 承载 VLESS + WebSocket：使用 Cloudflare Zero Trust 中创建的 remotely-managed Tunnel 和固定 Tunnel Token，不使用临时 Quick Tunnel；VPS 本机只监听 `127.0.0.1`，由 `cloudflared` 主动连接 Cloudflare。
 - `cloudflared` 作为独立 systemd / OpenRC 服务运行；使用 `2025.4.0` 或更新版本的 `--token-file` 功能读取权限受限的 `/etc/sing-box/cloudflared.token`，避免把 Tunnel Token 放在进程命令行中，也不会写入公开节点链接。
 - 管理菜单支持查看固定 Tunnel 信息，以及轮换 / 更换 Tunnel Token；Token 原子写入、权限设为 `0640 root:sing-box`，不写入 `manager.json`。
-- 支持 IPv4 / IPv6 源站地址自动检测；Argo-only 安装不需要填写源站公网 IP。
+- 支持通过 Cloudflare 检测 IPv4 / IPv6 源站地址；手动填写源站地址时不调用检测接口，Argo-only 安装也不需要检测源站公网 IP。
 - 端口冲突时自动更换可用端口；配置检查或服务重启失败时尝试回滚。
 - 管理菜单支持单个协议修改端口、查看节点、日志、固定 Tunnel 状态、Tunnel Token 轮换、BBR 状态和卸载。
 - **增量添加节点**：已安装后可通过菜单 `18`（或 `sb-manager add`）安装尚未部署的协议；自动跳过已有协议，只为新增协议生成凭据和端口，保留旧节点 UUID、密码、Reality 密钥、端口、WS 路径和 Tunnel 配置。
@@ -305,8 +305,10 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 
 本项目的 NaiveProxy 服务端由 **sing-box 内置 Naive 入站**提供，不需要在 VPS 上另外安装独立的 Naive 服务端。脚本会检查 sing-box 版本至少为 `1.13.0`：
 
-- Debian / Ubuntu：通过 sing-box 官方软件源安装。
-- Alpine：优先检查仓库版本；若版本低于 `1.13.0` 或不可用，则自动下载官方 Linux 发布版。
+- 优先复用系统已有的兼容 sing-box，不额外下载核心或添加软件源。
+- Debian / Ubuntu：没有兼容核心时，先检查已配置的 APT 源；仍不可用时才添加 SagerNet 官方源。
+- Alpine：没有兼容核心时先试系统 APK 仓库；仍不可用时才下载 SagerNet 官方 Linux 发布版。Argo 缺少兼容的 `cloudflared` 时使用 Cloudflare 官方发布版。
+- 只有自动签发证书需要 acme.sh。已有则复用；缺少时从官方 GitHub 仓库下载安装，HTTP-01 需要的 `socat` 从系统软件源安装。
 - 启用 NaiveProxy 后，查看节点时会生成 `/etc/sing-box/naive-client.json`，供 Linux 上的 sing-box `1.13.0+` 客户端使用。
 
 如果某个 Linux 图形客户端提示“找不到 `Naive` 核心”，那通常是**客户端应用自身没有配置外部 Naive 核心路径**，不等于 VPS 服务端缺少核心。可以改用官方 sing-box 客户端读取 `naive-client.json`，也可以按该图形客户端的 Linux 版说明单独配置其核心路径；本项目不提供桌面端专用核心安装器。
@@ -373,7 +375,11 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 /usr/local/sbin/sb-manager uninstall
 ```
 
+输入 `y` 确认卸载。直接回车、输入 `n` 或输入结束均取消；从管理菜单取消后会返回菜单。
+
 卸载会删除本脚本管理的 `/etc/sing-box` 配置目录、sing-box 服务、管理脚本、证书重载钩子，以及本脚本创建的 `cloudflared-sb-tunnel` 专用服务和 Tunnel Token 文件。如果 `cloudflared` 二进制是本脚本下载的，也会删除；如果系统原本已有 cloudflared，则保留该二进制。
+
+预装或来源未记录的 sing-box 核心和 APT 源会保留；本脚本新安装并记录的核心与新增 APT 源会随卸载移除。
 
 卸载不会删除 Cloudflare 控制台中的 Tunnel、Public Hostname、DNS 记录，也不会删除 NAT 服务商端口映射或云厂商安全组。需要时应在 Cloudflare 控制台单独清理 Tunnel 和 DNS 路由。
 

@@ -127,7 +127,7 @@
       <div class="commandhead">卸载命令 <span>固定命令，始终显示</span></div>
       <textarea id="uninstallText" class="command short" rows="3" readonly>/usr/local/sbin/sb-manager uninstall</textarea>
       <div class="actions"><button id="copyUninstall" class="secondary">复制卸载命令</button></div>
-      <div class="footnote">仅在确实需要卸载时执行。卸载会删除本脚本管理的 sing-box 配置、服务和相关文件；不会删除 Cloudflare 控制台中的 Tunnel / DNS 记录或服务商端口映射。</div>
+      <div class="footnote">执行后输入 <code>y</code> 确认卸载，直接回车默认取消。卸载不会删除 Cloudflare 控制台中的 Tunnel / DNS 记录或服务商端口映射。</div>
     </div>
   </div>
   <div class="actions"><button id="downloadBoth" class="ghost" disabled>下载安装 + 卸载命令（分隔 TXT）</button></div>

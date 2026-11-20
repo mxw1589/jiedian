@@ -47,6 +47,7 @@ ARGO_TOKEN_FILE="$APP_DIR/cloudflared.token"
 CLOUDFLARED_BIN=/usr/local/libexec/sb-manager/cloudflared
 CLOUDFLARED_RUN=/usr/local/sbin/sb-cloudflared-run
 CLOUDFLARED_SERVICE=cloudflared-sb-tunnel
+MANAGED_SB_BIN=/usr/local/libexec/sb-manager/sing-box
 NEED_CERT=0
 NEED_ORIGIN=1
 BBR_SYSCTL_FILE=/etc/sysctl.d/99-sb-manager-bbr.conf
@@ -709,13 +710,59 @@ version_supports_naive() {
 }
 
 resolve_sing_box_binary() {
-    # Prefer the upstream binary installed under /usr/local/bin. On Alpine,
-    # an older APK binary may still exist under /usr/bin after fallback.
-    if [ -x /usr/local/bin/sing-box ]; then
-        printf '%s\n' /usr/local/bin/sing-box
-        return 0
+    resolved_core=$(command -v sing-box 2>/dev/null || true)
+    for core_candidate in "$MANAGED_SB_BIN" /usr/local/bin/sing-box "$resolved_core" /usr/bin/sing-box; do
+        if [ -x "$core_candidate" ] && version_supports_naive "$(sing_box_version_from "$core_candidate")"; then
+            printf '%s\n' "$core_candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+mark_managed_core() {
+    install -d -m 0750 "$APP_DIR" || return 1
+    : > "$APP_DIR/managed-$1"
+}
+
+debian_core_is_installed() {
+    command -v dpkg-query >/dev/null 2>&1 &&
+        dpkg-query -W -f='${Status}' sing-box 2>/dev/null | grep -qx 'install ok installed'
+}
+
+install_debian_core_package() {
+    core_preinstalled=0
+    if debian_core_is_installed; then core_preinstalled=1; fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y sing-box || return 1
+    if [ "$core_preinstalled" = 0 ]; then mark_managed_core apt-core; fi
+}
+
+install_debian_upstream_core() {
+    if [ ! -s /etc/apt/keyrings/sagernet.asc ]; then
+        install -d -m 0755 /etc/apt/keyrings || return 1
+        apt_key_tmp=$(mktemp) || err '无法创建 APT 签名密钥临时文件。'
+        if ! curl -fsSL https://sing-box.app/gpg.key -o "$apt_key_tmp" || [ ! -s "$apt_key_tmp" ]; then
+            rm -f "$apt_key_tmp"
+            err '无法下载 sing-box 官方 APT 签名密钥。'
+        fi
+        install -m 0644 "$apt_key_tmp" /etc/apt/keyrings/sagernet.asc || { rm -f "$apt_key_tmp"; return 1; }
+        rm -f "$apt_key_tmp"
+        mark_managed_core apt-key || return 1
     fi
-    command -v sing-box 2>/dev/null
+    if [ ! -s /etc/apt/sources.list.d/sagernet.sources ]; then
+        cat > /etc/apt/sources.list.d/sagernet.sources <<'APT_EOF' || return 1
+Types: deb
+URIs: https://deb.sagernet.org/
+Suites: *
+Components: *
+Enabled: yes
+Signed-By: /etc/apt/keyrings/sagernet.asc
+APT_EOF
+        [ -s /etc/apt/sources.list.d/sagernet.sources ] || return 1
+        mark_managed_core apt-source || return 1
+    fi
+    apt-get update || return 1
+    install_debian_core_package
 }
 
 install_alpine_official_release() {
@@ -735,24 +782,30 @@ install_alpine_official_release() {
     esac
     archive="sing-box-${ver}-linux-${rel_arch}.tar.gz"
     unpack_dir=$(mktemp -d /tmp/sing-box-unpack.XXXXXX) || err '无法创建 sing-box 临时解压目录。'
-    if ! curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "/tmp/${archive}"; then
-        rm -rf "$unpack_dir" "/tmp/${archive}"
+    if ! curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "$unpack_dir/$archive"; then
+        rm -rf "$unpack_dir"
         err "下载 sing-box 官方发布版失败（${archive}）；请检查 GitHub 网络连接后重试。"
     fi
-    if ! tar -xzf "/tmp/${archive}" -C "$unpack_dir"; then
-        rm -rf "$unpack_dir" "/tmp/${archive}"
+    if ! tar -xzf "$unpack_dir/$archive" -C "$unpack_dir"; then
+        rm -rf "$unpack_dir"
         err '解压 sing-box 官方发布版失败。'
     fi
-    mkdir -p /usr/local/bin
-    if ! install -m 0755 "$unpack_dir/sing-box-${ver}-linux-${rel_arch}/sing-box" /usr/local/bin/sing-box; then
-        rm -rf "$unpack_dir" "/tmp/${archive}"
+    unpacked_core="$unpack_dir/sing-box-${ver}-linux-${rel_arch}/sing-box"
+    if ! version_supports_naive "$(sing_box_version_from "$unpacked_core")"; then
+        rm -rf "$unpack_dir"
+        err '下载的 sing-box 官方版本无法运行或低于 1.13.0。'
+    fi
+    install -d -m 0755 "${MANAGED_SB_BIN%/*}"
+    if ! install -m 0755 "$unpacked_core" "$MANAGED_SB_BIN"; then
+        rm -rf "$unpack_dir"
         err '安装 sing-box 官方 Linux 二进制文件失败。'
     fi
-    rm -rf "$unpack_dir" "/tmp/${archive}"
+    rm -rf "$unpack_dir"
+    mark_managed_core release-core
 
     # Pin the manager/service to the official binary explicitly. Do not let an
     # older /usr/bin/sing-box from Alpine's APK package shadow this version.
-    SB_BIN=/usr/local/bin/sing-box
+    SB_BIN=$MANAGED_SB_BIN
     release_version=$(sing_box_version_from "$SB_BIN" || true)
     version_supports_naive "$release_version" ||
         err "官方发布版版本检查失败（检测到：${release_version:-无法识别}）；NaiveProxy 需要 sing-box 1.13.0 或更新版本。"
@@ -765,57 +818,35 @@ install_dependencies_and_core() {
         msg '检测到 Alpine Linux，安装 sing-box 和依赖……'
         apk update
         apk add --no-cache ca-certificates curl jq openssl iproute2 tar gzip kmod
-
-        # Some Alpine repositories provide sing-box, but older branches may
-        # package a release below 1.13.0. Naive inbound requires >= 1.13.0.
-        # Install the APK when available, inspect its actual binary version,
-        # and fall back to the upstream release whenever it is absent, broken,
-        # or too old.
-        if apk search -x sing-box 2>/dev/null | grep -q .; then
-            if ! apk add --no-cache sing-box; then
-                warn 'Alpine sing-box APK 安装失败；将尝试官方 Linux 发布版。'
-            fi
-        fi
-
-        candidate_bin=$(command -v sing-box 2>/dev/null || true)
-        candidate_version=""
-        if [ -n "$candidate_bin" ]; then
-            candidate_version=$(sing_box_version_from "$candidate_bin" || true)
-        fi
-
-        if [ -n "$candidate_bin" ] && version_supports_naive "$candidate_version"; then
-            SB_BIN=$candidate_bin
-            msg "使用 Alpine 仓库 sing-box：$candidate_version（满足 NaiveProxy 最低版本要求）。"
-        else
-            if [ -n "$candidate_bin" ]; then
-                warn "Alpine 仓库提供的 sing-box 版本为 ${candidate_version:-无法识别}，低于 NaiveProxy 所需的 1.13.0；自动切换到官方新版。"
-            else
-                warn 'Alpine 仓库没有可用的 sing-box 二进制；自动切换到官方新版。'
-            fi
-            install_alpine_official_release
-        fi
         update-ca-certificates 2>/dev/null || true
     elif [ -f /etc/debian_version ]; then
         OS_FAMILY=debian
-        msg '检测到 Debian，安装 sing-box 官方仓库和依赖……'
+        msg '检测到 Debian，安装系统依赖……'
         apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq openssl iproute2 gpg procps kmod
-        install -d -m 0755 /etc/apt/keyrings
-        curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
-        chmod a+r /etc/apt/keyrings/sagernet.asc
-        cat > /etc/apt/sources.list.d/sagernet.sources <<'APT_EOF'
-Types: deb
-URIs: https://deb.sagernet.org/
-Suites: *
-Components: *
-Enabled: yes
-Signed-By: /etc/apt/keyrings/sagernet.asc
-APT_EOF
-        apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y sing-box
-        SB_BIN="$(command -v sing-box 2>/dev/null || true)"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq openssl iproute2 procps kmod
     else
         err '仅支持 Debian 和 Alpine Linux。'
+    fi
+
+    if SB_BIN=$(resolve_sing_box_binary); then
+        msg "复用系统已有 sing-box：$SB_BIN"
+    elif [ "$OS_FAMILY" = alpine ]; then
+        core_preinstalled=0
+        if apk info -e sing-box >/dev/null 2>&1; then core_preinstalled=1; fi
+        if apk search -x sing-box 2>/dev/null | grep -q . && apk add --no-cache sing-box; then
+            if [ "$core_preinstalled" = 0 ]; then mark_managed_core apk-core; fi
+        fi
+        SB_BIN=$(resolve_sing_box_binary) || install_alpine_official_release
+    else
+        apt_core_candidate=$(apt-cache policy sing-box | awk '$1=="Candidate:" { print $2; exit }')
+        if [ -n "$apt_core_candidate" ] && [ "$apt_core_candidate" != '(none)' ] &&
+            dpkg --compare-versions "$apt_core_candidate" ge 1.13.0; then
+            install_debian_core_package || warn '当前 APT 软件源中的 sing-box 安装失败，将尝试官方软件源。'
+        fi
+        if ! SB_BIN=$(resolve_sing_box_binary); then
+            install_debian_upstream_core || err '无法从 sing-box 官方软件源安装。'
+            SB_BIN=$(resolve_sing_box_binary) || err '找不到兼容的 sing-box（需要 1.13.0 或更高版本）。'
+        fi
     fi
 
     [ -n "$SB_BIN" ] && [ -x "$SB_BIN" ] ||
@@ -950,11 +981,20 @@ start_cron() {
 install_acme() {
     if [ ! -x /root/.acme.sh/acme.sh ]; then
         msg '安装 acme.sh（用于自动申请和续期证书）……'
-        if [ -n "$1" ]; then
-            curl -fsSL https://get.acme.sh | HOME=/root sh -s email="$1"
-        else
-            curl -fsSL https://get.acme.sh | HOME=/root sh
+        acme_tmp=$(mktemp -d /tmp/sb-acme.XXXXXX) || err '无法创建 acme.sh 临时目录。'
+        if ! curl -fsSL --retry 2 https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz -o "$acme_tmp/acme.tar.gz" ||
+           ! tar -xzf "$acme_tmp/acme.tar.gz" -C "$acme_tmp"; then
+            rm -rf "$acme_tmp"
+            err '无法下载或解压 acme.sh 官方源码。'
         fi
+        acme_email=$1
+        set -- --install --home /root/.acme.sh --nocron
+        if [ -n "$acme_email" ]; then set -- "$@" --accountemail "$acme_email"; fi
+        if ! ( cd "$acme_tmp/acme.sh-master" && HOME=/root sh ./acme.sh "$@" ); then
+            rm -rf "$acme_tmp"
+            err 'acme.sh 安装失败。'
+        fi
+        rm -rf "$acme_tmp"
     fi
     [ -x /root/.acme.sh/acme.sh ] || err 'acme.sh 安装失败。'
     start_cron
@@ -1102,6 +1142,13 @@ issue_http_cert() {
     if port_listening 80; then
         warn 'HTTP-01 自动验证需要 TCP 80 端口空闲。请暂时停止占用 80 端口的服务，或改用 Cloudflare DNS-01 / 手动证书。'
         return 1
+    fi
+    if ! command -v socat >/dev/null 2>&1; then
+        if [ "$OS_FAMILY" = alpine ]; then
+            apk add --no-cache socat || return 1
+        else
+            DEBIAN_FRONTEND=noninteractive apt-get install -y socat || return 1
+        fi
     fi
     install_acme ''
     msg "通过 Let's Encrypt HTTP-01 为 $domain 申请/更新证书（不需要 Cloudflare Token）……"
@@ -2327,12 +2374,17 @@ resolve_install_domains() {
     fi
 }
 
+detect_public_ip() {
+    curl "-$1" -fsS --max-time 6 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null |
+        awk '/^ip=/ { sub(/^ip=/,""); sub(/\r$/,""); print; exit }'
+}
+
 resolve_install_addresses() {
     if [ "$NEED_ORIGIN" = 1 ] && [ -z "$ORIGIN_ADDR" ] && [ -z "$ORIGIN_IPV6" ]; then
-        ORIGIN_ADDR=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
+        ORIGIN_ADDR=$(detect_public_ip 4)
         if ! valid_ipv4_address "$ORIGIN_ADDR"; then ORIGIN_ADDR=""; fi
         if ipv6_kernel_enabled; then
-            ORIGIN_IPV6=$(curl -6 -fsS --max-time 5 https://api64.ipify.org 2>/dev/null || true)
+            ORIGIN_IPV6=$(detect_public_ip 6)
             if ! valid_ipv6_address "$ORIGIN_IPV6"; then ORIGIN_IPV6=""; fi
         fi
     fi
@@ -2455,10 +2507,9 @@ install_from_config() {
     else REALITY_SNI=""; fi
 
     resolve_install_domains
-    resolve_install_addresses
-
     if [ ! -e "$STATE_FILE" ] && [ -d "$APP_DIR" ]; then backup_existing_install; fi
     install_dependencies_and_core
+    resolve_install_addresses
     PREVIOUS_ANYTLS_PORT=${PREVIOUS_ANYTLS_PORT:-}; PREVIOUS_WS_PORT=${PREVIOUS_WS_PORT:-}
     PREVIOUS_REALITY_PORT=${PREVIOUS_REALITY_PORT:-}; PREVIOUS_NAIVE_PORT=${PREVIOUS_NAIVE_PORT:-}; PREVIOUS_ANYREALITY_PORT=${PREVIOUS_ANYREALITY_PORT:-}
     assign_ports
@@ -3417,12 +3468,12 @@ change_origin_addresses() {
     if [ "$new_ipv4" = '-' ]; then new_ipv4=""; fi
     if [ "$new_ipv6" = '-' ]; then new_ipv6=""; fi
     if [ "$new_ipv4" = 'auto' ]; then
-        new_ipv4=$(curl -4 -fsS --max-time 6 https://api.ipify.org 2>/dev/null || true)
+        new_ipv4=$(detect_public_ip 4)
         valid_ipv4_address "$new_ipv4" || new_ipv4=""
     fi
     if [ "$new_ipv6" = 'auto' ]; then
         if ipv6_kernel_enabled; then
-            new_ipv6=$(curl -6 -fsS --max-time 6 https://api64.ipify.org 2>/dev/null || true)
+            new_ipv6=$(detect_public_ip 6)
             valid_ipv6_address "$new_ipv6" || new_ipv6=""
         else new_ipv6=""; fi
     fi
@@ -3751,12 +3802,19 @@ remove_acme_cron_entry() {
     fi
 }
 
+confirm_uninstall() {
+    msg '========== 确认卸载 sing-box 管理器 =========='
+    printf '%s\n' '将删除：/etc/sing-box、/usr/local/sbin/sb-manager、sing-box 服务文件、Argo 专用 cloudflared 服务及本脚本安装的软件包/二进制。'
+    printf '%s\n' '不会删除：预装的 sing-box、/root/.acme.sh、系统依赖包、系统防火墙规则、云厂商安全组或其他 cron 任务。'
+    ask_value '确认在当前 VPS 上卸载？(y/N)' 'n'
+    case "$(trim_value "$REPLY")" in
+        y|Y) return 0 ;;
+        *) msg '已取消卸载，未修改系统。'; return 1 ;;
+    esac
+}
+
 uninstall_manager() {
     need_root
-    msg '========== 即将立即卸载 sing-box 管理器 =========='
-    printf '%s\n' '将删除：/etc/sing-box、/usr/local/sbin/sb-manager、sing-box 服务文件、Argo 专用 cloudflared 服务及本脚本安装的软件包/二进制。'
-    printf '%s\n' '不会删除：/root/.acme.sh、系统依赖包、系统防火墙规则、云厂商安全组或其他 cron 任务。'
-    printf '%s\n' '卸载将直接继续执行；请确认当前连接的是正确的 VPS。'
     cf_managed=0; [ ! -f "$APP_DIR/cloudflared-managed" ] || cf_managed=1
     msg '正在停止 sing-box / Cloudflare Tunnel 服务……'
     if command -v systemctl >/dev/null 2>&1; then
@@ -3785,26 +3843,25 @@ uninstall_manager() {
 
     msg '正在删除 sing-box 配置、证书副本和管理脚本……'
     rm -f "$RELOAD_HOOK"
-    rm -rf "$APP_DIR"
     [ "$cf_managed" -eq 0 ] || rm -f "$CLOUDFLARED_BIN"
     rm -f /usr/local/sbin/sb-manager
 
     if [ -f /etc/alpine-release ]; then
-        if command -v apk >/dev/null 2>&1 && apk info -e sing-box >/dev/null 2>&1; then
+        if [ -f "$APP_DIR/managed-apk-core" ] && command -v apk >/dev/null 2>&1 && apk info -e sing-box >/dev/null 2>&1; then
             apk del sing-box || warn 'sing-box apk 软件包卸载失败，请检查 apk 日志。'
         fi
-        # The script's Alpine fallback release binary is installed at this path.
-        rm -f /usr/local/bin/sing-box
         rm -f /etc/init.d/sing-box
     elif [ -f /etc/debian_version ]; then
-        if command -v dpkg-query >/dev/null 2>&1 && dpkg-query -W -f='${Status}' sing-box 2>/dev/null | grep -q 'install ok installed'; then
+        if [ -f "$APP_DIR/managed-apt-core" ] && debian_core_is_installed; then
             DEBIAN_FRONTEND=noninteractive apt-get purge -y sing-box || warn 'sing-box apt 软件包卸载失败，请手动执行 apt-get purge sing-box。'
         fi
         rm -f /etc/systemd/system/sing-box.service
-        rm -f /etc/apt/sources.list.d/sagernet.sources
-        rm -f /etc/apt/keyrings/sagernet.asc
+        [ ! -f "$APP_DIR/managed-apt-source" ] || rm -f /etc/apt/sources.list.d/sagernet.sources
+        [ ! -f "$APP_DIR/managed-apt-key" ] || rm -f /etc/apt/keyrings/sagernet.asc
         systemctl daemon-reload >/dev/null 2>&1 || true
     fi
+    [ ! -f "$APP_DIR/managed-release-core" ] || rm -f "$MANAGED_SB_BIN"
+    rm -rf "$APP_DIR"
 
     msg '卸载流程已完成。'
     printf '%s\n' '保留说明：未删除 /root/.acme.sh、系统依赖包、sing-box 系统用户/组、系统防火墙规则或云厂商安全组。'
@@ -3913,7 +3970,7 @@ menu() {
             8) service_restart && msg '服务已重启。' ;;
             9) service_status ;;
             10) show_logs ;;
-            11) uninstall_manager || true; exit 0 ;;
+            11) if confirm_uninstall; then uninstall_manager; exit 0; fi ;;
             12) show_bbr_status ;;
             13) change_node_label ;;
             14) [ "$ENABLE_NAIVE" = 1 ] && diagnose_naive || warn '当前未安装 NaiveProxy。' ;;
@@ -3962,7 +4019,7 @@ main() {
         return 0
     fi
     if [ "${1:-}" = uninstall ] || [ "${1:-}" = remove ]; then
-        uninstall_manager "${2:-}"
+        if confirm_uninstall; then uninstall_manager; fi
         return 0
     fi
     if [ "${1:-}" = install-web-config ]; then
