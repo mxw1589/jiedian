@@ -47,8 +47,13 @@ if errorlevel 1 (
 )
 
 echo [3/4] Synchronizing with GitHub main...
-git fetch --no-tags "%PUSH_URL%" refs/heads/main || goto :fetch_failed
+set "GIT_NETWORK_OPTIONS="
+git fetch --no-tags "%PUSH_URL%" refs/heads/main && goto :merge_fetched
+echo [WARN] Fetch failed. Retrying once...
+if "%PUSH_URL%"=="%REPO_URL%" set "GIT_NETWORK_OPTIONS=-c http.version=HTTP/1.1 -c protocol.version=0"
+git %GIT_NETWORK_OPTIONS% fetch --no-tags "%PUSH_URL%" refs/heads/main || goto :fetch_failed
 
+:merge_fetched
 set "PUSH_OK="
 (
     git merge --no-edit --no-overwrite-ignore FETCH_HEAD
@@ -59,7 +64,7 @@ set "PUSH_OK="
         echo [ERROR] Could not merge GitHub main. Local commits are kept. Resolve the Git error and retry.
     ) else (
         echo [4/4] Pushing main to GitHub...
-        git push -u origin refs/heads/main:refs/heads/main
+        git %GIT_NETWORK_OPTIONS% push -u origin refs/heads/main:refs/heads/main
         if errorlevel 1 (
             echo [ERROR] Push failed. Local commits are kept; no force push was attempted.
             echo Check the Git output above. If GitHub main changed during the push, run this file again.
@@ -91,7 +96,8 @@ echo [ERROR] Commit failed. Check the Git output and try again.
 goto :finish
 
 :fetch_failed
-echo [ERROR] Could not fetch GitHub main. Local commits are kept.
+echo [ERROR] Could not fetch GitHub main after two attempts. No push was attempted; local commits are kept.
+echo If the connection was reset or timed out, check GitHub connectivity and your Git proxy settings, then try again.
 
 :finish
 if defined IN_REPO popd
