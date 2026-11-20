@@ -3,7 +3,6 @@ setlocal EnableExtensions DisableDelayedExpansion
 
 set "REPO_URL=https://github.com/mxw1589/jiedian.git"
 set "REPO_SSH=git@github.com:mxw1589/jiedian.git"
-set "RESULT=1"
 set "IN_REPO="
 
 where git >nul 2>&1 || (
@@ -22,23 +21,23 @@ if not "%CURRENT_REF%"=="refs/heads/main" (
     goto :finish
 )
 
-set "HAS_PUSH_URL="
+set "PUSH_URL="
 for /f "delims=" %%U in ('git remote get-url --push --all origin 2^>nul') do (
-    if defined HAS_PUSH_URL goto :wrong_remote
+    if defined PUSH_URL goto :wrong_remote
     if not "%%U"=="%REPO_URL%" if not "%%U"=="%REPO_SSH%" goto :wrong_remote
-    set "HAS_PUSH_URL=1"
+    set "PUSH_URL=%%U"
 )
-if not defined HAS_PUSH_URL goto :wrong_remote
+if not defined PUSH_URL goto :wrong_remote
 
 for /f "delims=" %%P in ('git rev-parse --git-path MERGE_HEAD') do if exist "%%P" (
     echo [ERROR] Finish or abort the current merge before pushing.
     goto :finish
 )
 
-echo [1/3] Staging all repository changes...
+echo [1/4] Staging all repository changes...
 git add -A -- . || goto :stage_failed
 
-echo [2/3] Committing changes...
+echo [2/4] Committing changes...
 git diff --cached --quiet --
 if errorlevel 2 goto :stage_failed
 if errorlevel 1 (
@@ -47,11 +46,33 @@ if errorlevel 1 (
     echo No new changes to commit.
 )
 
-echo [3/3] Pushing main to GitHub...
-git push -u origin refs/heads/main:refs/heads/main || goto :push_failed
-echo [SUCCESS] GitHub main is up to date.
-set "RESULT=0"
-goto :finish
+echo [3/4] Synchronizing with GitHub main...
+git fetch --no-tags "%PUSH_URL%" refs/heads/main || goto :fetch_failed
+
+set "PUSH_OK="
+(
+    git merge --no-edit --no-overwrite-ignore FETCH_HEAD
+    if errorlevel 1 (
+        git rev-parse --verify --quiet MERGE_HEAD >nul && (
+            git merge --abort || echo [ERROR] Could not abort the merge. Check git status.
+        )
+        echo [ERROR] Could not merge GitHub main. Local commits are kept. Resolve the Git error and retry.
+    ) else (
+        echo [4/4] Pushing main to GitHub...
+        git push -u origin refs/heads/main:refs/heads/main
+        if errorlevel 1 (
+            echo [ERROR] Push failed. Local commits are kept; no force push was attempted.
+            echo Check the Git output above. If GitHub main changed during the push, run this file again.
+        ) else (
+            echo [SUCCESS] GitHub main is up to date.
+            set "PUSH_OK=1"
+        )
+    )
+    popd
+    if /i not "%~1"=="--no-pause" pause
+    if defined PUSH_OK exit /b 0
+    exit /b 1
+)
 
 :wrong_repo
 echo [ERROR] Run this batch file from the root of the Git checkout.
@@ -69,11 +90,10 @@ goto :finish
 echo [ERROR] Commit failed. Check the Git output and try again.
 goto :finish
 
-:push_failed
-echo [ERROR] Push failed. Local commits are kept; no force push was attempted.
-echo Check network and GitHub permissions. If GitHub main has newer commits, integrate them before retrying.
+:fetch_failed
+echo [ERROR] Could not fetch GitHub main. Local commits are kept.
 
 :finish
 if defined IN_REPO popd
 if /i not "%~1"=="--no-pause" pause
-exit /b %RESULT%
+exit /b 1
