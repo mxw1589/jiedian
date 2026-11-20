@@ -45,18 +45,18 @@
       <div class="field"><label for="argoHost">Tunnel Public Hostname <i class="mark req">必填</i></label><input id="argoHost" placeholder="例如 ws.example.com" autocomplete="off"></div>
       <div class="field"><label for="argoToken">Cloudflare Tunnel Token <i class="mark req">必填</i></label><input id="argoToken" type="password" placeholder="粘贴完整 eyJ... Token" autocomplete="off"></div>
       <div class="field"><label for="argoTunnelName">Tunnel 备注名 <i class="mark opt">可选</i></label><input id="argoTunnelName" placeholder="仅用于本机管理菜单显示" autocomplete="off" maxlength="64"></div>
+      <div class="field"><label for="argoServer">Argo 优选域名 / IP <i class="mark opt">可选</i></label><input id="argoServer" placeholder="默认 Tunnel Public Hostname；旧节点留空保留优选值"></div>
       <div class="footnote">只粘贴 Cloudflare Zero Trust → Tunnels → Add a replica 中的 Token，不要粘贴整条安装命令。</div>
     </div>
     <div id="directWsFields" class="hidden">
       <div class="notice">直连模式需要你自己的 TLS 域名和证书；若使用 HTTP-01，还必须确保公网 TCP 80 可访问。</div>
+      <div class="field"><label for="wsServer">直连 WS 优选域名 / IP <i class="mark opt">可选</i></label><input id="wsServer" placeholder="默认 TLS 证书域名；旧节点留空保留优选值"></div>
+      <details class="advanced">
+        <summary>直连 WS 高级设置</summary>
+        <div class="field"><label for="directWsHost">自定义 WS HTTP Host <i class="mark opt">可选</i></label><input id="directWsHost" placeholder="默认 TLS 证书域名；旧节点留空保留自定义值"></div>
+      </details>
     </div>
-    <details id="wsAdvanced" class="advanced">
-      <summary>高级选项（一般不用填写）</summary>
-      <div class="field" id="wsServerField"><label for="wsServer">直连 WS 连接地址 / 优选 IP <i class="mark opt">可选</i></label><input id="wsServer" placeholder="留空：TLS 证书域名"></div>
-      <div class="field" id="argoServerField"><label for="argoServer">Argo 连接地址 / 优选 IP <i class="mark opt">可选</i></label><input id="argoServer" placeholder="留空：Tunnel Public Hostname"></div>
-      <div class="field hidden" id="directWsHostField"><label for="directWsHost">自定义 WS HTTP Host <i class="mark opt">可选</i></label><input id="directWsHost" placeholder="留空：自动使用 TLS 证书域名"></div>
-      <div class="footnote">连接地址留空会自动使用对应域名；只有需要 Cloudflare 优选 IP 或自定义 Host 时才修改。</div>
-    </details>
+    <div class="footnote">优选域名 / IP 只改变客户端连接地址，不改变 SNI 或 Host。留空保留旧的自定义值；输入 <code>-</code> 恢复默认。Argo 客户端固定用 443；直连需要连接地址能访问所选端口。</div>
   </div>
 </section>
 
@@ -92,7 +92,7 @@
   </div>
 
   <div id="portFields" class="subpanel hidden">
-    <div class="subhead">端口 <i class="mark opt">全部可留空，自动分配</i></div>
+    <div class="subhead">端口 <i class="mark opt">留空：新节点自动分配，旧节点保留</i></div>
     <div class="portgrid">
       <div class="port hidden" id="portAnytlsWrap"><label for="portAnytls">AnyTLS TCP</label><input id="portAnytls" type="number" min="1024" max="65535" placeholder="自动随机"></div>
       <div class="port hidden" id="portWsWrap"><label for="portWs">直连 WS TLS TCP</label><input id="portWs" type="number" min="1024" max="65535" placeholder="自动随机"></div>
@@ -167,6 +167,8 @@ const UNINSTALL_COMMAND="/usr/local/sbin/sb-manager uninstall";
 const $=id=>document.getElementById(id);
 const ids=["pAnytls","pWs","pArgo","pSS2022","pReality","pNaive","pAnyReality","argoServer","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portArgo","portSS2022","portReality","portNaive","portAnyReality"];
 const v=id=>$(id).value.trim();
+const protocolLabels={anytls:"AnyTLS",ws_tls:"直连 WS TLS",ws_argo:"Argo WS TLS",ss2022:"Shadowsocks 2022",vless_reality:"VLESS + Reality",naive:"NaiveProxy",anytls_reality:"AnyTLS + Reality"};
+const selectedNames=p=>Object.entries(protocolLabels).filter(([key])=>p[key]).map(([,label])=>label).join("、");
 function selected(){return {anytls:$("pAnytls").checked,ws_tls:$("pWs").checked,ws_argo:$("pArgo").checked,ss2022:$("pSS2022").checked,vless_reality:$("pReality").checked,naive:$("pNaive").checked,anytls_reality:$("pAnyReality").checked};}
 function needsCert(p){return p.anytls||p.naive||p.ws_tls;}
 function needsOrigin(p){return p.anytls||p.vless_reality||p.naive||p.anytls_reality||p.ss2022;}
@@ -176,10 +178,10 @@ function cfgFromForm(){
   const certMode=certNeeded?v("certMode"):"none";
   const tlsDomain=certNeeded?v("tlsDomain"):"";
   const argoHost=p.ws_argo?v("argoHost"):"";
-  const wsHost=p.ws_tls?(v("directWsHost")||tlsDomain):"";
-  const wsServer=p.ws_tls?(v("wsServer")||tlsDomain):"";
+  const wsHost=p.ws_tls?v("directWsHost"):"";
+  const wsServer=p.ws_tls?v("wsServer"):"";
   return {
-    schema:7,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?(v("argoServer")||argoHost):"",
+    schema:7,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?v("argoServer"):"",
     argo_tunnel_name:p.ws_argo?v("argoTunnelName"):"",
     argo_token:p.ws_argo?v("argoToken"):"",
     origin_ipv4:needsOrigin(p)?v("originIPv4"):"",
@@ -196,7 +198,8 @@ function cfgFromForm(){
 }
 const domainRe=/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[A-Za-z]{2,63}$/;
 function isIPv4(s){const a=s.split(".");return a.length===4&&a.every(x=>/^\d{1,3}$/.test(x)&&+x<=255);}
-function isIPv6(s){try{return s.includes(":")&&new URL(`http://[${s}]/`).hostname.startsWith("[");}catch{return false;}}
+function isIPv6(s){try{return s.includes(":")&&/^[0-9a-f:.]+$/i.test(s)&&new URL(`http://[${s}]/`).hostname.startsWith("[");}catch{return false;}}
+function validOptionalWsAddress(value){return !value||value==="-"||domainRe.test(value)||isIPv4(value)||isIPv6(value);}
 function validate(c){
   const p=c.protocols;
   if(!Object.values(p).some(Boolean))throw Error("请至少勾选一种协议。");
@@ -208,11 +211,11 @@ function validate(c){
     if(!domainRe.test(c.argo_host))throw Error("请填写有效的固定 Tunnel Public Hostname，例如 ws.example.com。");
     if(c.argo_tunnel_name&&!/^[\p{L}\p{N} ._-]{1,64}$/u.test(c.argo_tunnel_name))throw Error("Tunnel 备注名最多 64 个字符，只允许中文、字母、数字、空格、点、下划线和短横线。");
     if(!c.argo_token||!/^eyJ[A-Za-z0-9+/=_-]{37,8191}$/.test(c.argo_token))throw Error("请填写完整的 Cloudflare Tunnel Token（通常以 eyJ 开头）。");
-    if(c.argo_server&&!domainRe.test(c.argo_server)&&!isIPv4(c.argo_server)&&!isIPv6(c.argo_server))throw Error("Argo 连接地址格式无效；请填写域名、IPv4 或 IPv6。");
+    if(!validOptionalWsAddress(c.argo_server))throw Error("Argo 优选地址格式无效；请填写域名、IPv4 或 IPv6（不要带端口）。");
   }
   if(p.ws_tls){
-    if(c.ws_host&&!domainRe.test(c.ws_host))throw Error("直连 WS 的 HTTP Host 必须是有效域名；留空时会自动使用 TLS 证书域名。");
-    if(c.ws_server&&!domainRe.test(c.ws_server)&&!isIPv4(c.ws_server)&&!isIPv6(c.ws_server))throw Error("客户端连接地址格式无效；请填写域名、IPv4 或 IPv6。");
+    if(c.ws_host&&c.ws_host!=="-"&&!domainRe.test(c.ws_host))throw Error("直连 WS 的 HTTP Host 必须是有效域名，或填 - 恢复默认。");
+    if(!validOptionalWsAddress(c.ws_server))throw Error("直连 WS 优选地址格式无效；请填写域名、IPv4 或 IPv6（不要带端口）。");
   }
   if(p.vless_reality||p.anytls_reality){if(!domainRe.test(c.reality_sni))throw Error("Reality SNI 必须是有效域名；留空时默认 www.bing.com。");}
   if(needsOrigin(p)){
@@ -231,7 +234,8 @@ function validate(c){
   }
   return c;
 }
-function oneCommandText(c){const encoded=b64(JSON.stringify(c));return `if sh -eu <<'SB_INSTALL'
+function oneCommandText(c){const encoded=b64(JSON.stringify(c));return `# 本次勾选：${selectedNames(c.protocols)}
+if sh -eu <<'SB_INSTALL'
 [ "$(id -u)" -eq 0 ] || { echo '请以 root 用户执行此安装命令。'; exit 1; }
 umask 077
 CFG="$(mktemp)"
@@ -248,7 +252,7 @@ if command -v curl >/dev/null 2>&1; then curl -fsSL '${RAW_URL}' -o "$SH"
 else wget -qO "$SH" '${RAW_URL}'; fi
 head -n 1 "$SH" | grep -qx '#!/bin/sh'
 grep -q 'WEB_CONFIG_MODE=1' "$SH"
-grep -q 'WEB_CONFIG_SCHEMA=7' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
+grep -q 'WEB_CONFIG_SCHEMA=7' "$SH" && grep -q 'WEB_WS_PREFERENCES=1' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
 install -m 700 "$SH" /usr/local/sbin/sb-manager
 rm -f "$SH"
 /usr/local/sbin/sb-manager install-web-config "$CFG"
@@ -266,8 +270,6 @@ function syncUI(){
   $("argoFields").classList.toggle("hidden",!argo);$("directWsFields").classList.toggle("hidden",!ws);
   ["argoHost","argoToken","argoTunnelName","argoServer"].forEach(id=>setEnabled(id,argo));
   setEnabled("wsServer",ws);setEnabled("directWsHost",ws);
-  $("wsServerField").classList.toggle("hidden",!ws);$("directWsHostField").classList.toggle("hidden",!ws);
-  $("argoServerField").classList.toggle("hidden",!argo);
   $("originFields").classList.toggle("hidden",!origin);["originIPv4","originIPv6"].forEach(id=>setEnabled(id,origin));
   $("realityFields").classList.toggle("hidden",!reality);setEnabled("realitySni",reality);
   $("certFields").classList.toggle("hidden",!cert);setEnabled("certMode",cert);setEnabled("tlsDomain",cert);
@@ -276,7 +278,7 @@ function syncUI(){
   const portMap=[["portAnytls","portAnytlsWrap",p.anytls],["portWs","portWsWrap",ws],["portArgo","portArgoWrap",argo],["portSS2022","portSS2022Wrap",p.ss2022],["portReality","portRealityWrap",p.vless_reality],["portNaive","portNaiveWrap",p.naive],["portAnyReality","portAnyRealityWrap",p.anytls_reality]];
   portMap.forEach(([id,wrap,on])=>{setEnabled(id,on);$(wrap).classList.toggle("hidden",!on);});
   $("portFields").classList.toggle("hidden",!any);
-  $("portHint").textContent=argo?"Argo WS 端口是 VPS 本机 127.0.0.1 监听端口，不需要 NAT 入站映射；客户端公网端口固定为 443。其他直连协议仍需公网端口映射；Shadowsocks 2022 请同时放行 TCP 和 UDP。":"留空由 VPS 自动选择空闲端口。NAT VPS 请确认服务商映射的目标端口与这里的本机监听端口一致。";
+  $("portHint").textContent=argo?"Argo WS 端口是 VPS 本机 127.0.0.1 监听端口，不需要 NAT 入站映射；客户端公网端口固定为 443。其他直连协议仍需公网端口映射；Shadowsocks 2022 请同时放行 TCP 和 UDP。":"NAT VPS 请确认服务商映射的目标端口与这里的本机监听端口一致。";
   $("selectionHint").textContent=any?`已选择 ${Object.values(p).filter(Boolean).length} 种协议。只显示这些协议需要的参数；隐藏项不会写入配置。`:"请至少选择一种协议。";
   $("argoHelp").classList.toggle("hidden",!argo);
 }
@@ -286,7 +288,7 @@ function render(){
   syncUI();
   const status=$("formStatus"),out=$("commandOutput"),buttons=["copyOutput","downloadOutput","exportConfig","downloadBoth"];
   $("uninstallText").value=UNINSTALL_COMMAND;
-  try{const c=validate(cfgFromForm());out.value="# 安装 / 同步命令（以 root 执行；已有安装会移除未勾选的旧节点）\n# 该命令包含敏感 Token，不要公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="命令已生成：只保留当前勾选的协议。";buttons.forEach(id=>$(id).disabled=false);}
+  try{const c=validate(cfgFromForm());out.value="# 安装 / 同步命令（以 root 执行；已有安装会移除未勾选的旧节点）\n# 该命令包含敏感 Token，不要公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="本次勾选："+selectedNames(c.protocols)+"。";buttons.forEach(id=>$(id).disabled=false);}
   catch(e){out.value="";status.className="status error";status.textContent=e.message;buttons.forEach(id=>$(id).disabled=true);}
 }
 ids.forEach(id=>{$(id).addEventListener("input",render);$(id).addEventListener("change",render);});

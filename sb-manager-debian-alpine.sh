@@ -5,6 +5,7 @@
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
+# WEB_WS_PREFERENCES=1
 # Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
 # Manager menu 19: remove one protocol; menu 20: protocol-scoped SNI/IP/Cloudflare/port/credential editor
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
@@ -363,6 +364,15 @@ valid_ipv6_literal() {
       function group_ok(g) { return length(g) >= 1 && length(g) <= 4 && g ~ /^[0-9A-Fa-f]+$/ }
       {
         s=$0
+        if (s ~ /\./) {
+          ipv4_start=match(s, /[^:]+$/)
+          if (ipv4_start <= 1 || split(substr(s,ipv4_start),octets,/[.]/) != 4) exit 1
+          for (octet_index=1;octet_index<=4;octet_index++) {
+            octet=octets[octet_index]
+            if (octet !~ /^(0|[1-9][0-9]*)$/ || length(octet) > 3 || octet+0 > 255) exit 1
+          }
+          s=substr(s,1,ipv4_start-1) sprintf("%x:%x",256*octets[1]+octets[2],256*octets[3]+octets[4])
+        }
         if (s !~ /^[0-9A-Fa-f:]+$/ || s ~ /:::/) exit 1
         d=index(s,"::")
         n=0
@@ -2520,6 +2530,15 @@ web_string() {
     trim_value "$(jq -r --arg key "$1" '.[$key] // ""' "$web_cfg")"
 }
 
+web_ws_setting() {
+    web_ws_input=$(web_string "$1")
+    case "$web_ws_input" in
+        -) ;;
+        '') printf '%s' "$2" ;;
+        *) printf '%s' "$web_ws_input" ;;
+    esac
+}
+
 web_port() {
     web_port_value=$(trim_value "$(jq -r --arg key "$1" '.ports[$key] // ""' "$web_cfg")")
     printf '%s\n' "${web_port_value:-${2:-}}"
@@ -2587,6 +2606,14 @@ capture_web_state() {
     web_previous_tls_domain=$TLS_DOMAIN
     web_previous_cert_mode=$CERT_MODE
     web_previous_cf_zone=$CF_ZONE_NAME
+    web_previous_ws_server=""; web_previous_ws_host=""; web_previous_argo_server=""
+    if [ "$ENABLE_WS_TLS" = 1 ]; then
+        [ "$WS_SERVER" = "$TLS_DOMAIN" ] || web_previous_ws_server=$WS_SERVER
+        [ "$WS_HOST" = "$TLS_DOMAIN" ] || web_previous_ws_host=$WS_HOST
+    fi
+    if [ "$ENABLE_WS_ARGO" = 1 ] && [ "$ARGO_SERVER" != "$ARGO_HOST" ]; then
+        web_previous_argo_server=$ARGO_SERVER
+    fi
 }
 
 restore_web_file() {
@@ -2638,6 +2665,23 @@ apply_web_selection() (
     install_from_config
 )
 
+legacy_web_selection_matches() {
+    jq -e \
+      --arg anytls "$ENABLE_ANYTLS" --arg ws_tls "$ENABLE_WS_TLS" --arg ws_argo "$ENABLE_WS_ARGO" \
+      --arg reality "$ENABLE_VLESS_REALITY" --arg naive "$ENABLE_NAIVE" \
+      --arg anyreality "$ENABLE_ANYTLS_REALITY" --arg ss2022 "$ENABLE_SS2022" '
+        def selected($key): .protocols[$key] == true;
+        def legacy_argo: .schema == 5 and selected("ws_tls") and .ws_mode == "argo";
+        selected("anytls") == ($anytls == "1") and
+        (selected("ws_tls") and (legacy_argo | not)) == ($ws_tls == "1") and
+        (legacy_argo or (.schema == 6 and selected("ws_argo"))) == ($ws_argo == "1") and
+        selected("vless_reality") == ($reality == "1") and
+        selected("naive") == ($naive == "1") and
+        selected("anytls_reality") == ($anyreality == "1") and
+        (.schema == 6 and selected("ss2022")) == ($ss2022 == "1")
+      ' "$web_cfg" >/dev/null
+}
+
 install_web_config() {
     need_root
     web_cfg=${1:-}
@@ -2665,6 +2709,7 @@ install_web_config() {
         if ! manager_state_is_valid; then backup_existing_install; err '现有 manager.json 无效；已备份原目录，停止覆盖。'; fi
         load_state
         if [ "$web_schema" != 7 ]; then
+            legacy_web_selection_matches || err '旧版网页命令的协议勾选与现有节点不同，未修改 VPS 配置。请刷新配置页，重新勾选需要保留的协议并复制新版命令。'
             warn '旧版网页命令只执行覆盖升级，不会同步协议勾选；请刷新页面重新生成命令。'
             overlay_install
             return 0
@@ -2685,13 +2730,13 @@ install_web_config() {
     ARGO_TUNNEL_NAME=$(web_string argo_tunnel_name)
     ARGO_TOKEN=$(web_string argo_token)
     ORIGIN_ADDR=$(web_string origin_ipv4); ORIGIN_IPV6=$(web_string origin_ipv6)
-    WS_SERVER=$(web_string ws_server)
-    TLS_DOMAIN=$(web_string tls_domain); WS_HOST=$(web_string ws_host)
+    WS_SERVER=$(web_ws_setting ws_server "${web_previous_ws_server:-}")
+    TLS_DOMAIN=$(web_string tls_domain); WS_HOST=$(web_ws_setting ws_host "${web_previous_ws_host:-}")
     REALITY_SNI=$(web_string reality_sni); NODE_LABEL=$(web_string node_label)
     ANYTLS_PORT=$(web_port anytls "${PREVIOUS_ANYTLS_PORT:-}")
     WS_PORT=$(web_port ws_tls "${PREVIOUS_WS_PORT:-}")
     ARGO_PORT=$(web_port ws_argo "${PREVIOUS_ARGO_PORT:-}")
-    ARGO_SERVER=$(web_string argo_server)
+    ARGO_SERVER=$(web_ws_setting argo_server "${web_previous_argo_server:-}")
     if [ "$web_schema" = 5 ] && [ "$ENABLE_WS_TLS" = 1 ]; then
         case "$(web_string ws_mode)" in
             argo) legacy_ws_server=$WS_SERVER; migrate_legacy_argo ;;

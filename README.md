@@ -53,7 +53,7 @@ jiedian/
 - 每个字段标注“必填 / 可选 / 默认”；当前协议完全不需要的字段直接隐藏，不只是灰显。
 - 协议选择变化时，相关字段即时显示或隐藏；隐藏字段不会写入配置。
 - **安装命令和卸载命令同时显示、分开生成、分别复制**；安装命令随表单实时更新，卸载命令固定显示。
-- 端口留空由 VPS 自动分配；源站 IP 留空由 VPS 自动检测；Reality SNI 留空使用默认值。
+- 网页端口留空时，新节点自动分配空闲端口，旧节点保留原端口；源站 IP 留空由 VPS 自动检测；Reality SNI 留空使用默认值。
 - 操作系统、CPU 架构和 systemd / OpenRC 不需要手动选择，脚本自动识别。
 - 支持导出不含 Token 的配置 JSON，以及下载分隔显示的安装 / 卸载命令 TXT。
 - 页面是静态前端，表单内容只在当前浏览器处理，不会自动上传到 GitHub Pages。
@@ -65,8 +65,8 @@ jiedian/
 | Tunnel Public Hostname | 必填 | 仅选择 VLESS + WS / Argo 时填写，例如 `ws.example.com` |
 | Cloudflare Tunnel Token | 必填 | 仅 Argo 模式填写完整 Token |
 | Tunnel 备注名 | 可选 | 仅用于本机菜单显示；留空即可 |
-| 客户端连接地址 / 优选 IP | 可选 | 仅 WS 高级选项；留空自动使用 Argo 主机名或 TLS 域名 |
-| 自定义 WS HTTP Host | 可选 | 仅直连 WS 高级选项；留空自动使用 TLS 域名 |
+| 优选域名 / IP | 可选 | 勾选直连 WS 或 Argo 后分别显示。首次留空使用 TLS 证书域名或 Tunnel Public Hostname；同步时留空保留旧优选地址，填 `-` 恢复默认 |
+| 自定义 WS HTTP Host | 可选 | 仅直连 WS 高级设置；首次留空使用 TLS 域名，同步留空保留旧自定义 Host，填 `-` 恢复默认 |
 | 源站 IPv4 / IPv6 | 可选 | AnyTLS、Reality、NaiveProxy、Shadowsocks 2022 使用；两项都留空时自动检测 |
 | Reality SNI | 可选 / 默认 | 仅 Reality 协议需要；留空默认 `www.bing.com` |
 | TLS 证书域名 | 必填 | 仅 AnyTLS、NaiveProxy、直连 WS 需要 |
@@ -76,7 +76,7 @@ jiedian/
 | Cloudflare Zone ID | 可选 | DNS-01 可自动查询；留空即可 |
 | 证书邮箱 | 可选 | 留空即可，不影响 DNS-01 申请 |
 | 节点辨识符 | 可选 | 仅用于区分节点；留空使用默认名称 |
-| 各协议端口 | 可选 | 留空自动分配；只有需要固定内网监听端口时才填 |
+| 各协议端口 | 可选 | 网页留空时新节点自动分配、旧节点保留；需要指定内网监听端口时才填 |
 
 **完全不需要填写的项目：** 不选 Argo 就不需要 Tunnel 参数；不选 Reality，就不需要 Reality SNI；不选 AnyTLS / Naive / 直连 WS，就不需要 TLS 证书或 Cloudflare DNS API；Argo-only 不需要源站 IP 和源站证书。系统版本、CPU 架构、服务管理器都由脚本自动判断。
 
@@ -196,7 +196,7 @@ Argo-only 的 VLESS + WS 安装只需要 Tunnel Token，不需要源站证书，
 3. 填写 Argo 公网主机名，例如 `ws.example.com`。该主机名必须属于你拥有或获准管理、并已接入 Cloudflare 的域名区域。
 4. 可填写一个本机备注名，便于在管理菜单中区分 VPS；该备注不等于 Cloudflare Tunnel ID。
 5. 填写刚才复制的固定 Tunnel Token。
-6. 客户端连接地址可以留空，默认使用 `ws.example.com`。如果你有经过实际线路测试的 Cloudflare 优选 IP 或优选域名，可以填在这里；该字段只改变客户端连接目标，不会改变 TLS SNI 或 WS Host。
+6. **Argo 优选域名 / IP** 可以留空。首次安装默认使用 `ws.example.com`，同步已有节点时留空保留旧优选值，填 `-` 恢复默认。优选地址只改变客户端连接目标，不会改变 TLS SNI 或 WS Host。
 7. WS 本机端口可以留空自动分配，也可以指定一个 `1024–65535` 的空闲端口。
 8. 不要填写源站 TLS 证书域名、证书 API Token 或 NAT 公网端口。固定 Tunnel 模式的这些字段不需要。
 9. 命令会在参数填写完整后自动生成，复制到 VPS root 终端执行。
@@ -297,7 +297,7 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 
 如果菜单 `18` 显示所有协议均已安装，说明所有协议选项都已部署，无需重复添加。若新增 Argo WS，仍需在 Cloudflare Zero Trust 中把 Public Hostname 的 Service URL 指向脚本显示的 `http://127.0.0.1:<本机 WS 端口>`。
 
-只想新增节点、不改旧节点配置，也不删除其他节点时，使用菜单 `18` 或 `sb-manager add`。从新版网页复制的命令会同步整个协议选择；旧版网页命令只覆盖升级，需要刷新页面重新生成。
+只想新增节点、不改旧节点配置，也不删除其他节点时，使用菜单 `18` 或 `sb-manager add`。新版网页的命令顶部会列出本次勾选的协议，并同步整个选择；旧版命令只在勾选与现有协议一致时允许覆盖升级，否则停止并提示刷新页面重新生成。
 
 ## 五、NaiveProxy 与 Linux 客户端
 
@@ -317,8 +317,9 @@ Cloudflare Tunnel 当前只用于本项目的 VLESS + WebSocket HTTP 流量，�
 
 - Argo WS：本机监听 `127.0.0.1:<WS_PORT>`，客户端端口固定 `443`，不需要 NAT 公网入站映射。
 - 直连 WS TLS：本机监听端口也是客户端端口；使用 Cloudflare 橙云时需选择 Cloudflare 支持的 HTTPS 代理端口（例如 `443`、`2053`、`2083`、`2087`、`2096`、`8443`）。
+- WS 节点测速超时时，先用实际 TLS 域名（直连）或 Tunnel Public Hostname（Argo）作客户端地址测试；如果只有换成优选地址才超时，检查该地址能否访问对应的端口。若 Argo 用默认地址也失败，检查 Tunnel Connector 和 Service URL；直连则检查证书、入站防火墙与 NAT 公网映射。源站和公网端口不同的 NAT 直连节点，客户端需手动使用实际公网端口。
 - AnyTLS、VLESS Reality、NaiveProxy、AnyTLS + Reality：使用各自 TCP 监听端口。NAT VPS 必须确认服务商已经提供对应公网映射。
-- 端口留空时由脚本自动分配；手动端口被占用或与已选协议重复时，脚本会自动改选空闲端口。随机端口不代表 NAT 服务商已经自动创建公网映射。
+- 新版网页命令发现端口被占用或重复时会停止，不会更换指定端口。随机端口不代表 NAT 服务商已经自动创建公网映射。
 
 进入管理菜单：
 
