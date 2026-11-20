@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+*.token
+*.pem
+*.key
+manager.json
+nodes.txt
+naive-client.json
+anytls-reality-client.json
+sing-box-install-command.txt
+sing-box-install-and-uninstall-commands.txt

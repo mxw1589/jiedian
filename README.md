@@ -21,6 +21,12 @@ jiedian/
 - `CHANGELOG.md`：本次修复与版本变更记录。
 - `sb-manager-debian-alpine.sh`：Debian / Ubuntu / Alpine 安装及管理脚本；自动识别系统、CPU 架构和服务管理器。
 
+### Windows 一键推送
+
+在项目的 `main` 分支双击 `一键push到github.bat`，脚本会提交整个仓库中新增、修改和删除的文件，并推送到 [GitHub](https://github.com/mxw1589/jiedian)。没有新改动时也会推送尚未上传的提交。首次使用请按 Git for Windows 的提示登录有写权限的 GitHub 账号。
+
+未跟踪、且被 `.gitignore` 忽略的文件不会上传。请勿把已跟踪文件当作存放密钥的地方。如果 GitHub 上已有本地没有的提交，脚本不会强推；请先同步再重试。
+
 ## 功能简介
 
 ### 选择性安装
