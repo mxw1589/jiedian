@@ -66,7 +66,7 @@ jiedian/
 |---|---|---|
 | Tunnel Public Hostname | 必填 | 仅选择 VLESS + WS / Argo 时填写，例如 `ws.example.com` |
 | Cloudflare Tunnel Token | 必填 | 仅 Argo 模式填写完整 Token |
-| Tunnel 备注名 | 可选 | 仅用于本机菜单显示；留空即可 |
+| Tunnel 备注名 | 可选 | 仅用于本机菜单显示；连续空格合并为一个，只输入空格视为留空 |
 | 优选域名 / IP | 可选 | 勾选直连 WS 或 Argo 后分别显示。首次留空使用 TLS 证书域名或 Tunnel Public Hostname；同步时留空保留旧优选地址，填 `-` 恢复默认 |
 | 自定义 WS HTTP Host | 可选 | 仅直连 WS 高级设置；首次留空使用 TLS 域名，同步留空保留旧自定义 Host，填 `-` 恢复默认 |
 | 源站 IPv4 / IPv6 | 可选 | AnyTLS、Reality、NaiveProxy、Shadowsocks 2022 使用；两项都留空时自动检测 |

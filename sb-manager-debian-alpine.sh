@@ -624,6 +624,10 @@ trim_value() {
     printf '%s\n' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
+normalize_tunnel_name() {
+    trim_value "$1" | sed 's/  */ /g'
+}
+
 ask_value() {
     prompt=$1
     default=${2-}
@@ -633,7 +637,10 @@ ask_value() {
         printf '%s: ' "$prompt"
     fi
     IFS= read -r REPLY || REPLY=""
-    if [ -z "$REPLY" ]; then REPLY=$default; fi
+    case "$REPLY" in
+        *[![:blank:]]*) ;;
+        *) REPLY=$default ;;
+    esac
 }
 
 valid_email() {
@@ -2306,6 +2313,7 @@ resolve_install_domains() {
     if [ "$ENABLE_WS_ARGO" = 1 ]; then
         valid_cert_domain "$ARGO_HOST" || err '请输入有效且已接入 Cloudflare 的 Argo 公网主机名。'
         ARGO_SERVER=${ARGO_SERVER:-$ARGO_HOST}
+        ARGO_TUNNEL_NAME=$(normalize_tunnel_name "$ARGO_TUNNEL_NAME")
     else ARGO_SERVER=""; fi
     if [ "$ENABLE_WS_TLS" = 1 ]; then
         WS_SERVER=${WS_SERVER:-$TLS_DOMAIN}
@@ -3081,7 +3089,7 @@ change_argo_binding() {
         return 0
     }
     ask_value 'Tunnel 备注名（留空保持；输入 - 清除备注）' "$ARGO_TUNNEL_NAME"
-    new_argo_name=$(trim_value "$REPLY")
+    new_argo_name=$(normalize_tunnel_name "$REPLY")
     [ "$new_argo_name" = '-' ] && new_argo_name=""
     ask_secret '新的 Cloudflare Tunnel Token（留空保留当前 Token；若当前缺失则必须填写）'
     new_argo_token=$(trim_value "$REPLY")

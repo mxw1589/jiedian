@@ -44,7 +44,7 @@
     <div id="argoFields">
       <div class="field"><label for="argoHost">Tunnel Public Hostname <i class="mark req">必填</i></label><input id="argoHost" placeholder="例如 ws.example.com" autocomplete="off"></div>
       <div class="field"><label for="argoToken">Cloudflare Tunnel Token <i class="mark req">必填</i></label><input id="argoToken" type="password" placeholder="粘贴完整 eyJ... Token" autocomplete="off"></div>
-      <div class="field"><label for="argoTunnelName">Tunnel 备注名 <i class="mark opt">可选</i></label><input id="argoTunnelName" placeholder="仅用于本机管理菜单显示" autocomplete="off" maxlength="64"></div>
+      <div class="field"><label for="argoTunnelName">Tunnel 备注名 <i class="mark opt">可选</i></label><input id="argoTunnelName" placeholder="连续空格会合并为一个" autocomplete="off"></div>
       <div class="field"><label for="argoServer">Argo 优选域名 / IP <i class="mark opt">可选</i></label><input id="argoServer" placeholder="默认 Tunnel Public Hostname；旧节点留空保留优选值"></div>
       <div class="footnote">只粘贴 Cloudflare Zero Trust → Tunnels → Add a replica 中的 Token，不要粘贴整条安装命令。</div>
     </div>
@@ -167,6 +167,7 @@ const UNINSTALL_COMMAND="/usr/local/sbin/sb-manager uninstall";
 const $=id=>document.getElementById(id);
 const ids=["pAnytls","pWs","pArgo","pSS2022","pReality","pNaive","pAnyReality","argoServer","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portArgo","portSS2022","portReality","portNaive","portAnyReality"];
 const v=id=>$(id).value.trim();
+const tunnelName=()=>v("argoTunnelName").replace(/ {2,}/g," ");
 const protocolLabels={anytls:"AnyTLS",ws_tls:"直连 WS TLS",ws_argo:"Argo WS TLS",ss2022:"Shadowsocks 2022",vless_reality:"VLESS + Reality",naive:"NaiveProxy",anytls_reality:"AnyTLS + Reality"};
 const selectedNames=p=>Object.entries(protocolLabels).filter(([key])=>p[key]).map(([,label])=>label).join("、");
 function selected(){return {anytls:$("pAnytls").checked,ws_tls:$("pWs").checked,ws_argo:$("pArgo").checked,ss2022:$("pSS2022").checked,vless_reality:$("pReality").checked,naive:$("pNaive").checked,anytls_reality:$("pAnyReality").checked};}
@@ -182,7 +183,7 @@ function cfgFromForm(){
   const wsServer=p.ws_tls?v("wsServer"):"";
   return {
     schema:7,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?v("argoServer"):"",
-    argo_tunnel_name:p.ws_argo?v("argoTunnelName"):"",
+    argo_tunnel_name:p.ws_argo?tunnelName():"",
     argo_token:p.ws_argo?v("argoToken"):"",
     origin_ipv4:needsOrigin(p)?v("originIPv4"):"",
     origin_ipv6:needsOrigin(p)?v("originIPv6"):"",
@@ -291,7 +292,13 @@ function render(){
   try{const c=validate(cfgFromForm());out.value="# 安装 / 同步命令（以 root 执行；已有安装会移除未勾选的旧节点）\n# 该命令包含敏感 Token，不要公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="本次勾选："+selectedNames(c.protocols)+"。";buttons.forEach(id=>$(id).disabled=false);}
   catch(e){out.value="";status.className="status error";status.textContent=e.message;buttons.forEach(id=>$(id).disabled=true);}
 }
-ids.forEach(id=>{$(id).addEventListener("input",render);$(id).addEventListener("change",render);});
+ids.forEach(id=>{
+  $(id).addEventListener("input",render);
+  $(id).addEventListener("change",()=>{
+    if(id==="argoTunnelName")$(id).value=tunnelName();
+    render();
+  });
+});
 $("copyOutput").addEventListener("click",()=>copyText($("commandOutput").value));
 $("downloadOutput").addEventListener("click",()=>download("sing-box-install-command.txt",$("commandOutput").value));
 $("exportConfig").addEventListener("click",()=>{try{const c=validate(cfgFromForm());c.cf_token="";c.argo_token="";download("sing-box-config-no-token.json",JSON.stringify(c,null,2),"application/json");}catch(e){alert(e.message);}});
