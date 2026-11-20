@@ -88,6 +88,7 @@ jiedian/
 - **三个地址用途不同**：DNS 中将 `direct.example.com` 指向 VPS：它是 TLS 证书域名；Zero Trust 中将 `tunnel.example.com` 绑定 Tunnel：它是 Argo 的 Public Hostname；如果还想使用 `edge.example.com` 或某个 IP，只在“优选域名 / IP”填写，不替代前两者。
 - 填你拥有或获准管理的根域名或完整子域名，例如 `example.com`、`direct.example.com`。只填域名，不带 `https://`、端口、路径、尾点或 `*.`；不要填 IP、优选 IP 或 Reality 的 `www.bing.com`。
 - **Cloudflare DNS-01**：填 Cloudflare Zone 本身或其子域名，例如 Zone 是 `example.com`，可填 `direct.example.com`。**HTTP-01**：域名需解析到 VPS，且公网 TCP `80` 可访问。**手动导入**：填证书 SAN 覆盖的具体域名；即使导入通配符证书，也填写具体子域名。
+- DNS-01 留空 Zone ID 时，脚本通过 Cloudflare API 查询填写的 Zone。更新 Token 时会把续期凭据写到该证书自己的 acme.sh 配置，不撤销已有授权；如果证书尚未到续期时间，会先校验现有证书再复用。
 - **Argo** 不使用这个字段。两条 WS 都开时，建议直连填 `direct.example.com`，Tunnel Public Hostname 填 `tunnel.example.com`，各自配置 DNS 路由。Argo 客户端走 Cloudflare TLS `443`，Tunnel 回源到 `http://127.0.0.1:<Argo 本机端口>`。
 
 ### 服务端脚本
