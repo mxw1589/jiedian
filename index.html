@@ -120,15 +120,15 @@
     <div class="subhead">Cloudflare WARP 域名分流 <i class="mark opt">可选</i></div>
     <label class="protocol"><input type="checkbox" id="warpEnabled"><span><b>启用 WARP 域名分流</b><small>指定域名走 Cloudflare WARP，其余流量继续走 VPS direct</small></span></label>
     <div id="warpConfigFields" class="hidden">
-      <div class="notice">填写你自己的 WARP WireGuard 配置参数。域名按行或逗号分隔；填写根域名后，该域名及其所有子域名都会走 WARP。此功能使用 sing-box 内置 WireGuard endpoint，不创建系统级全局 VPN 路由。</div>
+      <div class="notice">填写你自己的 WARP WireGuard 配置参数。域名按行或逗号分隔；填写根域名后，该域名及其所有子域名都会走 WARP。指定域名的 DNS 查询也会使用 Cloudflare DoH 并经 WARP 发送；其他域名继续使用系统 DNS 和 direct。此功能使用 sing-box 内置 WireGuard endpoint，不创建系统级全局 VPN 路由。</div>
       <div class="field"><label for="warpDomains">需要走 WARP 的域名 <i class="mark req">必填</i></label><textarea id="warpDomains" rows="4" placeholder="例如：&#10;google.com&#10;openai.com&#10;youtube.com"></textarea></div>
       <div class="field"><label for="warpPrivateKey">WARP WireGuard PrivateKey <i class="mark req">必填</i></label><input id="warpPrivateKey" type="password" autocomplete="off" placeholder="从 WireGuard 配置的 [Interface] PrivateKey 复制"></div>
-      <div class="field"><label for="warpAddress4">WARP IPv4 Address/CIDR <i class="mark req">必填</i></label><input id="warpAddress4" value="172.16.0.2/32" placeholder="172.16.0.2/32"></div>
+      <div class="field"><label for="warpAddress4">WARP IPv4 Address/CIDR <i class="mark req">必填</i></label><input id="warpAddress4" placeholder="从你自己的 WARP 配置复制，例如 172.16.0.2/32"></div>
       <div class="field"><label for="warpAddress6">WARP IPv6 Address/CIDR <i class="mark opt">可选</i></label><input id="warpAddress6" placeholder="例如 2606:4700:110:xxxx::2/128"></div>
       <div class="field"><label for="warpEndpoint">Cloudflare WireGuard Endpoint <i class="mark def">默认</i></label><input id="warpEndpoint" value="162.159.192.1" placeholder="162.159.192.1"></div>
       <div class="field"><label for="warpPort">WARP UDP 端口 <i class="mark def">默认 2408</i></label><input id="warpPort" type="number" min="1" max="65535" value="2408"></div>
-      <div class="field"><label for="warpReserved">Reserved bytes <i class="mark req">必填</i></label><input id="warpReserved" value="0,0,0" placeholder="例如 12,34,56"></div>
-      <div class="footnote">PrivateKey、Address、Reserved 和 Endpoint 请以你的 WARP WireGuard 配置为准；Reserved 必须填写账号实际分配的三个字节，不能随意照抄示例。若 IPv6 地址留空，只会把 IPv4 目标域名分流到 WARP。VPS 必须允许向 Endpoint 的 UDP 端口出站。</div>
+      <div class="field"><label for="warpReserved">Reserved bytes <i class="mark req">必填</i></label><input id="warpReserved" placeholder="必须填写你自己的实际值，例如 12,34,56"></div>
+      <div class="footnote">PrivateKey、IPv4 Address、IPv6 Address 和 Reserved 都可能因 WARP 配置而不同，必须从你自己的 WireGuard 配置复制；尤其 Reserved 不要直接照抄示例。IPv6 留空时，WARP 规则会先按 IPv4 解析目标域名，只把 IPv4 连接送入 WARP。VPS 必须允许向 Endpoint 的 UDP 端口出站。</div>
       <div class="notice">已有 VPS：网页同步时未勾选 WARP 会移除原 WARP 分流；要保留请重新勾选并填写原参数。客户端应把域名交给代理服务器处理，不要先在本地解析成 IP，否则服务端无法按域名匹配。</div>
     </div>
   </div>
@@ -185,7 +185,7 @@
     <summary>Cloudflare WARP WireGuard 参数如何填写</summary>
     <div class="small" style="margin-top:7px">
       从你自己的 Cloudflare WARP WireGuard 配置中读取参数：<code>PrivateKey</code> 对应私钥；<code>Address</code> 中的 IPv4 / IPv6 地址分别填入两个地址框；<code>Reserved</code> 对应三个十进制字节；<code>Endpoint</code> 的 IP 和端口填入 Endpoint 与 UDP 端口。页面内置的是普通消费者 WARP 的 WireGuard 公钥。不要把私钥发给他人。
-      <br>WARP 域名规则使用 sing-box 的 <code>domain_suffix</code>：例如填写 <code>example.com</code>，则 <code>example.com</code> 及 <code>www.example.com</code> 等子域名都会走 WARP。IPv6 地址留空时，规则只匹配 IPv4 目标。
+      <br>WARP 域名规则同时匹配精确根域名和以该域名结尾的子域名：例如填写 <code>example.com</code>，则 <code>example.com</code>、<code>www.example.com</code>、<code>api.example.com</code> 都走 WARP。脚本会先嗅探 TLS SNI / HTTP Host，再解析目标域名；IPv6 地址留空时按 IPv4-only 解析，只有 AAAA 记录的目标会连接失败，不会回退到 direct。
     </div>
   </details>
   <details>
@@ -253,8 +253,8 @@ const domainRe=/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.
 function isIPv4(s){const a=s.split(".");return a.length===4&&a.every(x=>/^\d{1,3}$/.test(x)&&+x<=255);}
 function isIPv6(s){try{return s.includes(":")&&/^[0-9a-f:.]+$/i.test(s)&&new URL(`http://[${s}]/`).hostname.startsWith("[");}catch{return false;}}
 function isAddress(value){return domainRe.test(value)||isIPv4(value)||isIPv6(value);}
-function isIPv4CIDR(value){const p=value.split("/");return p.length===2&&isIPv4(p[0])&&/^\d+$/.test(p[1])&&+p[1]<=32;}
-function isIPv6CIDR(value){const p=value.split("/");return p.length===2&&isIPv6(p[0])&&/^\d+$/.test(p[1])&&+p[1]<=128;}
+function isIPv4CIDR(value){const p=value.split("/");return p.length===2&&isIPv4(p[0])&&p[1]==="32";}
+function isIPv6CIDR(value){const p=value.split("/");return p.length===2&&isIPv6(p[0])&&p[1]==="128";}
 function validOptionalWsAddress(value){return !value||value==="-"||isAddress(value);}
 const historyKey="jiedian.address-history.v1";
 const historyFields={
@@ -329,8 +329,8 @@ function validate(c){
   }
   if(c.warp_enabled){
     if(!/^[A-Za-z0-9+/]{43}=$/.test(c.warp_private_key))throw Error("WARP PrivateKey 必须是 32 字节 WireGuard 私钥的 Base64 值（通常为 44 个字符）。");
-    if(!isIPv4CIDR(c.warp_address4))throw Error("WARP IPv4 Address 必须是有效 CIDR，例如 172.16.0.2/32。");
-    if(c.warp_address6&&!isIPv6CIDR(c.warp_address6))throw Error("WARP IPv6 Address 必须是有效 IPv6 CIDR，例如 2606:4700:110:xxxx::2/128，或留空只分流 IPv4。");
+    if(!isIPv4CIDR(c.warp_address4))throw Error("WARP IPv4 Address 必须是主机地址 /32，例如 172.16.0.2/32。");
+    if(c.warp_address6&&!isIPv6CIDR(c.warp_address6))throw Error("WARP IPv6 Address 必须是主机地址 /128，例如 2606:4700:110:xxxx::2/128，或留空只分流 IPv4。");
     if(!isIPv4(c.warp_endpoint)&&!isIPv6(c.warp_endpoint))throw Error("WARP Endpoint 必须填写 IPv4 或 IPv6 地址，不要带端口。");
     if(!/^\d+$/.test(c.warp_port)||+c.warp_port<1||+c.warp_port>65535)throw Error("WARP UDP 端口必须是 1–65535 的整数。");
     const reserved=c.warp_reserved.split(",").map(x=>x.trim());
