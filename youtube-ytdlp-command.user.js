@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube 下载命令生成器（yt-dlp）
 // @namespace    ytdlp-command-generator
-// @version      1.6.1
-// @description  YouTube 多视频卡片下载按钮：透明按钮置于缩略图左上角；电脑 CMD 安全执行并自动定位 Chrome Cookie 配置文件
+// @version      1.6.2
+// @description  YouTube 多视频卡片下载按钮：透明按钮置于缩略图左上角；电脑 CMD 安全执行、Chrome Cookie 自动定位，并修复 Termux 命令检查
 // @match        https://www.youtube.com/*
 // @match        https://youtube.com/*
 // @match        https://m.youtube.com/*
@@ -25,7 +25,7 @@
  * 保存位置：手机存到 /storage/emulated/0/snaptube，电脑存到 D:\snaptube，
  *       文件夹不存在时由 yt-dlp 创建；也可在面板中分别修改手机/电脑保存目录。
  * 复制：同时用三种方式写入剪贴板，手机浏览器上也能可靠复制。
- * 认证：电脑可读取浏览器 Cookie（Chrome 留空 Profile Path 时自动查找最近使用的配置文件）或 cookies.txt；手机 Termux 使用导出的 cookies.txt。
+ * 认证：电脑可读取浏览器 Cookie（Chrome 留空 Profile Path 时自动查找最近使用的配置文件）或 cookies.txt；手机 Termux 使用导出的 cookies.txt，并在运行前检查 Cookie 文件可读性、创建保存目录。
  * 防限流：支持平衡/保守请求节奏、指数退避重试；可选启用已安装的 PO Token Provider。
  * 新增：多视频卡片下载按钮、按卡片 videoId 独立生成命令；自定义保存目录、下载历史、720p、原始音频与字幕下载；Windows CMD / Termux 分别转义。
  * 依赖：电脑需要 yt-dlp、ffmpeg 和可用的 JavaScript 运行时；手机 Termux 需要 yt-dlp、ffmpeg，并运行过 termux-setup-storage。
@@ -141,6 +141,32 @@
   }
 
   function serializeTokens(tokens, shell, settings) {
+    if (shell === 'bash') {
+      const args = tokens.slice(1).map((token) => String(token));
+      const bashQuote = (value) => quoteArg(value, 'bash');
+      const preflight = [];
+      let cookiePath = '';
+      let savePath = '';
+
+      for (let i = 0; i < args.length - 1; i += 1) {
+        if (args[i] === '--cookies') cookiePath = args[i + 1];
+        if (args[i] === '-P') savePath = args[i + 1];
+      }
+
+      // Termux 先检查共享存储权限和 cookies.txt 可读性，再创建目标目录。
+      // 这不会读取或输出 Cookie 内容。
+      if (cookiePath) {
+        preflight.push(
+          'if [ ! -r ' + bashQuote(cookiePath) + ' ]; then',
+          '  printf "%s\\n" ' + bashQuote('错误：无法读取 cookies.txt：' + cookiePath + '。请检查 termux-setup-storage、文件路径和 Android 文件权限。'),
+          '  exit 2',
+          'fi'
+        );
+      }
+      if (savePath) preflight.push('mkdir -p ' + bashQuote(savePath) + ' || exit 3');
+
+      return preflight.concat(serializePlainTokens(tokens, 'bash')).join(' && ');
+    }
     if (shell !== 'cmd') return serializePlainTokens(tokens, shell);
 
     const args = tokens.slice(1).map((token) => String(token));
@@ -1101,8 +1127,10 @@ button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
       archiveLabel,
       potLabel,
       h('p', { class: 'auth-hint', text: 'Chrome Cookie：电脑 Profile Path 留空时，CMD 命令会自动读取 Chrome Local State 的最近使用配置文件，并检查 Default / Profile 1 等目录。若仍找不到，请打开 chrome://version，复制完整 Profile Path（例如 ...\\User Data\\Profile 1）粘贴到此栏；不要只填 User Data 根目录。若实际使用 Edge，请在上方选择 Edge；也可改用 cookies.txt。' }),
-      h('p', { class: 'auth-hint', text: '电脑默认保存到 D:\\snaptube，手机默认保存到 /storage/emulated/0/snaptube。电脑命令可直接粘贴到 Windows CMD（内部通过 PowerShell 安全传递参数）；手机命令粘贴到 Termux Bash。手机访问共享存储前，先在 Termux 执行 termux-setup-storage。' }),
-      h('p', { class: 'auth-hint', text: 'User-Agent 默认只填当前设备的浏览器值；另一设备留空时由 yt-dlp 使用默认值。保守策略会降低请求频率，但不能解除 YouTube 对公网 IP 的封锁。' }),
+      h('p', { class: 'auth-hint', text: '电脑默认保存到 D:\\snaptube，手机默认保存到 /storage/emulated/0/snaptube。电脑命令可直接粘贴到 Windows CMD（内部通过 PowerShell 安全传递参数）；手机命令粘贴到 Termux Bash（先检查 Cookie 文件并创建保存目录）。手机访问共享存储前，先在 Termux 执行 termux-setup-storage。' }),
+      h('p', { class: 'auth-hint', text: 'Termux 遇到“Sign in to confirm you’re not a bot”：这不是保存路径或 Bash 引号错误。先更新 yt-dlp，再从已登录 YouTube 的同一个手机浏览器重新导出 cookies.txt；手机 User-Agent 必须与导出 Cookie 时使用的浏览器一致（不要把 Firefox Cookie 配成 Chrome UA，反之亦然），并尽量保持同一网络。不要连续反复重试；先在浏览器中正常登录并完成 YouTube 验证，再重新导出 Cookie。' }),
+      h('p', { class: 'auth-hint', text: 'Termux 命令会先检查 cookies.txt 是否可读，并自动创建保存目录；若提示无法读取，请在 Termux 执行 termux-setup-storage，并确认文件确实位于 /storage/emulated/0/snaptube/cookies.txt。该检查只检查文件权限，不会显示 Cookie 内容。' }),
+      h('p', { class: 'auth-hint', text: 'User-Agent 应与导出 cookies.txt 时使用的手机浏览器一致；如果不确定，可清空手机 User-Agent，让 yt-dlp 使用默认值。保守策略只降低请求频率，不能解除 YouTube 的人机验证或公网 IP 限制。' }),
       h('p', { class: 'auth-hint auth-warning', text: 'Cookie 等同登录凭据。不要分享 cookies.txt 或 Profile Path 所在目录。若遇到 429，先停止重试，在同一网络完成 YouTube 人机验证，再使用同一网络与对应 Cookie。' }));
     authDetails.append(authSummary, authBody);
 
