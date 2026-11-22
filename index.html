@@ -7,7 +7,7 @@
 <title>sing-box Linux 安装与管理面板</title>
 <style>
 :root{color-scheme:light;--bg:#f3f6fb;--surface:#fff;--soft:#f8faff;--line:#dce4ef;--line2:#c8d5e5;--text:#17243a;--muted:#64748b;--blue:#2563eb;--green:#15803d;--greenbg:#f0fdf4;--amber:#92400e;--amberbg:#fffbeb;--red:#b91c1c}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.55 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1160px;margin:auto;padding:16px 16px 30px}header{padding:15px 18px;margin-bottom:12px;background:#fff;border:1px solid var(--line);border-radius:14px}h1{font-size:23px;line-height:1.25;margin:0 0 5px}.sub,.small,.hint{color:var(--muted)}.sub{font-size:12px}.legend{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:9px;font-size:11px;color:var(--muted)}.mark{display:inline-block;border-radius:5px;padding:1px 6px;font-size:10px;font-style:normal;font-weight:700;vertical-align:middle;margin-left:4px}.req{color:#b91c1c;background:#fef2f2;border:1px solid #fecaca}.opt{color:#475569;background:#f1f5f9;border:1px solid #e2e8f0}.def{color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe}.layout{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}.panel{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:15px}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}.panel h2{font-size:15px;line-height:1.3;margin:0}.panel h3{font-size:12px;margin:10px 0 7px;color:#33445d}.badge{font-size:10px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:2px 7px;white-space:nowrap;font-weight:650}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.protocol{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:9px;background:var(--soft);padding:8px;cursor:pointer;min-width:0}.protocol input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--blue)}.protocol b{font-size:12px}.protocol small{display:block;font-size:10px;color:var(--muted);line-height:1.35}.subpanel{margin-top:11px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#fbfdff}.subhead{font-size:12px;font-weight:750;margin-bottom:7px;color:#263b59}.field{display:grid;grid-template-columns:175px minmax(0,1fr);align-items:center;gap:8px;margin:7px 0}.field label{font-size:11px;font-weight:650;color:#33445d}.field input,.field select{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:7px;padding:7px 9px;color:var(--text);font-family:inherit;font-size:12px;line-height:1.3;outline:none}.field input:focus,.field select:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 2px #3b82f61f}.field input:disabled,.field select:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder{color:#94a3b8}.hint{grid-column:2;font-size:10px;line-height:1.35;margin-top:-4px}.divider{height:1px;background:var(--line);margin:10px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.port{border:1px solid var(--line);border-radius:8px;padding:7px;background:var(--soft);min-width:0}.port label{display:block;font-size:10px;font-weight:650;color:#33445d;margin-bottom:4px}.port input{width:100%;border:1px solid var(--line2);border-radius:6px;padding:6px;color:var(--text);font-family:inherit;font-size:12px;min-width:0}.notice{margin-top:9px;padding:8px 10px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:8px;font-size:11px;line-height:1.5}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.hidden{display:none!important}.advanced{margin-top:7px;border-top:1px dashed var(--line2);padding-top:7px}.advanced summary,details summary{cursor:pointer;color:#1d4ed8;font-size:11px;font-weight:650}.actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}button{border:1px solid var(--blue);background:#2563eb;color:white;border-radius:7px;padding:7px 11px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}button.ghost{background:white;border-color:var(--line2);color:#33445d}button:disabled{opacity:.45;cursor:not-allowed}.commands{margin-top:12px}.commandgrid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(260px,.65fr);gap:10px}.commandcard{min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}.commandhead{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;font-size:12px;font-weight:750}.commandhead span{font-size:10px;font-weight:500;color:var(--muted)}.command{display:block;width:100%;min-height:138px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:7px;padding:9px;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto}.command.short{min-height:72px}.status{font-size:11px;margin:5px 0;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.help{margin-top:10px}.help details{border:1px solid var(--line);border-radius:9px;background:#fff;padding:9px 11px}.help ol{margin:7px 0 0 18px;padding:0}.footer{text-align:center;color:#718096;font-size:10px;padding-top:15px}.footnote{font-size:10px;color:var(--muted);margin-top:7px;line-height:1.45}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.55 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1160px;margin:auto;padding:16px 16px 30px}header{padding:15px 18px;margin-bottom:12px;background:#fff;border:1px solid var(--line);border-radius:14px}h1{font-size:23px;line-height:1.25;margin:0 0 5px}.sub,.small,.hint{color:var(--muted)}.sub{font-size:12px}.legend{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:9px;font-size:11px;color:var(--muted)}.mark{display:inline-block;border-radius:5px;padding:1px 6px;font-size:10px;font-style:normal;font-weight:700;vertical-align:middle;margin-left:4px}.req{color:#b91c1c;background:#fef2f2;border:1px solid #fecaca}.opt{color:#475569;background:#f1f5f9;border:1px solid #e2e8f0}.def{color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe}.layout{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}.panel{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:15px}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}.panel h2{font-size:15px;line-height:1.3;margin:0}.panel h3{font-size:12px;margin:10px 0 7px;color:#33445d}.badge{font-size:10px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:2px 7px;white-space:nowrap;font-weight:650}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.protocol{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:9px;background:var(--soft);padding:8px;cursor:pointer;min-width:0}.protocol input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--blue)}.protocol b{font-size:12px}.protocol small{display:block;font-size:10px;color:var(--muted);line-height:1.35}.subpanel{margin-top:11px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#fbfdff}.subhead{font-size:12px;font-weight:750;margin-bottom:7px;color:#263b59}.field{display:grid;grid-template-columns:175px minmax(0,1fr);align-items:center;gap:8px;margin:7px 0}.field label{font-size:11px;font-weight:650;color:#33445d}.field input,.field select,.field textarea{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:7px;padding:7px 9px;color:var(--text);font-family:inherit;font-size:12px;line-height:1.3;outline:none}.field input:focus,.field select:focus,.field textarea:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 2px #3b82f61f}.field input:disabled,.field select:disabled,.field textarea:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder,.field textarea::placeholder{color:#94a3b8}.hint{grid-column:2;font-size:10px;line-height:1.35;margin-top:-4px}.divider{height:1px;background:var(--line);margin:10px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.port{border:1px solid var(--line);border-radius:8px;padding:7px;background:var(--soft);min-width:0}.port label{display:block;font-size:10px;font-weight:650;color:#33445d;margin-bottom:4px}.port input{width:100%;border:1px solid var(--line2);border-radius:6px;padding:6px;color:var(--text);font-family:inherit;font-size:12px;min-width:0}.notice{margin-top:9px;padding:8px 10px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:8px;font-size:11px;line-height:1.5}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.hidden{display:none!important}.advanced{margin-top:7px;border-top:1px dashed var(--line2);padding-top:7px}.advanced summary,details summary{cursor:pointer;color:#1d4ed8;font-size:11px;font-weight:650}.actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}button{border:1px solid var(--blue);background:#2563eb;color:white;border-radius:7px;padding:7px 11px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}button.ghost{background:white;border-color:var(--line2);color:#33445d}button:disabled{opacity:.45;cursor:not-allowed}.commands{margin-top:12px}.commandgrid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(260px,.65fr);gap:10px}.commandcard{min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}.commandhead{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;font-size:12px;font-weight:750}.commandhead span{font-size:10px;font-weight:500;color:var(--muted)}.command{display:block;width:100%;min-height:138px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:7px;padding:9px;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto}.command.short{min-height:72px}.status{font-size:11px;margin:5px 0;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.help{margin-top:10px}.help details{border:1px solid var(--line);border-radius:9px;background:#fff;padding:9px 11px}.help ol{margin:7px 0 0 18px;padding:0}.footer{text-align:center;color:#718096;font-size:10px;padding-top:15px}.footnote{font-size:10px;color:var(--muted);margin-top:7px;line-height:1.45}
 @media(max-width:850px){.layout{grid-template-columns:1fr}.commandgrid{grid-template-columns:1fr}.command{min-height:115px}}
 @media(max-width:560px){.wrap{padding:8px 7px 22px}header{padding:12px}.panel{padding:11px}.protocols{grid-template-columns:1fr}.field{grid-template-columns:1fr;gap:3px}.hint{grid-column:1;margin-top:-1px}.portgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.commandgrid{grid-template-columns:1fr}h1{font-size:20px}}
 </style>
@@ -116,6 +116,23 @@
     <div id="portHint" class="footnote">留空由 VPS 选择空闲端口。若 NAT 服务商指定了内网监听端口，请在对应项填写该端口；公网映射需另行配置。</div>
   </div>
 
+  <div id="warpSection" class="subpanel">
+    <div class="subhead">Cloudflare WARP 域名分流 <i class="mark opt">可选</i></div>
+    <label class="protocol"><input type="checkbox" id="warpEnabled"><span><b>启用 WARP 域名分流</b><small>指定域名走 Cloudflare WARP，其余流量继续走 VPS direct</small></span></label>
+    <div id="warpConfigFields" class="hidden">
+      <div class="notice">填写你自己的 WARP WireGuard 配置参数。域名按行或逗号分隔；填写根域名后，该域名及其所有子域名都会走 WARP。此功能使用 sing-box 内置 WireGuard endpoint，不创建系统级全局 VPN 路由。</div>
+      <div class="field"><label for="warpDomains">需要走 WARP 的域名 <i class="mark req">必填</i></label><textarea id="warpDomains" rows="4" placeholder="例如：&#10;google.com&#10;openai.com&#10;youtube.com"></textarea></div>
+      <div class="field"><label for="warpPrivateKey">WARP WireGuard PrivateKey <i class="mark req">必填</i></label><input id="warpPrivateKey" type="password" autocomplete="off" placeholder="从 WireGuard 配置的 [Interface] PrivateKey 复制"></div>
+      <div class="field"><label for="warpAddress4">WARP IPv4 Address/CIDR <i class="mark req">必填</i></label><input id="warpAddress4" value="172.16.0.2/32" placeholder="172.16.0.2/32"></div>
+      <div class="field"><label for="warpAddress6">WARP IPv6 Address/CIDR <i class="mark opt">可选</i></label><input id="warpAddress6" placeholder="例如 2606:4700:110:xxxx::2/128"></div>
+      <div class="field"><label for="warpEndpoint">Cloudflare WireGuard Endpoint <i class="mark def">默认</i></label><input id="warpEndpoint" value="162.159.192.1" placeholder="162.159.192.1"></div>
+      <div class="field"><label for="warpPort">WARP UDP 端口 <i class="mark def">默认 2408</i></label><input id="warpPort" type="number" min="1" max="65535" value="2408"></div>
+      <div class="field"><label for="warpReserved">Reserved bytes <i class="mark req">必填</i></label><input id="warpReserved" value="0,0,0" placeholder="例如 12,34,56"></div>
+      <div class="footnote">PrivateKey、Address、Reserved 和 Endpoint 请以你的 WARP WireGuard 配置为准；Reserved 必须填写账号实际分配的三个字节，不能随意照抄示例。若 IPv6 地址留空，只会把 IPv4 目标域名分流到 WARP。VPS 必须允许向 Endpoint 的 UDP 端口出站。</div>
+      <div class="notice">已有 VPS：网页同步时未勾选 WARP 会移除原 WARP 分流；要保留请重新勾选并填写原参数。客户端应把域名交给代理服务器处理，不要先在本地解析成 IP，否则服务端无法按域名匹配。</div>
+    </div>
+  </div>
+
   <div class="notice ok">系统类型和 CPU 架构无需填写：安装脚本会自动识别 Debian / Alpine、可用 CPU 架构，并选择 systemd 或 OpenRC。Naive 服务端由 sing-box 内置支持，自动确保版本不低于 1.13.0；VPS 不需要额外安装独立 Naive 服务端核心。</div>
 </section>
 </main>
@@ -139,7 +156,7 @@
       <div class="actions">
         <button id="copyOutput" class="secondary" disabled>复制安装命令</button>
         <button id="downloadOutput" class="ghost" disabled>下载安装 TXT</button>
-        <button id="exportConfig" class="ghost" disabled>导出 JSON（不含 Token）</button>
+        <button id="exportConfig" class="ghost" disabled>导出 JSON（不含密钥）</button>
       </div>
     </div>
     <div class="commandcard">
@@ -165,6 +182,13 @@
     <div class="footnote">官方文档：<a href="https://developers.cloudflare.com/tunnel/get-started/" target="_blank" rel="noopener">创建 Tunnel</a> · <a href="https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/" target="_blank" rel="noopener">Tunnel Token</a> · <a href="https://developers.cloudflare.com/tunnel/concepts/routing/" target="_blank" rel="noopener">Tunnel 路由</a></div>
   </details>
   <details>
+    <summary>Cloudflare WARP WireGuard 参数如何填写</summary>
+    <div class="small" style="margin-top:7px">
+      从你自己的 Cloudflare WARP WireGuard 配置中读取参数：<code>PrivateKey</code> 对应私钥；<code>Address</code> 中的 IPv4 / IPv6 地址分别填入两个地址框；<code>Reserved</code> 对应三个十进制字节；<code>Endpoint</code> 的 IP 和端口填入 Endpoint 与 UDP 端口。页面内置的是普通消费者 WARP 的 WireGuard 公钥。不要把私钥发给他人。
+      <br>WARP 域名规则使用 sing-box 的 <code>domain_suffix</code>：例如填写 <code>example.com</code>，则 <code>example.com</code> 及 <code>www.example.com</code> 等子域名都会走 WARP。IPv6 地址留空时，规则只匹配 IPv4 目标。
+    </div>
+  </details>
+  <details>
     <summary>VPS 命令菜单：添加 / 删除 / 按协议修改参数</summary>
     <div class="small" style="margin-top:7px">
       登录 VPS 执行 <code>/usr/local/sbin/sb-manager</code>：菜单 <b>18</b> 增量添加未安装协议；菜单 <b>19</b> 删除指定协议（需输入 <code>DELETE</code> 确认）；菜单 <b>20</b> 先选择协议，再修改 SNI / TLS 域名、WS 优选 IP、Cloudflare Zone 或 Argo Public Hostname、端口和协议凭据。
@@ -184,7 +208,7 @@
 const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
 const UNINSTALL_COMMAND="/usr/local/sbin/sb-manager uninstall";
 const $=id=>document.getElementById(id);
-const ids=["pAnytls","pWs","pArgo","pSS2022","pReality","pNaive","pAnyReality","argoServer","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","shareWsAddress","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portArgo","portSS2022","portReality","portNaive","portAnyReality"];
+const ids=["pAnytls","pWs","pArgo","pSS2022","pReality","pNaive","pAnyReality","argoServer","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","shareWsAddress","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portArgo","portSS2022","portReality","portNaive","portAnyReality","warpEnabled","warpDomains","warpPrivateKey","warpAddress4","warpAddress6","warpEndpoint","warpPort","warpReserved"];
 const v=id=>$(id).value.trim();
 const tunnelName=()=>v("argoTunnelName").replace(/ {2,}/g," ");
 const protocolLabels={anytls:"AnyTLS",ws_tls:"直连 WS TLS",ws_argo:"Argo WS TLS",ss2022:"Shadowsocks 2022",vless_reality:"VLESS + Reality",naive:"NaiveProxy",anytls_reality:"AnyTLS + Reality"};
@@ -202,7 +226,7 @@ function cfgFromForm(){
   const wsHost=p.ws_tls?v("directWsHost"):"";
   const wsServer=p.ws_tls?v("wsServer"):"";
   return {
-    schema:7,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?(sharesWsAddress(p)?wsServer:v("argoServer")):"",
+    schema:8,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?(sharesWsAddress(p)?wsServer:v("argoServer")):"",
     argo_tunnel_name:p.ws_argo?tunnelName():"",
     argo_token:p.ws_argo?v("argoToken"):"",
     origin_ipv4:needsOrigin(p)?v("originIPv4"):"",
@@ -214,13 +238,23 @@ function cfgFromForm(){
     cert_mode:certMode,cf_zone_name:certNeeded&&certMode==="cloudflare"?v("cfZone"):"",
     cf_zone_id:certNeeded&&certMode==="cloudflare"?v("cfZoneId"):"",
     cf_email:certNeeded&&certMode==="cloudflare"?v("cfEmail"):"",
-    cf_token:certNeeded&&certMode==="cloudflare"?v("cfToken"):""
+    cf_token:certNeeded&&certMode==="cloudflare"?v("cfToken"):"",
+    warp_enabled:$("warpEnabled").checked,
+    warp_private_key:$("warpEnabled").checked?v("warpPrivateKey"):"",
+    warp_address4:$("warpEnabled").checked?v("warpAddress4"):"",
+    warp_address6:$("warpEnabled").checked?v("warpAddress6"):"",
+    warp_endpoint:$("warpEnabled").checked?v("warpEndpoint"):"",
+    warp_port:$("warpEnabled").checked?v("warpPort"):"",
+    warp_reserved:$("warpEnabled").checked?v("warpReserved"):"",
+    warp_domains:$("warpEnabled").checked?v("warpDomains"):""
   };
 }
 const domainRe=/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[A-Za-z]{2,63}$/;
 function isIPv4(s){const a=s.split(".");return a.length===4&&a.every(x=>/^\d{1,3}$/.test(x)&&+x<=255);}
 function isIPv6(s){try{return s.includes(":")&&/^[0-9a-f:.]+$/i.test(s)&&new URL(`http://[${s}]/`).hostname.startsWith("[");}catch{return false;}}
 function isAddress(value){return domainRe.test(value)||isIPv4(value)||isIPv6(value);}
+function isIPv4CIDR(value){const p=value.split("/");return p.length===2&&isIPv4(p[0])&&/^\d+$/.test(p[1])&&+p[1]<=32;}
+function isIPv6CIDR(value){const p=value.split("/");return p.length===2&&isIPv6(p[0])&&/^\d+$/.test(p[1])&&+p[1]<=128;}
 function validOptionalWsAddress(value){return !value||value==="-"||isAddress(value);}
 const historyKey="jiedian.address-history.v1";
 const historyFields={
@@ -293,9 +327,21 @@ function validate(c){
       const d=c.tls_domain.toLowerCase(),z=c.cf_zone_name.toLowerCase();if(!(d===z||d.endsWith("."+z)))throw Error("TLS 证书域名必须是所填 DNS Zone 本身或它的子域名。");
     }
   }
+  if(c.warp_enabled){
+    if(!/^[A-Za-z0-9+/]{43}=$/.test(c.warp_private_key))throw Error("WARP PrivateKey 必须是 32 字节 WireGuard 私钥的 Base64 值（通常为 44 个字符）。");
+    if(!isIPv4CIDR(c.warp_address4))throw Error("WARP IPv4 Address 必须是有效 CIDR，例如 172.16.0.2/32。");
+    if(c.warp_address6&&!isIPv6CIDR(c.warp_address6))throw Error("WARP IPv6 Address 必须是有效 IPv6 CIDR，例如 2606:4700:110:xxxx::2/128，或留空只分流 IPv4。");
+    if(!isIPv4(c.warp_endpoint)&&!isIPv6(c.warp_endpoint))throw Error("WARP Endpoint 必须填写 IPv4 或 IPv6 地址，不要带端口。");
+    if(!/^\d+$/.test(c.warp_port)||+c.warp_port<1||+c.warp_port>65535)throw Error("WARP UDP 端口必须是 1–65535 的整数。");
+    const reserved=c.warp_reserved.split(",").map(x=>x.trim());
+    if(reserved.length!==3||reserved.some(x=>!/^\d+$/.test(x)||+x>255))throw Error("Reserved 必须是三个 0–255 的十进制数字，例如 12,34,56。");
+    const domains=[...new Set(c.warp_domains.split(/[\n,;]+/).map(x=>x.trim().toLowerCase()).filter(Boolean))];
+    if(!domains.length||domains.some(x=>!domainRe.test(x)))throw Error("请填写有效的 WARP 分流域名；每行一个，或使用逗号分隔，不要带协议或路径。");
+    c.warp_domains=domains.join("\n");
+  }
   return c;
 }
-function oneCommandText(c){const encoded=b64(JSON.stringify(c));return `# 本次勾选：${selectedNames(c.protocols)}
+function oneCommandText(c){const encoded=b64(JSON.stringify(c));return `# 本次勾选：${selectedNames(c.protocols)}${c.warp_enabled?"\n# WARP 域名分流："+c.warp_domains.replace(/\n/g,","):""}
 if sh -eu <<'SB_INSTALL'
 [ "$(id -u)" -eq 0 ] || { echo '请以 root 用户执行此安装命令。'; exit 1; }
 umask 077
@@ -313,7 +359,7 @@ if command -v curl >/dev/null 2>&1; then curl -fsSL '${RAW_URL}' -o "$SH"
 else wget -qO "$SH" '${RAW_URL}'; fi
 head -n 1 "$SH" | grep -qx '#!/bin/sh'
 grep -q 'WEB_CONFIG_MODE=1' "$SH"
-grep -q 'WEB_CONFIG_SCHEMA=7' "$SH" && grep -q 'WEB_WS_PREFERENCES=1' "$SH" && grep -q 'WEB_PORT_REUSE=1' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
+grep -q 'WEB_CONFIG_SCHEMA=8' "$SH" && grep -q 'WEB_WS_PREFERENCES=1' "$SH" && grep -q 'WEB_PORT_REUSE=1' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
 install -m 700 "$SH" /usr/local/sbin/sb-manager
 rm -f "$SH"
 /usr/local/sbin/sb-manager install-web-config "$CFG"
@@ -326,7 +372,7 @@ else
 fi`;}
 function setEnabled(id,on){$(id).disabled=!on;}
 function syncUI(){
-  const p=selected(),ws=p.ws_tls,argo=p.ws_argo,cert=needsCert(p),origin=needsOrigin(p),reality=p.vless_reality||p.anytls_reality,any=Object.values(p).some(Boolean),cf=cert&&v("certMode")==="cloudflare";
+  const p=selected(),ws=p.ws_tls,argo=p.ws_argo,cert=needsCert(p),origin=needsOrigin(p),reality=p.vless_reality||p.anytls_reality,any=Object.values(p).some(Boolean),cf=cert&&v("certMode")==="cloudflare",warp=$("warpEnabled").checked;
   const bothWs=ws&&argo,shared=sharesWsAddress(p);
   $("wsSection").classList.toggle("hidden",!ws&&!argo);
   $("argoFields").classList.toggle("hidden",!argo);$("directWsFields").classList.toggle("hidden",!ws);
@@ -345,6 +391,8 @@ function syncUI(){
   const portMap=[["portAnytls","portAnytlsWrap",p.anytls],["portWs","portWsWrap",ws],["portArgo","portArgoWrap",argo],["portSS2022","portSS2022Wrap",p.ss2022],["portReality","portRealityWrap",p.vless_reality],["portNaive","portNaiveWrap",p.naive],["portAnyReality","portAnyRealityWrap",p.anytls_reality]];
   portMap.forEach(([id,wrap,on])=>{setEnabled(id,on);$(wrap).classList.toggle("hidden",!on);});
   $("portFields").classList.toggle("hidden",!any);
+  $("warpConfigFields").classList.toggle("hidden",!warp);
+  ["warpDomains","warpPrivateKey","warpAddress4","warpAddress6","warpEndpoint","warpPort","warpReserved"].forEach(id=>setEnabled(id,warp));
   const portReuseHint="留空优先用上次端口；已移除的节点重装时，历史端口被占用才另选，有没有沿用以终端输出为准。";
   $("portHint").textContent=portReuseHint+(argo?" Argo 客户端固定用 443；Cloudflare Service URL 应使用终端显示的本机端口。":" NAT VPS 请确认服务商映射的目标端口与本机监听端口一致。");
   $("selectionHint").textContent=any?`已选择 ${Object.values(p).filter(Boolean).length} 种协议。只显示这些协议需要的参数；隐藏项不会写入配置。`:"请至少选择一种协议。";
@@ -356,7 +404,7 @@ function render(){
   syncUI();
   const status=$("formStatus"),out=$("commandOutput"),buttons=["copyOutput","downloadOutput","exportConfig","downloadBoth"];
   $("uninstallText").value=UNINSTALL_COMMAND;
-  try{const c=validate(cfgFromForm());out.value="# 安装 / 同步命令（以 root 执行；已有安装会移除未勾选的旧节点）\n# 该命令包含敏感 Token，不要公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="本次勾选："+selectedNames(c.protocols)+"。";buttons.forEach(id=>$(id).disabled=false);}
+  try{const c=validate(cfgFromForm());out.value="# 安装 / 同步命令（以 root 执行；已有安装会移除未勾选的旧节点）\n# 该命令包含敏感 Token / WARP 私钥，不要公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="本次勾选："+selectedNames(c.protocols)+(c.warp_enabled?"；WARP 域名分流已启用。":"。");buttons.forEach(id=>$(id).disabled=false);}
   catch(e){out.value="";status.className="status error";status.textContent=e.message;buttons.forEach(id=>$(id).disabled=true);}
 }
 ids.forEach(id=>{
@@ -376,7 +424,7 @@ $("clearHistory").addEventListener("click",()=>{
 });
 $("copyOutput").addEventListener("click",()=>copyText($("commandOutput").value));
 $("downloadOutput").addEventListener("click",()=>download("sing-box-install-command.txt",$("commandOutput").value));
-$("exportConfig").addEventListener("click",()=>{try{const c=validate(cfgFromForm());c.cf_token="";c.argo_token="";download("sing-box-config-no-token.json",JSON.stringify(c,null,2),"application/json");}catch(e){alert(e.message);}});
+$("exportConfig").addEventListener("click",()=>{try{const c=validate(cfgFromForm());c.cf_token="";c.argo_token="";c.warp_private_key="";download("sing-box-config-no-secrets.json",JSON.stringify(c,null,2),"application/json");}catch(e){alert(e.message);}});
 $("copyUninstall").addEventListener("click",()=>copyText(UNINSTALL_COMMAND));
 $("downloadBoth").addEventListener("click",()=>download("sing-box-install-and-uninstall-commands.txt","========== INSTALL / 安装命令（单独执行） ==========\n\n"+$("commandOutput").value+"\n\n========== UNINSTALL / 卸载命令（需要卸载时单独执行） ==========\n\n"+UNINSTALL_COMMAND+"\n"));
 render();

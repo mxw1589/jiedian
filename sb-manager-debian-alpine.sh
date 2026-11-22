@@ -4,11 +4,12 @@
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
-# WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
+# WEB_CONFIG_SCHEMA=8; WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
 # WEB_WS_PREFERENCES=1
 # WEB_PORT_REUSE=1
 # Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
 # Manager menu 19: remove one protocol; menu 20: protocol-scoped SNI/IP/Cloudflare/port/credential editor
+# Manager menu 21: Cloudflare WARP WireGuard domain split routing
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -47,6 +48,14 @@ SS2022_PORT=""
 SS2022_PASSWORD=""
 SS2022_METHOD=2022-blake3-aes-128-gcm
 ENABLE_SS2022=0
+WARP_ENABLED=0
+WARP_PRIVATE_KEY=""
+WARP_ADDRESS4="172.16.0.2/32"
+WARP_ADDRESS6=""
+WARP_ENDPOINT="162.159.192.1"
+WARP_PORT="2408"
+WARP_RESERVED="0,0,0"
+WARP_DOMAINS=""
 # Selective protocol installation. Missing flags in old manager.json are treated as enabled.
 ENABLE_ANYTLS=1
 ENABLE_WS_TLS=1
@@ -411,6 +420,109 @@ valid_ipv6_literal() {
     '
 }
 
+valid_ipv4_cidr() {
+    cidr_value=$1
+    case "$cidr_value" in */*) ;; *) return 1 ;; esac
+    cidr_ip=${cidr_value%/*}
+    cidr_prefix=${cidr_value##*/}
+    valid_ipv4_address "$cidr_ip" || return 1
+    case "$cidr_prefix" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$cidr_prefix" -ge 0 ] 2>/dev/null && [ "$cidr_prefix" -le 32 ] 2>/dev/null
+}
+
+valid_ipv6_cidr() {
+    cidr_value=$1
+    case "$cidr_value" in */*) ;; *) return 1 ;; esac
+    cidr_ip=${cidr_value%/*}
+    cidr_prefix=${cidr_value##*/}
+    valid_ipv6_literal "$cidr_ip" || return 1
+    case "$cidr_prefix" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$cidr_prefix" -ge 0 ] 2>/dev/null && [ "$cidr_prefix" -le 128 ] 2>/dev/null
+}
+
+normalize_warp_domains() {
+    printf '%s\n' "$1" | tr ',;' '\n' | awk '
+        {
+            gsub(/^[ \t\r]+|[ \t\r]+$/, "")
+            domain=tolower($0)
+            if (domain != "" && !seen[domain]++) print domain
+        }
+    '
+}
+
+validate_warp_settings() {
+    [ "$WARP_ENABLED" = 1 ] || return 0
+
+    [ -n "$WARP_PRIVATE_KEY" ] && [ "${#WARP_PRIVATE_KEY}" -eq 44 ] || {
+        warn 'WARP PrivateKey 必须是 44 位 Base64 WireGuard 私钥。'
+        return 1
+    }
+    printf '%s' "$WARP_PRIVATE_KEY" | grep -Eq '^[A-Za-z0-9+/]{43}=$' || {
+        warn 'WARP PrivateKey 必须是标准的 32 字节 Base64 WireGuard 私钥。'
+        return 1
+    }
+    printf '%s' "$WARP_PRIVATE_KEY" | base64 -d >/dev/null 2>&1 || {
+        warn 'WARP PrivateKey 不是有效的 Base64 值。'
+        return 1
+    }
+
+    valid_ipv4_cidr "$WARP_ADDRESS4" || {
+        warn 'WARP IPv4 地址必须是有效 CIDR，例如 172.16.0.2/32。'
+        return 1
+    }
+    if [ -n "$WARP_ADDRESS6" ] && ! valid_ipv6_cidr "$WARP_ADDRESS6"; then
+        warn 'WARP IPv6 地址必须是有效 CIDR，例如 2606:4700:110:xxxx::2/128；留空则只分流 IPv4。'
+        return 1
+    fi
+
+    if [ -z "$WARP_ENDPOINT" ] || { ! valid_ipv4_address "$WARP_ENDPOINT" && ! valid_ipv6_literal "$WARP_ENDPOINT"; }; then
+        warn 'WARP Endpoint 必须填写 Cloudflare WireGuard 端点 IPv4 或 IPv6 地址。'
+        return 1
+    fi
+    case "$WARP_PORT" in ''|*[!0-9]*) warn 'WARP UDP 端口必须是 1–65535 的整数。'; return 1 ;; esac
+    [ "$WARP_PORT" -ge 1 ] 2>/dev/null && [ "$WARP_PORT" -le 65535 ] 2>/dev/null || {
+        warn 'WARP UDP 端口必须是 1–65535 的整数。'
+        return 1
+    }
+
+    warp_reserved_clean=$(printf '%s' "$WARP_RESERVED" | tr -d '[:space:]')
+    case "$warp_reserved_clean" in ''|*[!0-9,]*) warn 'WARP Reserved 必须是三个 0–255 的数字，例如 12,34,56。'; return 1 ;; esac
+    old_ifs=$IFS
+    IFS=,
+    set -- $warp_reserved_clean
+    IFS=$old_ifs
+    [ "$#" -eq 3 ] || { warn 'WARP Reserved 必须正好包含三个数字，例如 12,34,56。'; return 1; }
+    for warp_byte do
+        [ "$warp_byte" -le 255 ] 2>/dev/null || {
+            warn 'WARP Reserved 的每个数字必须在 0–255 之间。'
+            return 1
+        }
+    done
+    WARP_RESERVED=$warp_reserved_clean
+
+    WARP_DOMAINS=$(normalize_warp_domains "$WARP_DOMAINS")
+    [ -n "$WARP_DOMAINS" ] || {
+        warn '请至少填写一个需要走 WARP 的域名。'
+        return 1
+    }
+    warp_domain_count=0
+    while IFS= read -r warp_domain; do
+        [ -n "$warp_domain" ] || continue
+        valid_domain "$warp_domain" || {
+            warn "WARP 分流域名格式无效：$warp_domain"
+            return 1
+        }
+        warp_domain_count=$((warp_domain_count + 1))
+    done <<EOF_WARP_DOMAINS
+$WARP_DOMAINS
+EOF_WARP_DOMAINS
+    [ "$warp_domain_count" -gt 0 ] || {
+        warn '请至少填写一个需要走 WARP 的域名。'
+        return 1
+    }
+    return 0
+}
+
 valid_ipv6_address() {
     valid_ipv6_literal "$1" || return 1
     command -v ip >/dev/null 2>&1 || return 1
@@ -549,7 +661,7 @@ assign_ports() {
 
     used_ports=""
     reserved_ports=""
-    if [ "${web_schema:-}" = 7 ] || [ "$PORT_HISTORY" != '{}' ]; then
+    if [ "${web_schema:-}" = 7 ] || [ "${web_schema:-}" = 8 ] || [ "$PORT_HISTORY" != '{}' ]; then
         reserved_ports="$ANYTLS_PORT $WS_PORT $ARGO_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $SS2022_PORT"
     fi
     if [ "$PORT_HISTORY" != '{}' ]; then
@@ -577,7 +689,7 @@ assign_ports() {
         if [ -n "$item_port" ]; then
             case " $used_ports " in
                 *" $item_port "*)
-                    [ "${web_schema:-}" != 7 ] || err "$protocol_name 的端口 $item_port 与其他所选协议重复。请修改网页端口后重试。"
+                    [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] || err "$protocol_name 的端口 $item_port 与其他所选协议重复。请修改网页端口后重试。"
                     warn "$protocol_name 指定端口 $item_port 与已选择协议重复；将自动随机分配。"
                     item_port=""
                     PORT_FALLBACK_USED=1
@@ -586,7 +698,7 @@ assign_ports() {
                     if ! check_udp_port="$([ "$protocol_name" = 'Shadowsocks 2022' ] && printf 1 || printf 0)" manual_port_available "$item_port" \
                         "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" \
                         "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" "${PREVIOUS_ARGO_PORT:-}" "${PREVIOUS_SS2022_PORT:-}"; then
-                        [ "${web_schema:-}" != 7 ] || err "$protocol_name 的端口 $item_port 已被占用。请修改网页端口后重试。"
+                        [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] || err "$protocol_name 的端口 $item_port 已被占用。请修改网页端口后重试。"
                         warn "$protocol_name 指定 TCP 端口 $item_port 已被其他程序占用；将自动随机分配。"
                         item_port=""
                         PORT_FALLBACK_USED=1
@@ -1438,12 +1550,20 @@ save_state() {
       --arg cert_mode "$CERT_MODE" \
       --arg cf_zone_name "$CF_ZONE_NAME" \
       --arg node_label "$NODE_LABEL" \
+      --arg warp_enabled "$WARP_ENABLED" \
+      --arg warp_private_key "$WARP_PRIVATE_KEY" \
+      --arg warp_address4 "$WARP_ADDRESS4" \
+      --arg warp_address6 "$WARP_ADDRESS6" \
+      --arg warp_endpoint "$WARP_ENDPOINT" \
+      --arg warp_port "$WARP_PORT" \
+      --arg warp_reserved "$WARP_RESERVED" \
+      --arg warp_domains "$WARP_DOMAINS" \
       --arg enable_anytls "$ENABLE_ANYTLS" \
       --arg enable_ws_tls "$ENABLE_WS_TLS" \
       --arg enable_vless_reality "$ENABLE_VLESS_REALITY" \
       --arg enable_naive "$ENABLE_NAIVE" \
       --arg enable_anytls_reality "$ENABLE_ANYTLS_REALITY" \
-      "$PORT_HISTORY_FILTER"'{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,enabled_ws_argo:($enable_ws_argo=="1"),enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_password:$ss2022_password,argo_port:(if $enable_ws_argo=="1" then ($argo_port|tonumber) else null end),argo_server:$argo_server,argo_uuid:$argo_uuid,argo_path:$argo_path,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label} | .port_history = ($saved_ports + active_ports)' > "$tmp"; then
+      "$PORT_HISTORY_FILTER"'{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,enabled_ws_argo:($enable_ws_argo=="1"),enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_password:$ss2022_password,argo_port:(if $enable_ws_argo=="1" then ($argo_port|tonumber) else null end),argo_server:$argo_server,argo_uuid:$argo_uuid,argo_path:$argo_path,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label,warp_enabled:($warp_enabled=="1"),warp_private_key:(if $warp_enabled=="1" then $warp_private_key else "" end),warp_address4:(if $warp_enabled=="1" then $warp_address4 else "172.16.0.2/32" end),warp_address6:(if $warp_enabled=="1" then $warp_address6 else "" end),warp_endpoint:(if $warp_enabled=="1" then $warp_endpoint else "162.159.192.1" end),warp_port:(if $warp_enabled=="1" then ($warp_port|tonumber) else 2408 end),warp_reserved:(if $warp_enabled=="1" then ($warp_reserved|split(",")|map(tonumber)) else [0,0,0] end),warp_domains:(if $warp_enabled=="1" then ($warp_domains|split("\n")|map(select(length>0))) else [] end)} | .port_history = ($saved_ports + active_ports)' > "$tmp"; then
         rm -f "$tmp"
         warn '无法生成 manager.json；原有管理状态未更改。'
         return 1
@@ -1510,6 +1630,14 @@ load_state() {
     CERT_MODE=$(jq -r '.cert_mode // "none"' "$STATE_FILE")
     CF_ZONE_NAME=$(jq -r '.cf_zone_name // ""' "$STATE_FILE")
     NODE_LABEL=$(jq -r '.node_label // ""' "$STATE_FILE")
+    WARP_ENABLED=$(jq -r 'if .warp_enabled == true then "1" else "0" end' "$STATE_FILE")
+    WARP_PRIVATE_KEY=$(jq -r '.warp_private_key // ""' "$STATE_FILE")
+    WARP_ADDRESS4=$(jq -r '.warp_address4 // "172.16.0.2/32"' "$STATE_FILE")
+    WARP_ADDRESS6=$(jq -r '.warp_address6 // ""' "$STATE_FILE")
+    WARP_ENDPOINT=$(jq -r '.warp_endpoint // "162.159.192.1"' "$STATE_FILE")
+    WARP_PORT=$(jq -r '.warp_port // 2408' "$STATE_FILE")
+    WARP_RESERVED=$(jq -r '(.warp_reserved // [0,0,0]) | if type == "array" then map(tostring) | join(",") else tostring end' "$STATE_FILE")
+    WARP_DOMAINS=$(jq -r '(.warp_domains // []) | if type == "array" then join("\n") else tostring end' "$STATE_FILE")
     if [ "$ENABLE_WS_TLS" = 1 ] && jq -e 'has("enabled_ws_argo") | not' "$STATE_FILE" >/dev/null &&
         [ "$(jq -r '.ws_mode // "direct"' "$STATE_FILE")" = argo ]; then
         legacy_ws_server=$(jq -r '.ws_server // ""' "$STATE_FILE")
@@ -1576,6 +1704,14 @@ build_config() {
       --arg anyreality_password "$ANYREALITY_PASSWORD" \
       --arg anyreality_private "$ANYREALITY_PRIVATE" \
       --arg anyreality_sid "$ANYREALITY_SID" \
+      --arg warp_private_key "$WARP_PRIVATE_KEY" \
+      --arg warp_address4 "$WARP_ADDRESS4" \
+      --arg warp_address6 "$WARP_ADDRESS6" \
+      --arg warp_endpoint "$WARP_ENDPOINT" \
+      --arg warp_port "$WARP_PORT" \
+      --arg warp_reserved "$WARP_RESERVED" \
+      --arg warp_domains "$WARP_DOMAINS" \
+      --argjson warp_enabled "$([ "$WARP_ENABLED" = 1 ] && printf true || printf false)" \
       --argjson enable_anytls "$([ "$ENABLE_ANYTLS" = 1 ] && printf true || printf false)" \
       --argjson enable_ws_tls "$([ "$ENABLE_WS_TLS" = 1 ] && printf true || printf false)" \
       --argjson enable_vless_reality "$([ "$ENABLE_VLESS_REALITY" = 1 ] && printf true || printf false)" \
@@ -1589,7 +1725,27 @@ build_config() {
         (if $enable_vless_reality then {type:"vless",tag:"vless-reality-in",listen:$listen_addr,listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}} else empty end),
         (if $enable_naive then {type:"naive",tag:"naive-in",network:"tcp",listen:$listen_addr,listen_port:($naive_port|tonumber),users:[{username:$naive_username,password:$naive_password}],tls:{enabled:true,certificate_path:$cert_file,key_path:$key_file}} else empty end),
         (if $enable_anytls_reality then {type:"anytls",tag:"anytls-reality-in",listen:$listen_addr,listen_port:($anyreality_port|tonumber),users:[{name:"primary",password:$anyreality_password}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$anyreality_private,short_id:[$anyreality_sid]}}} else empty end)
-      ],outbounds:[{type:"direct",tag:"direct"}]}' > "$tmp" || {
+      ],
+      endpoints:(if $warp_enabled then [{
+        type:"wireguard",tag:"warp-out",system:false,mtu:1280,
+        address:([$warp_address4,$warp_address6] | map(select(length > 0))),
+        private_key:$warp_private_key,
+        peers:[{
+          address:$warp_endpoint,port:($warp_port|tonumber),
+          public_key:"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+          allowed_ips:(["0.0.0.0/0"] + (if $warp_address6 == "" then [] else ["::/0"] end)),
+          persistent_keepalive_interval:25,
+          reserved:($warp_reserved|split(",")|map(tonumber))
+        }]
+      }] else [] end),
+      outbounds:[{type:"direct",tag:"direct"}],
+      route:{
+        rules:(if $warp_enabled then [
+          ({domain_suffix:($warp_domains|split("\n")|map(select(length > 0))),action:"route",outbound:"warp-out"}
+            + (if $warp_address6 == "" then {ip_version:4} else {} end))
+        ] else [] end),
+        final:"direct"
+      }}' > "$tmp" || {
         rm -f "$tmp"
         warn '无法生成 sing-box 配置；原配置未更改。'
         return 1
@@ -2548,6 +2704,7 @@ install_from_config() {
     if [ "$ENABLE_WS_ARGO" = 1 ]; then
         valid_argo_token "$ARGO_TOKEN" || err 'Cloudflare Tunnel Token 格式无效；请粘贴完整的 eyJ... Token。'
     fi
+    validate_warp_settings || err 'WARP 配置无效；请检查私钥、地址、Endpoint、Reserved 和域名列表。'
 
     if [ "$NEED_CERT" = 1 ]; then
         resolve_install_domains
@@ -2721,7 +2878,8 @@ manager_state_is_valid() {
       ((enabled("enabled_naive") | not) or (nonempty(.naive_username) and nonempty(.naive_password) and (.naive_port | type == "number") and nonempty(.tls_domain))) and
       ((enabled("enabled_anytls_reality") | not) or (nonempty(.anyreality_password) and nonempty(.anyreality_private) and nonempty(.anyreality_public) and nonempty(.anyreality_sid) and (.anyreality_port | type == "number") and nonempty(.reality_sni))) and
       (if (.enabled_ss2022 == true or enabled("enabled_anytls") or enabled("enabled_naive") or enabled("enabled_vless_reality") or enabled("enabled_anytls_reality")) then (nonempty(.origin_addr) or nonempty(.origin_ipv6)) else true end) and
-      (if (enabled("enabled_anytls") or enabled("enabled_naive") or (enabled("enabled_ws_tls") and (.ws_mode // "direct") == "direct")) then nonempty(.tls_domain) and nonempty(.cert_file) and nonempty(.key_file) and nonempty(.cert_mode) else true end)
+      (if (enabled("enabled_anytls") or enabled("enabled_naive") or (enabled("enabled_ws_tls") and (.ws_mode // "direct") == "direct")) then nonempty(.tls_domain) and nonempty(.cert_file) and nonempty(.key_file) and nonempty(.cert_mode) else true end) and
+      ((.warp_enabled != true) or (nonempty(.warp_private_key) and nonempty(.warp_address4) and nonempty(.warp_endpoint) and (.warp_port | type == "number" and . >= 1 and . <= 65535) and (.warp_reserved | type == "array" and length == 3 and all(.[]; type == "number" and . >= 0 and . <= 255)) and (.warp_domains | type == "array" and length > 0 and all(.[]; type == "string" and length > 0))))
     ' "$STATE_FILE" >/dev/null 2>&1
 }
 
@@ -2807,11 +2965,11 @@ legacy_web_selection_matches() {
         def legacy_argo: .schema == 5 and selected("ws_tls") and .ws_mode == "argo";
         selected("anytls") == ($anytls == "1") and
         (selected("ws_tls") and (legacy_argo | not)) == ($ws_tls == "1") and
-        (legacy_argo or (.schema == 6 and selected("ws_argo"))) == ($ws_argo == "1") and
+        (legacy_argo or (.schema >= 6 and selected("ws_argo"))) == ($ws_argo == "1") and
         selected("vless_reality") == ($reality == "1") and
         selected("naive") == ($naive == "1") and
         selected("anytls_reality") == ($anyreality == "1") and
-        (.schema == 6 and selected("ss2022")) == ($ss2022 == "1")
+        (.schema >= 6 and selected("ss2022")) == ($ss2022 == "1")
       ' "$web_cfg" >/dev/null
 }
 
@@ -2826,13 +2984,18 @@ install_web_config() {
     fi
     jq -e '
       def text: type == "string" and (explode | all(. != 0 and . != 10 and . != 13));
-      type == "object" and (.schema == 5 or .schema == 6 or .schema == 7) and
+      type == "object" and (.schema == 5 or .schema == 6 or .schema == 7 or .schema == 8) and
       (.protocols | type == "object") and
-      (if .schema == 7 then
+      (if .schema >= 7 then
         .protocols | [.anytls,.ws_tls,.ws_argo,.vless_reality,.naive,.anytls_reality,.ss2022] | all(type == "boolean")
        else true end) and
       ([.origin_ipv4,.origin_ipv6,.ws_server,.argo_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
         | all(. == null or text)) and
+      (if .schema == 8 then
+        (.warp_enabled | type == "boolean") and
+        ([.warp_private_key,.warp_address4,.warp_address6,.warp_endpoint,.warp_port,.warp_reserved] | all(. == null or text)) and
+        (.warp_domains == null or (.warp_domains | type == "string" and (explode | all(. != 0))))
+       else true end) and
       (.ports | type == "object")
     ' "$web_cfg" >/dev/null 2>&1 || err '网页配置 JSON 格式不正确或版本不匹配，请刷新最新版 HTML 后重新生成命令。'
 
@@ -2841,9 +3004,9 @@ install_web_config() {
     if [ -e "$STATE_FILE" ]; then
         if ! manager_state_is_valid; then backup_existing_install; err '现有 manager.json 无效；已备份原目录，停止覆盖。'; fi
         load_state
-        if [ "$web_schema" != 7 ]; then
+        if [ "$web_schema" != 8 ]; then
             legacy_web_selection_matches || err '旧版网页命令的协议勾选与现有节点不同，未修改 VPS 配置。请刷新配置页，重新勾选需要保留的协议并复制新版命令。'
-            warn '旧版网页命令只执行覆盖升级，不会同步协议勾选；请刷新页面重新生成命令。'
+            warn '旧版网页命令只执行覆盖升级，不会同步协议勾选或修改 WARP；请刷新页面重新生成命令。'
             overlay_install
             return 0
         fi
@@ -2882,6 +3045,22 @@ install_web_config() {
     ANYREALITY_PORT=$(web_port anytls_reality "${PREVIOUS_ANYREALITY_PORT:-}")
     cert_mode=$(web_string cert_mode); CF_ZONE_NAME=$(web_string cf_zone_name)
     cf_token=$(web_string cf_token); cert_email=$(web_string cf_email); zone_id=$(web_string cf_zone_id)
+    if [ "$web_schema" = 8 ]; then
+        WARP_ENABLED=$(jq -r 'if .warp_enabled == true then "1" else "0" end' "$web_cfg")
+        WARP_PRIVATE_KEY=$(web_string warp_private_key)
+        WARP_ADDRESS4=$(web_string warp_address4)
+        WARP_ADDRESS6=$(web_string warp_address6)
+        WARP_ENDPOINT=$(web_string warp_endpoint)
+        WARP_PORT=$(web_string warp_port)
+        WARP_RESERVED=$(web_string warp_reserved)
+        WARP_DOMAINS=$(web_string warp_domains)
+        if [ "$WARP_ENABLED" = 1 ]; then
+            validate_warp_settings || err '网页中的 WARP 配置无效；请检查 WARP WireGuard 参数和域名列表。'
+        else
+            WARP_PRIVATE_KEY=""; WARP_ADDRESS4="172.16.0.2/32"; WARP_ADDRESS6=""
+            WARP_ENDPOINT="162.159.192.1"; WARP_PORT="2408"; WARP_RESERVED="0,0,0"; WARP_DOMAINS=""
+        fi
+    fi
     case "$cert_mode" in cloudflare) CERT_MODE=cloudflare ;; http01) CERT_MODE=standalone ;; none|'') CERT_MODE=none ;; *) err '不支持的证书方式。' ;; esac
 
     selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_WS_ARGO + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_SS2022))
@@ -4004,6 +4183,65 @@ diagnose_naive() {
     fi
 }
 
+change_warp_settings() {
+    need_root
+    load_state
+    derive_runtime_needs
+
+    if [ "$WARP_ENABLED" = 1 ]; then warp_default=y; else warp_default=n; fi
+    msg '========== Cloudflare WARP 域名分流 =========='
+    if [ "$WARP_ENABLED" = 1 ]; then
+        printf '当前状态：已启用\n分流域名：\n%s\n' "$WARP_DOMAINS"
+    else
+        printf '%s\n' '当前状态：未启用'
+    fi
+    ask_value '启用 WARP 域名分流？(y/N)' "$warp_default"
+    case "$(trim_value "$REPLY")" in
+        y|Y|yes|YES) WARP_ENABLED=1 ;;
+        n|N|no|NO|'')
+            if [ "$WARP_ENABLED" = 0 ]; then msg '未修改 WARP 设置。'; return 0; fi
+            WARP_ENABLED=0
+            WARP_PRIVATE_KEY=""; WARP_ADDRESS4="172.16.0.2/32"; WARP_ADDRESS6=""
+            WARP_ENDPOINT="162.159.192.1"; WARP_PORT="2408"; WARP_RESERVED="0,0,0"; WARP_DOMAINS=""
+            ;;
+        *) warn '请输入 y 或 n。'; return 0 ;;
+    esac
+
+    if [ "$WARP_ENABLED" = 1 ]; then
+        msg '请从你自己的 Cloudflare WARP WireGuard 配置中复制参数。私钥只写入 VPS 的 root-only manager.json。'
+        ask_secret 'WARP WireGuard PrivateKey（留空保持当前值）'
+        [ -n "$REPLY" ] && WARP_PRIVATE_KEY=$(trim_value "$REPLY")
+        ask_value 'WARP IPv4 Address/CIDR' "$WARP_ADDRESS4"; WARP_ADDRESS4=$(trim_value "$REPLY")
+        ask_value 'WARP IPv6 Address/CIDR（可留空，仅分流 IPv4）' "$WARP_ADDRESS6"
+        [ "$REPLY" = '-' ] && REPLY=""
+        WARP_ADDRESS6=$(trim_value "$REPLY")
+        ask_value 'Cloudflare WireGuard Endpoint IPv4/IPv6' "$WARP_ENDPOINT"; WARP_ENDPOINT=$(trim_value "$REPLY")
+        ask_value 'Cloudflare WireGuard UDP 端口' "$WARP_PORT"; WARP_PORT=$(trim_value "$REPLY")
+        ask_value 'Reserved 三个字节（例如 12,34,56）' "$WARP_RESERVED"; WARP_RESERVED=$(trim_value "$REPLY")
+        warp_domains_default=$(printf '%s' "$WARP_DOMAINS" | tr '\n' ',')
+        ask_value '需要走 WARP 的域名（逗号分隔；根域名和子域名都会匹配）' "$warp_domains_default"
+        WARP_DOMAINS=$REPLY
+        if ! validate_warp_settings; then
+            load_state
+            derive_runtime_needs
+            return 0
+        fi
+    fi
+
+    if ! build_config; then
+        load_state
+        derive_runtime_needs
+        warn 'WARP 配置未能通过 sing-box 检查或服务重启检查；已恢复原设置。'
+        return 0
+    fi
+    if [ "$WARP_ENABLED" = 1 ]; then
+        msg 'WARP 域名分流已启用：匹配域名走 warp-out，其余流量保持 direct。'
+        printf '当前分流域名：\n%s\n' "$WARP_DOMAINS"
+    else
+        msg 'WARP 域名分流已关闭；所有流量恢复 direct。'
+    fi
+}
+
 menu() {
     need_root
     load_state
@@ -4021,6 +4259,11 @@ menu() {
         [ "$ENABLE_SS2022" = 0 ] || printf '\nShadowsocks 2022：%s/tcp + udp' "$SS2022_PORT"
         printf '\nReality SNI（VLESS Reality + AnyTLS Reality；默认 www.bing.com）：%s' "$REALITY_SNI" 
         printf '\n节点辨识符：%s' "${NODE_LABEL:-未设置}"
+        if [ "$WARP_ENABLED" = 1 ]; then
+            printf '\nWARP 域名分流：已启用（%s）' "$(printf '%s' "$WARP_DOMAINS" | tr '\n' ',')"
+        else
+            printf '\nWARP 域名分流：未启用' 
+        fi
         printf '\n端口：AnyTLS %s | WS TLS %s | VLESS Reality %s | NaiveProxy %s/TCP | AnyTLS Reality %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
         printf '\n---------------------------------------\n'
         printf '1. 查看已安装协议节点链接\n'
@@ -4043,6 +4286,7 @@ menu() {
         printf '18. 添加尚未部署的协议节点（增量添加，不影响现有节点）\n'
         printf '19. 删除已安装协议（只删除所选协议，不影响其他节点）\n'
         printf '20. 选择协议修改 SNI / WS 优选 IP / Cloudflare 域名 / 端口 / 凭据\n'
+        printf '21. Cloudflare WARP 域名分流设置\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -4067,6 +4311,7 @@ menu() {
             18) add_missing_protocols ;;
             19) remove_protocol ;;
             20) edit_selected_protocol ;;
+            21) change_warp_settings ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac
