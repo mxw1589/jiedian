@@ -4,345 +4,246 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#f3f6fb">
-<title>sing-box Linux 安装与管理面板</title>
+<title>sing-box / Xray 多协议节点管理器</title>
 <style>
-:root{color-scheme:light;--bg:#f3f6fb;--surface:#fff;--soft:#f8faff;--line:#dce4ef;--line2:#c8d5e5;--text:#17243a;--muted:#64748b;--blue:#2563eb;--green:#15803d;--greenbg:#f0fdf4;--amber:#92400e;--amberbg:#fffbeb;--red:#b91c1c}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.55 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1160px;margin:auto;padding:16px 16px 30px}header{padding:15px 18px;margin-bottom:12px;background:#fff;border:1px solid var(--line);border-radius:14px}h1{font-size:23px;line-height:1.25;margin:0 0 5px}.sub,.small,.hint{color:var(--muted)}.sub{font-size:12px}.legend{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:9px;font-size:11px;color:var(--muted)}.mark{display:inline-block;border-radius:5px;padding:1px 6px;font-size:10px;font-style:normal;font-weight:700;vertical-align:middle;margin-left:4px}.req{color:#b91c1c;background:#fef2f2;border:1px solid #fecaca}.opt{color:#475569;background:#f1f5f9;border:1px solid #e2e8f0}.def{color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe}.layout{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}.panel{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:15px}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}.panel h2{font-size:15px;line-height:1.3;margin:0}.panel h3{font-size:12px;margin:10px 0 7px;color:#33445d}.badge{font-size:10px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:2px 7px;white-space:nowrap;font-weight:650}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.protocol{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:9px;background:var(--soft);padding:8px;cursor:pointer;min-width:0}.protocol input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--blue)}.protocol b{font-size:12px}.protocol small{display:block;font-size:10px;color:var(--muted);line-height:1.35}.subpanel{margin-top:11px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#fbfdff}.subhead{font-size:12px;font-weight:750;margin-bottom:7px;color:#263b59}.field{display:grid;grid-template-columns:175px minmax(0,1fr);align-items:center;gap:8px;margin:7px 0}.field label{font-size:11px;font-weight:650;color:#33445d}.field input,.field select,.field textarea{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:7px;padding:7px 9px;color:var(--text);font-family:inherit;font-size:12px;line-height:1.3;outline:none}.field input:focus,.field select:focus,.field textarea:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 2px #3b82f61f}.field input:disabled,.field select:disabled,.field textarea:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder,.field textarea::placeholder{color:#94a3b8}.hint{grid-column:2;font-size:10px;line-height:1.35;margin-top:-4px}.divider{height:1px;background:var(--line);margin:10px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.port{border:1px solid var(--line);border-radius:8px;padding:7px;background:var(--soft);min-width:0}.port label{display:block;font-size:10px;font-weight:650;color:#33445d;margin-bottom:4px}.port input{width:100%;border:1px solid var(--line2);border-radius:6px;padding:6px;color:var(--text);font-family:inherit;font-size:12px;min-width:0}.notice{margin-top:9px;padding:8px 10px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:8px;font-size:11px;line-height:1.5}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.hidden{display:none!important}.advanced{margin-top:7px;border-top:1px dashed var(--line2);padding-top:7px}.advanced summary,details summary{cursor:pointer;color:#1d4ed8;font-size:11px;font-weight:650}.actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}button{border:1px solid var(--blue);background:#2563eb;color:white;border-radius:7px;padding:7px 11px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}button.ghost{background:white;border-color:var(--line2);color:#33445d}button:disabled{opacity:.45;cursor:not-allowed}.commands{margin-top:12px}.commandgrid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(260px,.65fr);gap:10px}.commandcard{min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}.commandhead{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;font-size:12px;font-weight:750}.commandhead span{font-size:10px;font-weight:500;color:var(--muted)}.command{display:block;width:100%;min-height:138px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:7px;padding:9px;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto}.command.short{min-height:72px}.status{font-size:11px;margin:5px 0;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.help{margin-top:10px}.help details{border:1px solid var(--line);border-radius:9px;background:#fff;padding:9px 11px}.help ol{margin:7px 0 0 18px;padding:0}.footer{text-align:center;color:#718096;font-size:10px;padding-top:15px}.footnote{font-size:10px;color:var(--muted);margin-top:7px;line-height:1.45}
-@media(max-width:850px){.layout{grid-template-columns:1fr}.commandgrid{grid-template-columns:1fr}.command{min-height:115px}}
-@media(max-width:560px){.wrap{padding:8px 7px 22px}header{padding:12px}.panel{padding:11px}.protocols{grid-template-columns:1fr}.field{grid-template-columns:1fr;gap:3px}.hint{grid-column:1;margin-top:-1px}.portgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.commandgrid{grid-template-columns:1fr}h1{font-size:20px}}
+:root{color-scheme:light;--bg:#f3f6fb;--surface:#fff;--soft:#f8faff;--line:#dce4ef;--line2:#c8d5e5;--text:#17243a;--muted:#64748b;--blue:#2563eb;--blue2:#1d4ed8;--green:#15803d;--greenbg:#f0fdf4;--amber:#92400e;--amberbg:#fffbeb;--red:#b91c1c;--shadow:0 8px 26px rgba(30,55,90,.07)}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -28%,rgba(219,234,254,.9),transparent 48%),var(--bg);color:var(--text);font:14px/1.65 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1180px;margin:auto;padding:28px 22px 60px}header{padding:27px 20px;margin-bottom:18px;text-align:center;background:#ffffffdf;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow)}h1{font-size:clamp(24px,3vw,36px);line-height:1.25;margin:0 0 8px;color:#13233d}.sub,.small{color:var(--muted)}.sub{font-size:13px}.topnote{display:inline-block;margin-top:13px;padding:6px 12px;border:1px solid #bfdbfe;border-radius:99px;background:#eff6ff;color:#1e40af;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:17px;align-items:start}.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow);min-width:0}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:13px}.panel h2{font-size:17px;line-height:1.35;margin:0;color:#172b49}.panel h3{font-size:14px;margin:17px 0 8px;color:#33445d}.badge{font-size:11px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:3px 9px;white-space:nowrap;font-weight:650}.small{font-size:12px;line-height:1.7}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.protocol{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:11px;background:var(--soft);padding:11px;cursor:pointer}.protocol input{width:17px;height:17px;accent-color:var(--blue)}.protocol b{font-size:13px}.protocol span{display:block;font-size:11px;color:var(--muted)}.field{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:10px;margin:10px 0}.field label{font-size:13px;font-weight:650;color:#33445d}.field input,.field select{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;color:var(--text);font:inherit;outline:none}.field input:focus,.field select:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 3px #3b82f61f}.field input:disabled,.field select:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder{color:#94a3b8}.divider{height:1px;background:var(--line);margin:16px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.port{border:1px solid var(--line);border-radius:10px;padding:9px;background:var(--soft)}.port label{display:block;font-size:11px;font-weight:650;color:#33445d;margin-bottom:5px}.port input{width:100%;border:1px solid var(--line2);border-radius:7px;padding:8px;color:var(--text);min-width:0}.notice{margin-top:11px;padding:10px 12px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:10px;font-size:12px;line-height:1.65}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px}button{border:1px solid var(--blue);background:linear-gradient(180deg,#3b82f6,#2563eb);color:white;border-radius:9px;padding:9px 14px;font:700 13px inherit;cursor:pointer;box-shadow:0 4px 10px #2563eb29}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;box-shadow:none}button.ghost{background:white;border-color:var(--line2);color:#33445d;box-shadow:none}button:disabled{opacity:.45;cursor:not-allowed}.command{width:100%;min-height:185px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:10px;padding:12px;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;}.preview{background:#f8fafc;color:#24344d;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:260px;overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}.bottom{margin-top:17px}.hidden{display:none!important}.status{font-size:12px;margin-top:7px;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.footer{text-align:center;color:#718096;font-size:12px;padding-top:22px}code{background:#eff6ff;color:#1e40af;padding:1px 4px;border-radius:4px}@media(max-width:850px){.grid{grid-template-columns:1fr}.wrap{padding:16px 12px 40px}}@media(max-width:560px){.wrap{padding:10px 9px 30px}header{padding:20px 13px}.panel{padding:14px}.protocols{grid-template-columns:1fr}.field{grid-template-columns:1fr;gap:4px}.portgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header>
-  <h1>⚡ sing-box Linux 安装与管理</h1>
-  <div class="sub">Debian / Alpine（自动识别系统、CPU 架构和 systemd / OpenRC）· 按需安装协议 · NAT VPS 支持 Cloudflare 固定 Tunnel</div>
-  <div class="legend">
-    <span><i class="mark req">必填</i> 红色字段不能为空；缺少时不会生成安装命令</span>
-    <span><i class="mark opt">可选</i> 留空使用默认值或自动检测</span>
-    <span><i class="mark def">默认</i> 已预填，无需修改</span>
-    <span>未显示的字段 = 当前协议组合完全不需要</span>
-  </div>
+  <h1>⚡ sing-box / Xray 多协议节点管理器</h1>
+  <div class="sub">Debian / Ubuntu / Alpine · 按需选择协议 · Argo 固定隧道 · VLESS XHTTP + ECH · Snell</div>
+  <div class="topnote">🔒 静态网页 · 参数仅在当前浏览器生成；不会上传到 GitHub Pages</div>
 </header>
 
-<main class="layout">
+<div class="grid">
 <section class="panel">
-  <div class="panelhead"><h2>① 选择协议</h2><span class="badge">可单选 / 多选</span></div>
-  <div class="notice">
-    <b>三个域名和一个可选地址</b><br>
-    ① 根域名：Cloudflare DNS 的 Zone 名称，例如 <code>example.com</code>。<br>
-    ② CF 绑定 IP 的域名：Cloudflare DNS 中用 A/AAAA 记录指向 VPS IP 的名称，例如 <code>direct.example.com</code>，也是直连用的证书域名。<br>
-    ③ Tunnel 域名：Cloudflare Zero Trust 中给隧道绑定的 Public Hostname，例如 <code>tunnel.example.com</code>。<br>
-    ④ 优选 IP / 域名：可选的客户端连接地址，例如 <code>edge.example.com</code>，不替代前面三个域名。
-  </div>
+  <div class="panelhead"><h2>① 选择需要安装的协议</h2><span class="badge">可单选 / 多选</span></div>
   <div class="protocols">
-    <label class="protocol"><input type="checkbox" id="pAnytls"><span><b>AnyTLS</b><small>需要 TLS 证书和公网 TCP 映射</small></span></label>
-    <label class="protocol"><input type="checkbox" id="pWs"><span><b>VLESS + WS + TLS 直连</b><small>需要源站 TLS 证书和公网 TCP 端口</small></span></label>
-    <label class="protocol"><input type="checkbox" id="pArgo" checked><span><b>VLESS + WS + TLS Argo</b><small>Cloudflare 边缘 TLS，无需源站证书</small></span></label>
-    <label class="protocol"><input type="checkbox" id="pSS2022"><span><b>Shadowsocks 2022</b><small>不需要源站证书；使用公网 TCP / UDP</small></span></label>
-    <label class="protocol"><input type="checkbox" id="pReality"><span><b>VLESS + Reality</b><small>不需要源站证书；需要公网 TCP 映射</small></span></label>
-    <label class="protocol"><input type="checkbox" id="pNaive"><span><b>NaiveProxy</b><small>需要 TLS 证书和公网 TCP 映射</small></span></label>
-    <label class="protocol"><input type="checkbox" id="pAnyReality"><span><b>AnyTLS + Reality</b><small>不需要源站证书；需要公网 TCP 映射</small></span></label>
+    <label class="protocol"><input type="checkbox" id="pAnytls"><span><b>AnyTLS</b><span>需要源站 TLS 证书及公网 TCP 映射</span></span></label>
+    <label class="protocol"><input type="checkbox" id="pWs" checked><span><b>VLESS + WebSocket</b><span>支持直连 TLS 或 Cloudflare Tunnel（Argo）</span></span></label>
+    <label class="protocol"><input type="checkbox" id="pReality"><span><b>VLESS + Reality</b><span>不需要源站证书；需要公网 TCP 映射</span></span></label>
+    <label class="protocol"><input type="checkbox" id="pNaive"><span><b>NaiveProxy</b><span>需要源站 TLS 证书及公网 TCP 映射</span></span></label>
+    <label class="protocol"><input type="checkbox" id="pAnyReality"><span><b>AnyTLS + Reality</b><span>不需要源站证书；需要公网 TCP 映射</span></span></label>
+    <label class="protocol"><input type="checkbox" id="pXhttp"><span><b>VLESS + XHTTP + ECH</b><span>Xray-core 独立服务；需要 TLS 证书、DNS Only 域名和公网 TCP 入站</span></span></label>
+    <label class="protocol"><input type="checkbox" id="pSnell"><span><b>Snell v5 / v6</b><span>sing-box 1.14.0+ 入站；支持 v5 HTTP 混淆与 v6 流量整形</span></span></label>
   </div>
-  <div id="selectionHint" class="notice ok">默认选择 VLESS + WebSocket + Argo。只会显示当前选择需要的参数。</div>
-
-  <div id="wsSection" class="subpanel">
-    <div class="subhead">WebSocket 接入设置</div>
-    <div id="argoFields">
-      <div class="field"><label for="argoHost">③ Tunnel 域名（Public Hostname） <i class="mark req">必填</i></label><input id="argoHost" placeholder="例如 tunnel.example.com" autocomplete="off"></div>
-      <div class="footnote">填 Cloudflare Zero Trust → Tunnels → 公开应用路由中绑定的完整域名。它是 Argo 的 SNI 和 WS Host，不是优选地址，也不是 Service URL。</div>
-      <div class="field"><label for="argoToken">Cloudflare Tunnel Token <i class="mark req">必填</i></label><input id="argoToken" type="password" placeholder="粘贴完整 eyJ... Token" autocomplete="off"></div>
-      <div class="field"><label for="argoTunnelName">Tunnel 备注名 <i class="mark opt">可选</i></label><input id="argoTunnelName" placeholder="连续空格会合并为一个" autocomplete="off"></div>
-      <div id="argoServerField" class="field"><label for="argoServer">Argo 优选域名 / IP <i class="mark opt">可选</i></label><input id="argoServer" placeholder="首次留空使用 Tunnel 绑定域名"></div>
-      <div class="footnote">只粘贴 Cloudflare Zero Trust → Tunnels → Add a replica 中的 Token，不要粘贴整条安装命令。</div>
-    </div>
-    <div id="directWsFields" class="hidden">
-      <div class="notice">直连模式需要你自己的 TLS 域名和证书；若使用 HTTP-01，还必须确保公网 TCP 80 可访问。</div>
-      <label id="shareWsAddressField" class="hidden"><input id="shareWsAddress" type="checkbox" checked> 直连 WS 与 Argo 共用优选域名 / IP，只填一次</label>
-      <div class="field"><label for="wsServer"><span id="wsServerLabel">直连 WS 优选域名 / IP</span> <i class="mark opt">可选</i></label><input id="wsServer" placeholder="首次留空使用 TLS 证书域名"></div>
-      <details class="advanced">
-        <summary>直连 WS 高级设置</summary>
-        <div class="field"><label for="directWsHost">自定义 WS HTTP Host <i class="mark opt">可选</i></label><input id="directWsHost" placeholder="默认 TLS 证书域名；旧节点留空保留自定义值"></div>
-      </details>
-    </div>
-    <div class="footnote">优选域名 / IP 是客户端实际拨号地址，只填域名、IPv4 或裸 IPv6，不带协议、端口或路径。不会改变 SNI 或 Host。同步时留空保留各自的旧优选值，输入 <code>-</code> 恢复各自默认。Argo 固定走 443；直连地址须支持设置的端口。</div>
+  <div id="selectionHint" class="notice ok">默认选择 VLESS + WebSocket，并使用 Argo Tunnel。你可以取消或增加其他协议。</div>
+  <div class="divider"></div>
+  <div class="panelhead"><h2>② WS 接入方式</h2><span class="badge">仅 WS 协议启用时需要</span></div>
+  <div class="field"><label for="wsMode">VLESS + WS 接入</label><select id="wsMode"><option value="argo">Cloudflare Tunnel（Argo，推荐 NAT VPS）</option><option value="direct">直连 TLS（需要可用公网端口）</option></select></div>
+  <div id="argoFields">
+    <div class="field"><label for="argoHost">Argo 公网主机名</label><input id="argoHost" placeholder="例如 ws.example.com" autocomplete="off"></div>
+    <div class="field"><label for="argoToken">Cloudflare Tunnel Token</label><input id="argoToken" type="password" placeholder="粘贴 Zero Trust Tunnel 的 eyJ... Token" autocomplete="off"></div>
+    <div class="small">先在 Cloudflare Zero Trust → Networks → Tunnels 创建/选择一个远程管理 Tunnel，并添加 Public Hostname。Token 用于 VPS 上 cloudflared 连接该 Tunnel。</div>
   </div>
+  <div id="directWsFields" class="hidden">
+    <div class="field"><label for="directWsHost">WS HTTP Host / TLS 域名</label><input id="directWsHost" placeholder="例如 node.example.com"></div>
+  </div>
+  <div class="field hidden" id="wsServerField"><label for="wsServer">客户端连接地址 / 优选 IP</label><input id="wsServer" placeholder="可留空，默认使用上面的域名"></div>
+  <div class="small">Argo 模式：客户端连接端口固定为 443，TLS SNI 和 WS Host 使用 Argo 公网主机名；VPS 本机 WS 只监听 127.0.0.1。可在连接地址中填写 Cloudflare 优选 IP/域名，但不能替换 SNI/Host。</div>
 </section>
 
 <section class="panel">
-  <div class="panelhead"><h2>② 参数设置</h2><span class="badge">按需显示</span></div>
-  <div class="footnote">此浏览器为每类域名／IP保留最近 8 条可选历史，不自动填入配置，也不保存 Token、密码或安装命令。 <button id="clearHistory" class="secondary" type="button">清除本地历史</button> <span id="historyStatus" role="status"></span></div>
-  <div class="field"><label for="nodeLabel">节点辨识符 <i class="mark opt">可选</i></label><input id="nodeLabel" placeholder="例如 SG-NAT01；留空使用默认名称" maxlength="20"></div>
-
-  <div id="originFields" class="subpanel hidden">
-    <div class="subhead">源站地址 <i class="mark opt">可选，自动检测</i></div>
-    <div class="field"><label for="originIPv4">源站 IPv4 / 域名</label><input id="originIPv4" placeholder="留空自动检测 IPv4"></div>
-    <div class="field"><label for="originIPv6">源站 IPv6</label><input id="originIPv6" placeholder="留空自动检测 IPv6"></div>
-    <div class="footnote">这里填能直达 VPS 的公网 IP 或 DNS-only 解析域名，所选的普通 AnyTLS、NaiveProxy、Reality 和 Shadowsocks 2022 共用，不用分别填。别填 Cloudflare 优选地址或 Tunnel 域名；两项留空时由 VPS 自动检测。</div>
+  <div class="panelhead"><h2>③ 按所选协议填写参数</h2><span class="badge">无关字段自动禁用</span></div>
+  <div class="field"><label for="nodeLabel">节点辨识符</label><input id="nodeLabel" placeholder="可留空，例如：新加坡 NAT01"></div>
+  <div id="originFields">
+    <div class="field"><label for="originIPv4">源站 IPv4（可选）</label><input id="originIPv4" placeholder="留空由 VPS 自动检测"></div>
+    <div class="field"><label for="originIPv6">源站 IPv6（可选）</label><input id="originIPv6" placeholder="留空由 VPS 自动检测"></div>
+    <div class="small">只有选择需要直连公网的协议时才启用。Argo-only 安装不需要填写源站公网 IP。</div>
   </div>
-
-  <div id="realityFields" class="subpanel hidden">
-    <div class="subhead">Reality 参数</div>
-    <div class="field"><label for="realitySni">Reality 握手域名（两种 Reality 共用） <i class="mark opt">可选</i><i class="mark def">默认 www.bing.com</i></label><input id="realitySni" value="www.bing.com" placeholder="www.bing.com"></div>
+  <div id="realityFields" class="hidden">
+    <div class="field"><label for="realitySni">Reality SNI</label><input id="realitySni" value="www.bing.com"></div>
   </div>
-
-  <div id="certFields" class="subpanel hidden">
-    <div class="subhead">TLS 证书（仅 AnyTLS / Naive / 直连 WS 需要）</div>
-    <div class="field"><label for="tlsDomain">② CF 绑定 IP 的域名（TLS 证书 / SNI） <i id="tlsDomainMark" class="mark req">必填</i></label><input id="tlsDomain" placeholder="例如 direct.example.com"></div>
-    <div class="footnote">填你管理且证书要覆盖的完整域名；在 Cloudflare DNS 中配置该名称的 A/AAAA 等记录，使其指向 VPS。AnyTLS、NaiveProxy 和直连 WS 共用此值；直连 WS 的 Host 默认也用它。不填优选域名/IP；建议与 Tunnel 绑定域名不同。</div>
-    <div class="field"><label for="certMode">证书签发方式 <i class="mark def">默认 DNS-01</i></label><select id="certMode"><option value="cloudflare">Cloudflare DNS-01（推荐）</option><option value="http01">HTTP-01（公网 TCP 80 必须可访问）</option></select></div>
+  <div id="certFields" class="hidden">
+    <div class="divider"></div>
+    <h3>源站 TLS 证书（AnyTLS / Naive / 直连 WS / XHTTP + ECH 需要）</h3>
+    <div class="field"><label for="certMode">证书方式</label><select id="certMode"><option value="cloudflare">Cloudflare DNS-01</option><option value="http01">HTTP-01（需要公网 TCP 80）</option></select></div>
+    <div class="field"><label for="tlsDomain">TLS 证书域名</label><input id="tlsDomain" placeholder="例如 node.example.com"></div>
     <div id="cfCertFields">
-      <div class="field"><label for="cfZone">① 根域名（Cloudflare DNS Zone） <i class="mark req">必填</i></label><input id="cfZone" placeholder="例如 example.com，按 DNS 控制台中的区域名称填写"></div>
-      <div class="footnote">例如区域为 <code>example.com</code>、证书要签给 <code>direct.example.com</code>，则两栏分别填写。如果证书就签给区域本身，只填这里，上方证书域名留空即可。</div>
-      <div class="field"><label for="cfToken">Cloudflare DNS API Token <i class="mark req">必填</i></label><input id="cfToken" type="password" placeholder="需要 Zone:DNS:Edit 权限" autocomplete="off"></div>
-      <div class="field"><label for="cfZoneId">Zone ID <i class="mark opt">可选</i></label><input id="cfZoneId" placeholder="32 位十六进制；留空自动查询"></div>
-      <div class="field"><label for="cfEmail">证书账户邮箱 <i class="mark opt">可选</i></label><input id="cfEmail" type="email" placeholder="留空也可以申请证书"></div>
-      <div class="footnote">DNS API Token 与上面的 Tunnel Token 是两种不同凭据。只有选择 DNS-01 时才需要这组 Cloudflare 字段。</div>
+      <div class="field"><label for="cfZone">Cloudflare 根域名</label><input id="cfZone" placeholder="例如 example.com"></div>
+      <div class="field"><label for="cfToken">Cloudflare DNS API Token</label><input id="cfToken" type="password" placeholder="Zone:DNS:Edit 权限" autocomplete="off"></div>
+      <div class="field"><label for="cfZoneId">Zone ID（可选）</label><input id="cfZoneId" placeholder="32 位十六进制"></div>
+      <div class="field"><label for="cfEmail">证书邮箱（可选）</label><input id="cfEmail" type="email" placeholder="可留空"></div>
+      <div class="small">这是 DNS-01 证书 API Token，与上方 Argo Tunnel Token 是两种不同凭据。只在需要源站证书时启用。</div>
     </div>
-    <div id="httpCertHint" class="notice hidden">HTTP-01 不需要 Cloudflare Token，但要求证书域名解析到 VPS，且公网 TCP 80 可访问；NAT VPS 通常更适合 DNS-01。</div>
+    <div id="httpCertHint" class="notice hidden">HTTP-01 要求证书域名解析到 VPS，且公网 TCP 80 可访问。NAT VPS 通常不适合使用此方式。</div>
   </div>
-
-  <div id="portFields" class="subpanel hidden">
-    <div class="subhead">本机端口 <i class="mark opt">留空：优先沿用上次端口</i></div>
-    <div class="portgrid">
-      <div class="port hidden" id="portAnytlsWrap"><label for="portAnytls">AnyTLS TCP</label><input id="portAnytls" type="number" min="1024" max="65535" placeholder="自动随机"></div>
-      <div class="port hidden" id="portWsWrap"><label for="portWs">直连 WS TLS TCP</label><input id="portWs" type="number" min="1024" max="65535" placeholder="自动随机"></div>
-      <div class="port hidden" id="portArgoWrap"><label for="portArgo">Argo 本机 WS 端口</label><input id="portArgo" type="number" min="1024" max="65535" placeholder="本机自动随机"></div>
-      <div class="port hidden" id="portSS2022Wrap"><label for="portSS2022">Shadowsocks 2022 TCP/UDP</label><input id="portSS2022" type="number" min="1024" max="65535" placeholder="自动随机"></div>
-      <div class="port hidden" id="portRealityWrap"><label for="portReality">VLESS Reality TCP</label><input id="portReality" type="number" min="1024" max="65535" placeholder="自动随机"></div>
-      <div class="port hidden" id="portNaiveWrap"><label for="portNaive">NaiveProxy TCP</label><input id="portNaive" type="number" min="1024" max="65535" placeholder="自动随机"></div>
-      <div class="port hidden" id="portAnyRealityWrap"><label for="portAnyReality">AnyTLS Reality TCP</label><input id="portAnyReality" type="number" min="1024" max="65535" placeholder="自动随机"></div>
+  <div id="xhttpFields" class="hidden">
+    <div class="divider"></div>
+    <h3>VLESS + XHTTP + ECH（独立 Xray-core）</h3>
+    <div class="field"><label for="xhttpEchPublicName">ECH Public Name</label><input id="xhttpEchPublicName" value="cloudflare-ech.com" placeholder="默认 cloudflare-ech.com"></div>
+    <div class="small">这是外层 ClientHello 暴露的公开名称，不是证书域名。服务器会生成 ECH Server Keys 和客户端 ECH Config List。</div>
+    <div class="field"><label for="xhttpMode">XHTTP 模式</label><select id="xhttpMode"><option value="auto">auto（推荐）</option><option value="packet-up">packet-up</option><option value="stream-up">stream-up</option><option value="stream-one">stream-one</option></select></div>
+    <div class="field"><label for="xhttpPath">XHTTP Path（可选）</label><input id="xhttpPath" placeholder="留空自动生成，例如 /xhttp-随机值"></div>
+    <div class="notice">ECH 客户端需要使用安装后输出的 ECH Config List。XHTTP + ECH 必须直连 VPS 的 Xray TLS 入站；DNS 记录设为 DNS Only（灰云），不要把此域名代理到普通 CDN。NAT VPS 需将公网 TCP 端口映射到 XHTTP 本机端口。</div>
+  </div>
+  <div id="snellFields" class="hidden">
+    <div class="divider"></div>
+    <h3>Snell 入站（sing-box 1.14.0+）</h3>
+    <div class="field"><label for="snellVersion">Snell 版本</label><select id="snellVersion"><option value="5">v5（兼容性优先）</option><option value="6">v6（需要客户端支持）</option></select></div>
+    <div id="snellV5Fields">
+      <div class="field"><label for="snellObfsMode">v5 HTTP 混淆</label><select id="snellObfsMode"><option value="http">http</option><option value="none">none</option></select></div>
+      <div class="field"><label for="snellObfsHost">v5 混淆 Host</label><input id="snellObfsHost" value="www.bing.com" placeholder="例如 www.bing.com"></div>
     </div>
-    <div id="portHint" class="footnote">留空由 VPS 选择空闲端口。若 NAT 服务商指定了内网监听端口，请在对应项填写该端口；公网映射需另行配置。</div>
-  </div>
-
-  <div id="warpSection" class="subpanel">
-    <div class="subhead">Cloudflare WARP 域名分流 <i class="mark opt">可选</i></div>
-    <label class="protocol"><input type="checkbox" id="warpEnabled"><span><b>启用 WARP 域名分流</b><small>指定域名走 Cloudflare WARP，其余流量继续走 VPS direct</small></span></label>
-    <div id="warpConfigFields" class="hidden">
-      <div class="notice">填写你自己的 WARP WireGuard 配置参数。域名按行或逗号分隔；填写根域名后，该域名及其所有子域名都会走 WARP。指定域名的 DNS 查询也会使用 Cloudflare DoH 并经 WARP 发送；其他域名继续使用系统 DNS 和 direct。此功能使用 sing-box 内置 WireGuard endpoint，不创建系统级全局 VPN 路由。</div>
-      <div class="field"><label for="warpDomains">需要走 WARP 的域名 <i class="mark req">必填</i></label><textarea id="warpDomains" rows="4" placeholder="例如：&#10;google.com&#10;openai.com&#10;youtube.com"></textarea></div>
-      <div class="field"><label for="warpPrivateKey">WARP WireGuard PrivateKey <i class="mark req">必填</i></label><input id="warpPrivateKey" type="password" autocomplete="off" placeholder="从 WireGuard 配置的 [Interface] PrivateKey 复制"></div>
-      <div class="field"><label for="warpAddress4">WARP IPv4 Address/CIDR <i class="mark req">必填</i></label><input id="warpAddress4" placeholder="从你自己的 WARP 配置复制，例如 172.16.0.2/32"></div>
-      <div class="field"><label for="warpAddress6">WARP IPv6 Address/CIDR <i class="mark opt">可选</i></label><input id="warpAddress6" placeholder="例如 2606:4700:110:xxxx::2/128"></div>
-      <div class="field"><label for="warpEndpoint">Cloudflare WireGuard Endpoint <i class="mark def">默认</i></label><input id="warpEndpoint" value="162.159.192.1" placeholder="162.159.192.1"></div>
-      <div class="field"><label for="warpPort">WARP UDP 端口 <i class="mark def">默认 2408</i></label><input id="warpPort" type="number" min="1" max="65535" value="2408"></div>
-      <div class="field"><label for="warpReserved">Reserved bytes <i class="mark req">必填</i></label><input id="warpReserved" placeholder="必须填写你自己的实际值，例如 12,34,56"></div>
-      <div class="footnote">PrivateKey、IPv4 Address、IPv6 Address 和 Reserved 都可能因 WARP 配置而不同，必须从你自己的 WireGuard 配置复制；尤其 Reserved 不要直接照抄示例。IPv6 留空时，WARP 规则会先按 IPv4 解析目标域名，只把 IPv4 连接送入 WARP。VPS 必须允许向 Endpoint 的 UDP 端口出站。</div>
-      <div class="notice">已有 VPS：网页同步时未勾选 WARP 会移除原 WARP 分流；要保留请重新勾选并填写原参数。客户端应把域名交给代理服务器处理，不要先在本地解析成 IP，否则服务端无法按域名匹配。</div>
+    <div id="snellV6Fields" class="hidden">
+      <div class="field"><label for="snellMode">v6 流量整形</label><select id="snellMode"><option value="default">default（推荐）</option><option value="unshaped">unshaped</option><option value="unsafe-raw">unsafe-raw</option></select></div>
     </div>
+    <div class="small">PSK 和 UserKey 会在服务器上随机生成，不需要在网页填写。安装后会输出 sing-box 客户端配置片段。</div>
   </div>
-
-  <div class="notice ok">系统类型和 CPU 架构无需填写：安装脚本会自动识别 Debian / Alpine、可用 CPU 架构，并选择 systemd 或 OpenRC。Naive 服务端由 sing-box 内置支持，自动确保版本不低于 1.13.0；VPS 不需要额外安装独立 Naive 服务端核心。</div>
+  <div class="divider"></div>
+  <h3>所选协议的端口（留空自动分配）</h3>
+  <div class="portgrid">
+    <div class="port"><label id="lPortAnytls" for="portAnytls">AnyTLS TCP</label><input id="portAnytls" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
+    <div class="port"><label id="lPortWs" for="portWs">WS TLS TCP</label><input id="portWs" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
+    <div class="port"><label for="portReality">VLESS Reality TCP</label><input id="portReality" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
+    <div class="port"><label for="portNaive">NaiveProxy TCP</label><input id="portNaive" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
+    <div class="port"><label for="portAnyReality">AnyTLS Reality TCP</label><input id="portAnyReality" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
+    <div class="port"><label for="portXhttp">VLESS XHTTP + ECH TCP</label><input id="portXhttp" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
+    <div class="port"><label for="portSnell">Snell TCP</label><input id="portSnell" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
+  </div>
+  <div id="portHint" class="notice">仅已勾选协议的端口输入框可以填写。Argo 模式的 WS 端口是 VPS 本机端口，不是公网端口；客户端连接端口固定为 443。</div>
 </section>
-</main>
-<datalist id="historyTunnelDomain"></datalist>
-<datalist id="historyPreferredAddress"></datalist>
-<datalist id="historyWsHost"></datalist>
-<datalist id="historyTlsDomain"></datalist>
-<datalist id="historyCfZone"></datalist>
-<datalist id="historyOriginIPv4"></datalist>
-<datalist id="historyOriginIPv6"></datalist>
-<datalist id="historyRealitySni"></datalist>
+</div>
 
-<section class="panel commands">
-  <div class="panelhead"><h2>③ 安装 / 卸载命令（自动生成并分开显示）</h2><span class="badge">安装命令随参数实时更新</span></div>
-  <div class="commandgrid">
-    <div class="commandcard">
-      <div class="commandhead">安装命令 <span>配置完整后自动生成</span></div>
-      <div class="footnote">已有安装：勾选的协议会新增或更新，未勾选的旧节点会移除。请把要保留的协议都勾上。</div>
-      <div id="formStatus" class="status">正在等待配置。</div>
-      <textarea id="commandOutput" class="command" rows="7" readonly placeholder="选择协议并填写必填项后，安装命令会自动显示在这里。"></textarea>
-      <div class="actions">
-        <button id="copyOutput" class="secondary" disabled>复制安装命令</button>
-        <button id="downloadOutput" class="ghost" disabled>下载安装 TXT</button>
-        <button id="exportConfig" class="ghost" disabled>导出 JSON（不含密钥）</button>
-      </div>
-    </div>
-    <div class="commandcard">
-      <div class="commandhead">卸载命令 <span>固定命令，始终显示</span></div>
-      <textarea id="uninstallText" class="command short" rows="3" readonly>/usr/local/sbin/sb-manager uninstall</textarea>
-      <div class="actions"><button id="copyUninstall" class="secondary">复制卸载命令</button></div>
-      <div class="footnote">执行后输入 <code>y</code> 确认卸载，直接回车默认取消。卸载不会删除 Cloudflare 控制台中的 Tunnel / DNS 记录或服务商端口映射。</div>
-    </div>
+<section class="panel bottom">
+  <div class="panelhead"><h2>④ 自动生成的一键安装命令</h2><span class="badge">随表单实时更新</span></div>
+  <div class="small">勾选协议并填写对应必需字段后，安装命令会自动生成，无需点击生成按钮。请以 root 登录目标 VPS，将命令复制到 SSH 终端执行。</div>
+  <div id="formStatus" class="status">正在等待配置。</div>
+  <div id="nodePreview" class="preview" style="margin:8px 0 10px">选择协议后显示节点类型预览。</div>
+  <textarea id="commandOutput" class="command" readonly placeholder="选择协议并填写必需字段后，安装命令会自动显示在这里。"></textarea>
+  <div class="actions">
+    <button id="copyOutput" class="secondary" disabled>复制自动生成的安装命令</button>
+    <button id="downloadOutput" class="ghost" disabled>下载命令 TXT</button>
+    <button id="exportConfig" class="ghost" disabled>导出配置 JSON（不含 Token）</button>
   </div>
-  <div class="actions"><button id="downloadBoth" class="ghost" disabled>下载安装 + 卸载命令（分隔 TXT）</button></div>
-  <div class="footnote">安装和卸载是两条独立命令，请分别复制；不要把两条命令连续粘贴执行。安装命令含敏感 Token，Base64 不是加密，不要公开分享。</div>
+  <div class="notice">安全提醒：安装命令会包含 Base64 编码的 Token；Base64 不是加密。不要公开分享命令，不要把 Argo Token、DNS API Token、节点链接或证书私钥提交到 GitHub。</div>
 </section>
 
-<section class="help">
-  <details id="argoHelp" class="hidden">
-    <summary>Cloudflare Argo Tunnel 路由设置（仅选择 Argo 时需要）</summary>
-    <ol class="small">
-      <li>Cloudflare Zero Trust → Networks → Tunnels，创建或选择 remotely-managed 固定 Tunnel，不要使用临时 Quick Tunnel。</li>
-      <li>在 Tunnel → Public Hostnames / Routes 添加上面填写的 Public Hostname，Service Type 选 HTTP，Service URL 填写安装完成后终端显示的 <code>http://127.0.0.1:本机WS端口</code>。</li>
-      <li>复制 Add a replica 中完整的 Tunnel Token，粘贴到页面的 Token 输入框。</li>
-      <li>确认 Tunnel 状态为 Healthy。Argo 模式客户端公网端口固定为 443，不需要 NAT 公网入站端口或 VPS 源站 TLS 证书。</li>
-    </ol>
-    <div class="footnote">官方文档：<a href="https://developers.cloudflare.com/tunnel/get-started/" target="_blank" rel="noopener">创建 Tunnel</a> · <a href="https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/" target="_blank" rel="noopener">Tunnel Token</a> · <a href="https://developers.cloudflare.com/tunnel/concepts/routing/" target="_blank" rel="noopener">Tunnel 路由</a></div>
-  </details>
-  <details>
-    <summary>Cloudflare WARP WireGuard 参数如何填写</summary>
-    <div class="small" style="margin-top:7px">
-      从你自己的 Cloudflare WARP WireGuard 配置中读取参数：<code>PrivateKey</code> 对应私钥；<code>Address</code> 中的 IPv4 / IPv6 地址分别填入两个地址框；<code>Reserved</code> 对应三个十进制字节；<code>Endpoint</code> 的 IP 和端口填入 Endpoint 与 UDP 端口。页面内置的是普通消费者 WARP 的 WireGuard 公钥。不要把私钥发给他人。
-      <br>WARP 域名规则同时匹配精确根域名和以该域名结尾的子域名：例如填写 <code>example.com</code>，则 <code>example.com</code>、<code>www.example.com</code>、<code>api.example.com</code> 都走 WARP。脚本会先嗅探 TLS SNI / HTTP Host，再解析目标域名；IPv6 地址留空时按 IPv4-only 解析，只有 AAAA 记录的目标会连接失败，不会回退到 direct。
-    </div>
-  </details>
-  <details>
-    <summary>VPS 命令菜单：添加 / 删除 / 按协议修改参数</summary>
-    <div class="small" style="margin-top:7px">
-      登录 VPS 执行 <code>/usr/local/sbin/sb-manager</code>：菜单 <b>18</b> 增量添加未安装协议；菜单 <b>19</b> 删除指定协议（需输入 <code>DELETE</code> 确认）；菜单 <b>20</b> 先选择协议，再修改 SNI / TLS 域名、WS 优选 IP、Cloudflare Zone 或 Argo Public Hostname、端口和协议凭据。
-      TLS 证书域名在 AnyTLS、NaiveProxy、直连 WS 之间共享；Reality SNI 在两种 Reality 协议之间共享。菜单会显示这些共享关系和每种协议的必填 / 可选值。密码留空保持原值，输入 <code>-</code> 可随机生成；端口留空自动分配。
-    </div>
-  </details>
-  <details>
-    <summary>NaiveProxy 客户端配置说明（Linux）</summary>
-    <div class="small" style="margin-top:7px">本项目在 VPS 上运行的是 sing-box 的 Naive 入站，不需要另装独立 Naive 服务端核心。启用 NaiveProxy 后，管理器会在节点信息刷新时生成 <code>/etc/sing-box/naive-client.json</code>，供 sing-box 1.13.0+ Linux 客户端使用。若某个图形客户端提示找不到 Naive 核心，那是客户端自身的核心路径设置，与 VPS 服务端核心是否安装是两回事。NAT 公网映射端口若不同于 VPS 内部监听端口，客户端配置中的 <code>server_port</code> 应改为公网映射端口。</div>
-  </details>
+<section class="panel bottom">
+  <div class="panelhead"><h2>⑤ Cloudflare Tunnel（Argo）必须完成的路由设置</h2><span class="badge">Argo 模式</span></div>
+  <ol class="small">
+    <li>Cloudflare Zero Trust → Networks → Tunnels，创建或选择一个 remotely-managed Tunnel。</li>
+    <li>在 Tunnel → Public Hostnames / Routes 添加主机名，Service Type 选 HTTP，Service URL 填写安装后终端显示的 <code>http://127.0.0.1:本机WS端口</code>。</li>
+    <li>从 Tunnel 的 Add a replica 安装命令中复制 <code>eyJ...</code> Token，粘贴到上面的 Tunnel Token 输入框。</li>
+    <li>确认 Tunnel 状态为 Healthy。Cloudflare 会将 HTTPS/WS 流量经 Tunnel 转发到 VPS 的本机 HTTP WebSocket 入站。</li>
+  </ol>
+  <div class="notice ok">Argo 模式不需要 NAT 服务商提供公网入站端口，也不需要 VPS 为 WS 节点申请证书；Cloudflare 边缘负责客户端 TLS，cloudflared 通过出站连接回源。确保 VPS 可以访问 Cloudflare Tunnel 所需的出站网络（默认连接端口 7844）。</div>
+  <div class="small" style="margin-top:8px">官方文档：<a href="https://developers.cloudflare.com/tunnel/get-started/" target="_blank" rel="noopener">创建 Tunnel 与发布应用</a> · <a href="https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/" target="_blank" rel="noopener">Tunnel Token</a> · <a href="https://developers.cloudflare.com/tunnel/reference/run-parameters/" target="_blank" rel="noopener">Tunnel 运行参数</a> · <a href="https://developers.cloudflare.com/tunnel/concepts/routing/" target="_blank" rel="noopener">Tunnel 路由</a></div>
 </section>
 
-<div class="footer">静态前端配置生成器 · 所有表单值仅在当前浏览器处理，不会自动上传到 GitHub Pages。</div>
+<section class="panel bottom">
+  <div class="panelhead"><h2>不通过 HTML 的 SSH 直接安装</h2><span class="badge">交互式选择协议</span></div>
+  <div class="small">以 root 登录 VPS 后执行。脚本会在终端询问需要安装的协议及其必需参数。</div>
+  <pre id="directInstallText" class="preview">set -eu
+if [ "$(id -u)" -ne 0 ]; then echo '请先以 root 登录，或先执行 sudo -i。'; exit 1; fi
+if ! command -v curl >/dev/null 2>&1; then
+  if [ -f /etc/alpine-release ]; then apk add --no-cache curl
+  elif [ -f /etc/debian_version ]; then apt-get update && apt-get install -y curl
+  else echo '仅支持 Debian / Ubuntu 和 Alpine。'; exit 1; fi
+fi
+curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh' -o /tmp/sb-manager-debian-alpine.sh
+chmod 700 /tmp/sb-manager-debian-alpine.sh
+/tmp/sb-manager-debian-alpine.sh</pre>
+  <div class="actions"><button id="copyDirectInstall" class="secondary">复制直接安装命令</button></div>
+</section>
+
+<section class="panel bottom">
+  <div class="panelhead"><h2>卸载 sing-box 管理器</h2><span class="badge">root 权限</span></div>
+  <pre id="uninstallText" class="preview">/usr/local/sbin/sb-manager uninstall</pre>
+  <div class="actions"><button id="copyUninstall" class="secondary">复制卸载命令</button></div>
+  <div class="small">卸载会删除本脚本管理的 sing-box / Xray 配置、服务、ECH 密钥及 Cloudflare Tunnel 专用服务和 Token 文件。若 cloudflared 二进制由本脚本下载，也会删除；系统中原本存在的 cloudflared 二进制不会删除。不会删除 Cloudflare 控制台中的 Tunnel、DNS 记录或服务商端口映射。</div>
+</section>
+<div class="footer">静态前端配置生成器。网页不会自动部署或连接 VPS；实际安装结果以服务器上的 sing-box / Xray 配置检查和服务状态为准。XHTTP + ECH 使用独立 Xray 服务，Snell 使用 sing-box 1.14.0+。</div>
 </div>
 <script>
 "use strict";
 const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
-const UNINSTALL_COMMAND="/usr/local/sbin/sb-manager uninstall";
 const $=id=>document.getElementById(id);
-const ids=["pAnytls","pWs","pArgo","pSS2022","pReality","pNaive","pAnyReality","argoServer","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","shareWsAddress","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portArgo","portSS2022","portReality","portNaive","portAnyReality","warpEnabled","warpDomains","warpPrivateKey","warpAddress4","warpAddress6","warpEndpoint","warpPort","warpReserved"];
+const ids=["pAnytls","pWs","pReality","pNaive","pAnyReality","pXhttp","pSnell","xhttpEchPublicName","xhttpMode","xhttpPath","snellVersion","snellObfsMode","snellObfsHost","snellMode","portXhttp","portSnell","wsMode","argoHost","argoToken","directWsHost","wsServer","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portReality","portNaive","portAnyReality"];
 const v=id=>$(id).value.trim();
-const tunnelName=()=>v("argoTunnelName").replace(/ {2,}/g," ");
-const protocolLabels={anytls:"AnyTLS",ws_tls:"直连 WS TLS",ws_argo:"Argo WS TLS",ss2022:"Shadowsocks 2022",vless_reality:"VLESS + Reality",naive:"NaiveProxy",anytls_reality:"AnyTLS + Reality"};
-const selectedNames=p=>Object.entries(protocolLabels).filter(([key])=>p[key]).map(([,label])=>label).join("、");
-function selected(){return {anytls:$("pAnytls").checked,ws_tls:$("pWs").checked,ws_argo:$("pArgo").checked,ss2022:$("pSS2022").checked,vless_reality:$("pReality").checked,naive:$("pNaive").checked,anytls_reality:$("pAnyReality").checked};}
-function needsCert(p){return p.anytls||p.naive||p.ws_tls;}
-function needsOrigin(p){return p.anytls||p.vless_reality||p.naive||p.anytls_reality||p.ss2022;}
-function sharesWsAddress(p){return p.ws_tls&&p.ws_argo&&$("shareWsAddress").checked;}
+function selected(){return {anytls:$("pAnytls").checked,ws_tls:$("pWs").checked,vless_reality:$("pReality").checked,naive:$("pNaive").checked,anytls_reality:$("pAnyReality").checked,xhttp:$("pXhttp").checked,snell:$("pSnell").checked};}
+function needsCert(p,mode){return p.anytls||p.naive||p.xhttp||(p.ws_tls&&mode==="direct");}
+function needsOrigin(p,mode){return p.anytls||p.vless_reality||p.naive||p.anytls_reality||p.snell;}
 function b64(s){return btoa(unescape(encodeURIComponent(s)));}
 function cfgFromForm(){
-  const p=selected(),certNeeded=needsCert(p);
+  const p=selected(),mode=v("wsMode"),certNeeded=needsCert(p,mode);
   const certMode=certNeeded?v("certMode"):"none";
-  const tlsDomain=certNeeded?(v("tlsDomain")||(certMode==="cloudflare"?v("cfZone"):"")):"";
-  const argoHost=p.ws_argo?v("argoHost"):"";
-  const wsHost=p.ws_tls?v("directWsHost"):"";
-  const wsServer=p.ws_tls?v("wsServer"):"";
+  const tlsDomain=certNeeded?v("tlsDomain"):"";
+  const argoHost=p.ws_tls&&mode==="argo"?v("argoHost"):"";
+  const wsHost=p.ws_tls?(mode==="argo"?argoHost:(v("directWsHost")||tlsDomain)):"";
+  const wsServer=p.ws_tls?(v("wsServer")||(mode==="argo"?argoHost:(v("directWsHost")||tlsDomain))):"";
   return {
-    schema:8,protocols:p,argo_host:argoHost,argo_server:p.ws_argo?(sharesWsAddress(p)?wsServer:v("argoServer")):"",
-    argo_tunnel_name:p.ws_argo?tunnelName():"",
-    argo_token:p.ws_argo?v("argoToken"):"",
-    origin_ipv4:needsOrigin(p)?v("originIPv4"):"",
-    origin_ipv6:needsOrigin(p)?v("originIPv6"):"",
+    schema:6,protocols:p,ws_mode:p.ws_tls?mode:"none",argo_host:argoHost,
+    argo_token:p.ws_tls&&mode==="argo"?v("argoToken"):"",
+    origin_ipv4:needsOrigin(p,mode)?v("originIPv4"):"",
+    origin_ipv6:needsOrigin(p,mode)?v("originIPv6"):"",
     ws_server:wsServer,tls_domain:tlsDomain,ws_host:wsHost,
     reality_sni:(p.vless_reality||p.anytls_reality)?(v("realitySni")||"www.bing.com"):"",
+    xhttp_ech_public_name:p.xhttp?(v("xhttpEchPublicName")||"cloudflare-ech.com"):"",
+    xhttp_mode:p.xhttp?v("xhttpMode"):"auto",
+    xhttp_path:p.xhttp?v("xhttpPath"):"",
+    snell_version:p.snell?Number(v("snellVersion")||5):5,
+    snell_obfs_mode:p.snell&&v("snellVersion")==="5"?v("snellObfsMode"):"http",
+    snell_obfs_host:p.snell&&v("snellVersion")==="5"?v("snellObfsHost"):"www.bing.com",
+    snell_mode:p.snell&&v("snellVersion")==="6"?v("snellMode"):"default",
     node_label:v("nodeLabel"),
-    ports:{anytls:p.anytls?v("portAnytls"):"",ws_tls:p.ws_tls?v("portWs"):"",ws_argo:p.ws_argo?v("portArgo"):"",ss2022:p.ss2022?v("portSS2022"):"",vless_reality:p.vless_reality?v("portReality"):"",naive:p.naive?v("portNaive"):"",anytls_reality:p.anytls_reality?v("portAnyReality"):""},
+    ports:{anytls:p.anytls?v("portAnytls"):"",ws_tls:p.ws_tls?v("portWs"):"",vless_reality:p.vless_reality?v("portReality"):"",naive:p.naive?v("portNaive"):"",anytls_reality:p.anytls_reality?v("portAnyReality"):"",xhttp:p.xhttp?v("portXhttp"):"",snell:p.snell?v("portSnell"):""},
     cert_mode:certMode,cf_zone_name:certNeeded&&certMode==="cloudflare"?v("cfZone"):"",
     cf_zone_id:certNeeded&&certMode==="cloudflare"?v("cfZoneId"):"",
     cf_email:certNeeded&&certMode==="cloudflare"?v("cfEmail"):"",
-    cf_token:certNeeded&&certMode==="cloudflare"?v("cfToken"):"",
-    warp_enabled:$("warpEnabled").checked,
-    warp_private_key:$("warpEnabled").checked?v("warpPrivateKey"):"",
-    warp_address4:$("warpEnabled").checked?v("warpAddress4"):"",
-    warp_address6:$("warpEnabled").checked?v("warpAddress6"):"",
-    warp_endpoint:$("warpEnabled").checked?v("warpEndpoint"):"",
-    warp_port:$("warpEnabled").checked?v("warpPort"):"",
-    warp_reserved:$("warpEnabled").checked?v("warpReserved"):"",
-    warp_domains:$("warpEnabled").checked?v("warpDomains"):""
+    cf_token:certNeeded&&certMode==="cloudflare"?v("cfToken"):""
   };
 }
 const domainRe=/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[A-Za-z]{2,63}$/;
 function isIPv4(s){const a=s.split(".");return a.length===4&&a.every(x=>/^\d{1,3}$/.test(x)&&+x<=255);}
-function isIPv6(s){try{return s.includes(":")&&/^[0-9a-f:.]+$/i.test(s)&&new URL(`http://[${s}]/`).hostname.startsWith("[");}catch{return false;}}
-function isAddress(value){return domainRe.test(value)||isIPv4(value)||isIPv6(value);}
-function isIPv4CIDR(value){const p=value.split("/");return p.length===2&&isIPv4(p[0])&&p[1]==="32";}
-function isIPv6CIDR(value){const p=value.split("/");return p.length===2&&isIPv6(p[0])&&p[1]==="128";}
-function validOptionalWsAddress(value){return !value||value==="-"||isAddress(value);}
-const historyKey="jiedian.address-history.v1";
-const historyFields={
-  argoHost:"historyTunnelDomain",wsServer:"historyPreferredAddress",argoServer:"historyPreferredAddress",
-  directWsHost:"historyWsHost",tlsDomain:"historyTlsDomain",cfZone:"historyCfZone",
-  originIPv4:"historyOriginIPv4",originIPv6:"historyOriginIPv6",realitySni:"historyRealitySni"
-};
-const historyValidators={
-  historyTunnelDomain:value=>domainRe.test(value),historyPreferredAddress:isAddress,
-  historyWsHost:value=>domainRe.test(value),historyTlsDomain:value=>domainRe.test(value),
-  historyCfZone:value=>domainRe.test(value),historyOriginIPv4:value=>domainRe.test(value)||isIPv4(value),
-  historyOriginIPv6:isIPv6,historyRealitySni:value=>domainRe.test(value)
-};
-let addressHistory=readAddressHistory();
-function readAddressHistory(){
-  let saved;
-  try{saved=JSON.parse(localStorage.getItem(historyKey)||"{}");}catch{saved={};}
-  return Object.fromEntries(Object.entries(historyValidators).map(([listId,valid])=>{
-    const values=saved?.[listId];
-    return [listId,Array.isArray(values)?[...new Set(values.filter(value=>typeof value==="string"&&valid(value)))].slice(0,8):[]];
-  }));
-}
-function refreshHistory(listId){
-  $(listId).replaceChildren(...addressHistory[listId].map(value=>{
-    const option=document.createElement("option");
-    option.value=value;
-    return option;
-  }));
-}
-function rememberAddress(id){
-  if(!Object.hasOwn(historyFields,id)||$(id).disabled)return;
-  const listId=historyFields[id],value=v(id);
-  if(!historyValidators[listId](value))return;
-  addressHistory[listId]=[value,...addressHistory[listId].filter(previous=>previous!==value)].slice(0,8);
-  refreshHistory(listId);
-  try{localStorage.setItem(historyKey,JSON.stringify(addressHistory));}
-  catch{$("historyStatus").textContent="此浏览器禁止本地存储，本次历史仅在当前页面有效。";}
-}
+function isIPv6(s){try{return s.includes(":")&&new URL(`http://[${s}]/`).hostname.startsWith("[");}catch{return false;}}
 function validate(c){
-  const p=c.protocols;
+  const p=c.protocols,mode=c.ws_mode;
   if(!Object.values(p).some(Boolean))throw Error("请至少勾选一种协议。");
-  if(c.node_label&&!/^[\p{L}\p{N}._-]{1,20}$/u.test(c.node_label))throw Error("节点辨识符最多 20 个字符，只允许中文、字母、数字、点、下划线和短横线，不要使用空格。");
-  const activePorts=Object.entries(c.ports).filter(([k,x])=>p[k]&&x);
+  if(c.node_label&&!/^[\p{L}\p{N}._-]{1,20}$/u.test(c.node_label))throw Error("节点辨识符最多 20 个字符，只允许中文、字母、数字、点、下划线和短横线。");
+  const activePorts=Object.entries(c.ports).filter(([k,x])=>p[k==="ws_tls"?"ws_tls":k]&&x);
   for(const [k,x] of activePorts)if(!/^\d+$/.test(x)||+x<1024||+x>65535)throw Error("已启用协议的手动端口必须是 1024–65535 的整数。");
   const portNums=activePorts.map(([,x])=>+x);if(new Set(portNums).size!==portNums.length)throw Error("已启用协议的端口不能重复。");
-  if(p.ws_argo){
-    if(!domainRe.test(c.argo_host))throw Error("请填写 Cloudflare Tunnel 公开应用路由绑定的完整域名，例如 tunnel.example.com。");
-    if(c.argo_tunnel_name&&!/^[\p{L}\p{N} ._-]{1,64}$/u.test(c.argo_tunnel_name))throw Error("Tunnel 备注名最多 64 个字符，只允许中文、字母、数字、空格、点、下划线和短横线。");
-    if(!c.argo_token||!/^eyJ[A-Za-z0-9+/=_-]{37,8191}$/.test(c.argo_token))throw Error("请填写完整的 Cloudflare Tunnel Token（通常以 eyJ 开头）。");
-    if(!validOptionalWsAddress(c.argo_server))throw Error("Argo 优选地址格式无效；请填写域名、IPv4 或 IPv6（不要带端口）。");
-  }
   if(p.ws_tls){
-    if(c.ws_host&&c.ws_host!=="-"&&!domainRe.test(c.ws_host))throw Error("直连 WS 的 HTTP Host 必须是有效域名，或填 - 恢复默认。");
-    if(!validOptionalWsAddress(c.ws_server))throw Error("直连 WS 优选地址格式无效；请填写域名、IPv4 或 IPv6（不要带端口）。");
+    if(mode==="argo"){
+      if(!domainRe.test(c.argo_host))throw Error("请填写有效的 Argo 公网主机名，例如 ws.example.com。");
+      if(!c.argo_token||!/^eyJ\S+$/.test(c.argo_token))throw Error("请填写 Cloudflare Tunnel Token（通常以 eyJ 开头）。");
+    }else if(mode!=="direct")throw Error("请选择 WS 接入方式。");
+    if(mode==="direct"&&!domainRe.test(c.ws_host))throw Error("直连 WS 的 HTTP Host 必须是有效域名。");
+    if(c.ws_server&&!domainRe.test(c.ws_server)&&!isIPv4(c.ws_server)&&!isIPv6(c.ws_server))throw Error("客户端连接地址格式无效；请填写域名、IPv4 或 IPv6。");
   }
-  if(p.vless_reality||p.anytls_reality){if(!domainRe.test(c.reality_sni))throw Error("Reality SNI 必须是有效域名；留空时默认 www.bing.com。");}
-  if(needsOrigin(p)){
-    if(c.origin_ipv4&&!isIPv4(c.origin_ipv4)&&!domainRe.test(c.origin_ipv4))throw Error("源站 IPv4 / 域名格式不正确。");
+  if(p.vless_reality||p.anytls_reality){if(!domainRe.test(c.reality_sni))throw Error("请填写有效的 Reality SNI 域名。");}
+  if(p.xhttp){
+    if(!domainRe.test(c.xhttp_ech_public_name))throw Error("ECH Public Name 必须是有效域名。");
+    if(!["auto","packet-up","stream-up","stream-one"].includes(c.xhttp_mode))throw Error("XHTTP 模式无效。");
+    if(c.xhttp_path&&!c.xhttp_path.startsWith("/"))throw Error("XHTTP Path 必须以 / 开头，或留空自动生成。");
+  }
+  if(p.snell){
+    if(![5,6].includes(c.snell_version))throw Error("Snell 版本只能选择 5 或 6。");
+    if(c.snell_version===5&&!['http','none'].includes(c.snell_obfs_mode))throw Error("Snell v5 混淆模式无效。");
+    if(c.snell_version===6&&!['default','unshaped','unsafe-raw'].includes(c.snell_mode))throw Error("Snell v6 流量整形模式无效。");
+    if(c.snell_version===5&&c.snell_obfs_mode==='http'&&!domainRe.test(c.snell_obfs_host))throw Error("Snell v5 HTTP 混淆 Host 必须是有效域名。");
+  }
+  if(needsOrigin(p,mode)){
+    if(c.origin_ipv4&&!isIPv4(c.origin_ipv4)&&!domainRe.test(c.origin_ipv4))throw Error("源站 IPv4/域名格式不正确。");
     if(c.origin_ipv6&&!isIPv6(c.origin_ipv6))throw Error("源站 IPv6 格式不正确。");
   }
-  if(needsCert(p)){
+  if(needsCert(p,mode)){
+    if(!domainRe.test(c.tls_domain))throw Error("所选协议需要有效的 TLS 证书域名。");
     if(c.cert_mode==="cloudflare"){
-      if(!domainRe.test(c.cf_zone_name))throw Error("请填写 Cloudflare DNS 控制台中的 Zone 名称，例如 example.com。");
-    }else if(c.cert_mode!=="http01")throw Error("请选择 TLS 证书方式。");
-    if(!domainRe.test(c.tls_domain)||/^(?:www\.)?(?:bing|microsoft)\.com$/i.test(c.tls_domain))throw Error("请填写指向 VPS 的 TLS 证书域名；不要填优选 IP、通配符或 Reality 示例域名。");
-    if(c.cert_mode==="cloudflare"){
+      if(!domainRe.test(c.cf_zone_name))throw Error("请填写有效的 Cloudflare 根域名。");
       if(!c.cf_token)throw Error("请填写 Cloudflare DNS API Token。");
-      if(c.cf_zone_id&&!/^[a-fA-F0-9]{32}$/.test(c.cf_zone_id))throw Error("Zone ID 必须是 32 位十六进制，或留空自动查询。");
+      if(c.cf_zone_id&&!/^[a-fA-F0-9]{32}$/.test(c.cf_zone_id))throw Error("Zone ID 必须是 32 位十六进制，或留空。");
       if(c.cf_email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.cf_email))throw Error("证书邮箱格式不正确，或将其留空。");
-      const d=c.tls_domain.toLowerCase(),z=c.cf_zone_name.toLowerCase();if(!(d===z||d.endsWith("."+z)))throw Error("TLS 证书域名必须是所填 DNS Zone 本身或它的子域名。");
-    }
-  }
-  if(c.warp_enabled){
-    if(!/^[A-Za-z0-9+/]{43}=$/.test(c.warp_private_key))throw Error("WARP PrivateKey 必须是 32 字节 WireGuard 私钥的 Base64 值（通常为 44 个字符）。");
-    if(!isIPv4CIDR(c.warp_address4))throw Error("WARP IPv4 Address 必须是主机地址 /32，例如 172.16.0.2/32。");
-    if(c.warp_address6&&!isIPv6CIDR(c.warp_address6))throw Error("WARP IPv6 Address 必须是主机地址 /128，例如 2606:4700:110:xxxx::2/128，或留空只分流 IPv4。");
-    if(!isIPv4(c.warp_endpoint)&&!isIPv6(c.warp_endpoint))throw Error("WARP Endpoint 必须填写 IPv4 或 IPv6 地址，不要带端口。");
-    if(!/^\d+$/.test(c.warp_port)||+c.warp_port<1||+c.warp_port>65535)throw Error("WARP UDP 端口必须是 1–65535 的整数。");
-    const reserved=c.warp_reserved.split(",").map(x=>x.trim());
-    if(reserved.length!==3||reserved.some(x=>!/^\d+$/.test(x)||+x>255))throw Error("Reserved 必须是三个 0–255 的十进制数字，例如 12,34,56。");
-    const domains=[...new Set(c.warp_domains.split(/[\n,;]+/).map(x=>x.trim().toLowerCase()).filter(Boolean))];
-    if(!domains.length||domains.some(x=>!domainRe.test(x)))throw Error("请填写有效的 WARP 分流域名；每行一个，或使用逗号分隔，不要带协议或路径。");
-    c.warp_domains=domains.join("\n");
+      const d=c.tls_domain.toLowerCase(),z=c.cf_zone_name.toLowerCase();if(!(d===z||d.endsWith("."+z)))throw Error("TLS 证书域名必须属于所填 Cloudflare 根域名。");
+    }else if(c.cert_mode!=="http01")throw Error("请选择 TLS 证书方式。");
   }
   return c;
 }
-function oneCommandText(c){const encoded=b64(JSON.stringify(c));return `# 本次勾选：${selectedNames(c.protocols)}${c.warp_enabled?"\n# WARP 域名分流："+c.warp_domains.replace(/\n/g,","):""}
-if sh -eu <<'SB_INSTALL'
+function oneCommandText(c){const encoded=b64(JSON.stringify(c));return `if sh -eu <<'SB_INSTALL'
 [ "$(id -u)" -eq 0 ] || { echo '请以 root 用户执行此安装命令。'; exit 1; }
 umask 077
 CFG="$(mktemp)"
@@ -359,7 +260,7 @@ if command -v curl >/dev/null 2>&1; then curl -fsSL '${RAW_URL}' -o "$SH"
 else wget -qO "$SH" '${RAW_URL}'; fi
 head -n 1 "$SH" | grep -qx '#!/bin/sh'
 grep -q 'WEB_CONFIG_MODE=1' "$SH"
-grep -q 'WEB_CONFIG_SCHEMA=8' "$SH" && grep -q 'WEB_WS_PREFERENCES=1' "$SH" && grep -q 'WEB_PORT_REUSE=1' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
+grep -q 'WEB_CONFIG_SCHEMA=6' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
 install -m 700 "$SH" /usr/local/sbin/sb-manager
 rm -f "$SH"
 /usr/local/sbin/sb-manager install-web-config "$CFG"
@@ -372,61 +273,39 @@ else
 fi`;}
 function setEnabled(id,on){$(id).disabled=!on;}
 function syncUI(){
-  const p=selected(),ws=p.ws_tls,argo=p.ws_argo,cert=needsCert(p),origin=needsOrigin(p),reality=p.vless_reality||p.anytls_reality,any=Object.values(p).some(Boolean),cf=cert&&v("certMode")==="cloudflare",warp=$("warpEnabled").checked;
-  const bothWs=ws&&argo,shared=sharesWsAddress(p);
-  $("wsSection").classList.toggle("hidden",!ws&&!argo);
-  $("argoFields").classList.toggle("hidden",!argo);$("directWsFields").classList.toggle("hidden",!ws);
-  ["argoHost","argoToken","argoTunnelName"].forEach(id=>setEnabled(id,argo));
-  $("argoServerField").classList.toggle("hidden",!argo||shared);setEnabled("argoServer",argo&&!shared);
-  $("shareWsAddressField").classList.toggle("hidden",!bothWs);setEnabled("shareWsAddress",bothWs);
-  $("wsServerLabel").textContent=shared?"两条 WS 共用的优选域名 / IP":"直连 WS 优选域名 / IP";
-  setEnabled("wsServer",ws);setEnabled("directWsHost",ws);
-  $("originFields").classList.toggle("hidden",!origin);["originIPv4","originIPv6"].forEach(id=>setEnabled(id,origin));
+  const p=selected(),ws=p.ws_tls,mode=v("wsMode"),cert=needsCert(p,mode),origin=needsOrigin(p,mode),reality=p.vless_reality||p.anytls_reality;
+  setEnabled("wsMode",ws);$("argoFields").classList.toggle("hidden",!ws||mode!=="argo");$("directWsFields").classList.toggle("hidden",!ws||mode!=="direct");
+  setEnabled("argoHost",ws&&mode==="argo");setEnabled("argoToken",ws&&mode==="argo");setEnabled("directWsHost",ws&&mode==="direct");setEnabled("wsServer",ws);
+  $("originFields").classList.toggle("hidden",!origin);setEnabled("originIPv4",origin);setEnabled("originIPv6",origin);
   $("realityFields").classList.toggle("hidden",!reality);setEnabled("realitySni",reality);
+  $("xhttpFields").classList.toggle("hidden",!p.xhttp);["xhttpEchPublicName","xhttpMode","xhttpPath"].forEach(id=>setEnabled(id,p.xhttp));
+  $("snellFields").classList.toggle("hidden",!p.snell);setEnabled("snellVersion",p.snell);
+  const snellV5=p.snell&&v("snellVersion")==="5";$("snellV5Fields").classList.toggle("hidden",!snellV5);["snellObfsMode","snellObfsHost"].forEach(id=>setEnabled(id,snellV5));
+  const snellV6=p.snell&&v("snellVersion")==="6";$("snellV6Fields").classList.toggle("hidden",!snellV6);setEnabled("snellMode",snellV6);
   $("certFields").classList.toggle("hidden",!cert);setEnabled("certMode",cert);setEnabled("tlsDomain",cert);
-  $("tlsDomainMark").textContent=cf?"与 Zone 相同可留空":"必填";
-  $("tlsDomainMark").className=cf?"mark opt":"mark req";
-  $("cfCertFields").classList.toggle("hidden",!cf);["cfZone","cfToken","cfZoneId","cfEmail"].forEach(id=>setEnabled(id,cf));
+  const cf=cert&&v("certMode")==="cloudflare";$("cfCertFields").classList.toggle("hidden",!cf);["cfZone","cfToken","cfZoneId","cfEmail"].forEach(id=>setEnabled(id,cf));
   $("httpCertHint").classList.toggle("hidden",!cert||v("certMode")!=="http01");
-  const portMap=[["portAnytls","portAnytlsWrap",p.anytls],["portWs","portWsWrap",ws],["portArgo","portArgoWrap",argo],["portSS2022","portSS2022Wrap",p.ss2022],["portReality","portRealityWrap",p.vless_reality],["portNaive","portNaiveWrap",p.naive],["portAnyReality","portAnyRealityWrap",p.anytls_reality]];
-  portMap.forEach(([id,wrap,on])=>{setEnabled(id,on);$(wrap).classList.toggle("hidden",!on);});
-  $("portFields").classList.toggle("hidden",!any);
-  $("warpConfigFields").classList.toggle("hidden",!warp);
-  ["warpDomains","warpPrivateKey","warpAddress4","warpAddress6","warpEndpoint","warpPort","warpReserved"].forEach(id=>setEnabled(id,warp));
-  const portReuseHint="留空优先用上次端口；已移除的节点重装时，历史端口被占用才另选，有没有沿用以终端输出为准。";
-  $("portHint").textContent=portReuseHint+(argo?" Argo 客户端固定用 443；Cloudflare Service URL 应使用终端显示的本机端口。":" NAT VPS 请确认服务商映射的目标端口与本机监听端口一致。");
-  $("selectionHint").textContent=any?`已选择 ${Object.values(p).filter(Boolean).length} 种协议。只显示这些协议需要的参数；隐藏项不会写入配置。`:"请至少选择一种协议。";
-  $("argoHelp").classList.toggle("hidden",!argo);
+  const portMap=[["portAnytls",p.anytls],["portWs",ws],["portReality",p.vless_reality],["portNaive",p.naive],["portAnyReality",p.anytls_reality],["portXhttp",p.xhttp],["portSnell",p.snell]];portMap.forEach(([id,on])=>setEnabled(id,on));
+  $("lPortWs").textContent=ws?(mode==="argo"?"Argo 本机 WS 端口":"WS TLS TCP 端口"):"WS TLS TCP 端口";
+  $("portWs").placeholder=mode==="argo"?"本机随机":"自动：2053 等";
+  $("portHint").textContent=ws&&mode==="argo"?"Argo 模式的 WS 端口仅是 VPS 本机 127.0.0.1 监听端口，不需要 NAT 入站映射；客户端端口固定为 443。其他已启用直连协议仍需要服务商公网端口映射。":"仅已勾选协议的端口输入框可以填写。直连 WS TLS 使用 Cloudflare 橙云时，只能使用 443、2053、2083、2087、2096、8443 等支持的 HTTPS 端口。";
+  $("selectionHint").textContent=Object.values(p).some(Boolean)?`已选择 ${Object.values(p).filter(Boolean).length} 种协议。未选择协议的参数输入框会禁用，不会写入安装配置。`:"请至少选择一种协议。";
 }
-async function copyText(t){try{await navigator.clipboard.writeText(t);alert("已复制到剪贴板。");}catch{const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();const ok=document.execCommand("copy");a.remove();alert(ok?"已复制。":"复制失败，请手动复制。");}}
-function download(name,text,type="text/plain;charset=utf-8"){const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
 function render(){
   syncUI();
-  const status=$("formStatus"),out=$("commandOutput"),buttons=["copyOutput","downloadOutput","exportConfig","downloadBoth"];
-  $("uninstallText").value=UNINSTALL_COMMAND;
-  try{const c=validate(cfgFromForm());out.value="# 安装 / 同步命令（以 root 执行；已有安装会移除未勾选的旧节点）\n# 该命令包含敏感 Token / WARP 私钥，不要公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="本次勾选："+selectedNames(c.protocols)+(c.warp_enabled?"；WARP 域名分流已启用。":"。");buttons.forEach(id=>$(id).disabled=false);}
-  catch(e){out.value="";status.className="status error";status.textContent=e.message;buttons.forEach(id=>$(id).disabled=true);}
+  const status=$("formStatus"),out=$("commandOutput"),copy=$("copyOutput"),down=$("downloadOutput"),exp=$("exportConfig");
+  try{const c=validate(cfgFromForm());out.value="# 配置变化时自动更新；请以 root 登录目标 VPS 执行。\n# 命令含敏感 Token，请勿公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="配置完整，安装命令已自动生成。";[copy,down,exp].forEach(b=>b.disabled=false);updatePreview(c);}
+  catch(e){out.value="";status.className="status error";status.textContent=e.message;[copy,down,exp].forEach(b=>b.disabled=true);updatePreview(null);}
 }
-ids.forEach(id=>{
-  $(id).addEventListener("input",render);
-  $(id).addEventListener("change",()=>{
-    if(id==="argoTunnelName")$(id).value=tunnelName();
-    rememberAddress(id);
-    render();
-  });
-});
-Object.entries(historyFields).forEach(([id,listId])=>{$(id).setAttribute("list",listId);$(id).setAttribute("autocomplete","off");});
-Object.keys(historyValidators).forEach(refreshHistory);
-$("clearHistory").addEventListener("click",()=>{
-  Object.keys(historyValidators).forEach(listId=>{addressHistory[listId]=[];refreshHistory(listId);});
-  try{localStorage.removeItem(historyKey);$("historyStatus").textContent="已清除本地历史。";}
-  catch{$("historyStatus").textContent="已清除当前页面的历史，浏览器存储不可访问。";}
-});
+function updatePreview(c){const p=selected(),rows=[];if(!Object.values(p).some(Boolean)){ $("nodePreview")&&($("nodePreview").textContent="尚未选择协议。");return;}if(p.anytls)rows.push("AnyTLS");if(p.ws_tls)rows.push(v("wsMode")==="argo"?`VLESS WS TLS → ${v("argoHost")||"Argo 主机名待填写"}:443`:`VLESS WS TLS → ${v("directWsHost")||v("tlsDomain")||"TLS 域名待填写"}`);if(p.vless_reality)rows.push("VLESS Reality");if(p.naive)rows.push("NaiveProxy");if(p.anytls_reality)rows.push("AnyTLS + Reality");if(p.xhttp)rows.push(`VLESS XHTTP + ECH → ${v("tlsDomain")||"TLS 域名待填写"} (${v("xhttpMode")||"auto"})`);if(p.snell)rows.push(`Snell v${v("snellVersion")||"5"}`);const el=$("nodePreview");if(el)el.textContent=rows.join("\n");}
+async function copyText(t){try{await navigator.clipboard.writeText(t);alert("已复制到剪贴板。");}catch{const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();const ok=document.execCommand("copy");a.remove();alert(ok?"已复制。":"复制失败，请手动复制。");}}
+function download(name,text,type="text/plain;charset=utf-8"){const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
+ids.forEach(id=>{$(id).addEventListener("input",render);$(id).addEventListener("change",render);});
 $("copyOutput").addEventListener("click",()=>copyText($("commandOutput").value));
 $("downloadOutput").addEventListener("click",()=>download("sing-box-install-command.txt",$("commandOutput").value));
-$("exportConfig").addEventListener("click",()=>{try{const c=validate(cfgFromForm());c.cf_token="";c.argo_token="";c.warp_private_key="";download("sing-box-config-no-secrets.json",JSON.stringify(c,null,2),"application/json");}catch(e){alert(e.message);}});
-$("copyUninstall").addEventListener("click",()=>copyText(UNINSTALL_COMMAND));
-$("downloadBoth").addEventListener("click",()=>download("sing-box-install-and-uninstall-commands.txt","========== INSTALL / 安装命令（单独执行） ==========\n\n"+$("commandOutput").value+"\n\n========== UNINSTALL / 卸载命令（需要卸载时单独执行） ==========\n\n"+UNINSTALL_COMMAND+"\n"));
+$("exportConfig").addEventListener("click",()=>{try{const c=validate(cfgFromForm());c.cf_token="";c.argo_token="";download("sing-box-config-no-token.json",JSON.stringify(c,null,2),"application/json");}catch(e){alert(e.message);}});
+$("copyDirectInstall").addEventListener("click",()=>copyText($("directInstallText").textContent));
+$("copyUninstall").addEventListener("click",()=>copyText($("uninstallText").textContent.trim()));
 render();
 </script>
 </body>
