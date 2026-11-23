@@ -1,8 +1,11 @@
-# 更新记录 v1.0.2
+# 更新记录 v1.0.3
 
-- 根本修复 Snell / XHTTP 增量添加时的交互端口读取：不再通过 `new_port=$(choose_free_added_port)` 在命令替换子 Shell 中读取终端。
-- 端口选择改为当前 Shell 直接读取，并通过 `CHOSEN_PORT` 返回；避免 SSH 终端客户端对命令替换子进程的 stdin/TTY 处理异常。
-- 如果 SSH/终端输入流已关闭，立即取消操作，不会误将 EOF 当作空输入并自动安装随机端口。
-- 保留手动端口范围、协议端口冲突、系统监听冲突检查；留空（正常按 Enter）仍自动分配 10000–65535。
-- XHTTP 和 Snell 共用修复后的交互端口函数；其他协议、现有配置、ECH、Argo Tunnel 不变。
-- 新增端口交互回归测试，覆盖手动输入、自动分配和 EOF 取消。
+- 修复核心问题：每次重建 sing-box `config.json` 时，自动保留不属于 sb-manager 管理的自定义 inbounds / outbounds 和其他顶层配置；SS2022 的端口、method、password 等原始字段不再因添加/删除 Snell 而消失。
+- 对旧配置先执行 JSON 结构校验；旧配置无法解析时停止重建，避免静默覆盖或丢失自定义节点。
+- 覆盖安装仍从现有 `manager.json` 读取已管理协议的凭据与端口；配置合并时保留 SS2022 等自定义协议配置。
+- 新增终端菜单 `23`：全协议终端管理，支持脚本内七种协议的添加、删除和参数修改：AnyTLS、VLESS WS/Argo、VLESS Reality、NaiveProxy、AnyTLS Reality、VLESS XHTTP + ECH、Snell。
+- 新增基础协议的终端增量添加：复用有效证书、自动生成凭据与端口；缺少必要证书时安全拒绝，不覆盖现有配置。
+- 新增凭据/传输参数修改：AnyTLS 密码、WS Path、Reality UUID、Naive 密码、AnyTLS Reality 密码、XHTTP Mode/Path/ECH Public Name、Snell 版本/mode/PSK/UserKey。
+- 所有新增、删除和修改均先生成候选配置并执行 sing-box/Xray 检查；失败时回滚内存参数或保留旧配置。
+- 端口修改继续使用原菜单 `7` / `15`；菜单 `23` 提供完整节点生命周期入口。
+- 新增 `tests/test-config-preservation.sh`，验证 SS2022 inbound 密钥、端口、method、用户自定义 outbound、route 和 DNS 配置在重建后保留。

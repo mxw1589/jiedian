@@ -5,7 +5,7 @@
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=6; selective protocol installation, Argo Tunnel, VLESS XHTTP+ECH and Snell
-# v1.0.2; interactive added-port input is read in the current shell, not command substitution
+# v1.0.3; preserve unmanaged sing-box config (including SS2022) and add unified terminal CRUD
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -1560,6 +1560,17 @@ save_state() {
         warn '无法生成 manager.json；原有管理状态未更改。'
         return 1
     fi
+    # Keep extension keys from older/custom manager state files. Known fields
+    # from the current manager take precedence; unknown user fields survive.
+    if [ -s "$STATE_FILE" ]; then
+        state_merged="$tmp.merge.$$"
+        if ! jq -s '.[1] as $old | .[0] as $new | $old + $new' "$tmp" "$STATE_FILE" > "$state_merged"; then
+            rm -f "$tmp" "$state_merged"
+            warn '无法合并旧 manager.json 扩展字段；原有管理状态未更改。'
+            return 1
+        fi
+        mv -f "$state_merged" "$tmp"
+    fi
     if ! chmod 0600 "$tmp" || ! chown root:root "$tmp" || ! mv "$tmp" "$STATE_FILE"; then
         rm -f "$tmp"
         warn '无法安全写入 manager.json；原有管理状态未更改。'
@@ -1694,6 +1705,31 @@ build_config() {
         warn '无法生成 sing-box 配置；原配置未更改。'
         return 1
     }
+    # Preserve inbounds/outbounds not owned by this manager. This is critical
+    # for user-added protocols such as Shadowsocks 2022: rebuilding a managed
+    # Snell/AnyTLS/etc. inbound must never silently erase unrelated entries.
+    if [ -s "$CONFIG_FILE" ]; then
+        if ! jq -e 'type == "object" and (.inbounds|type == "array")' "$CONFIG_FILE" >/dev/null 2>&1; then
+            rm -f "$tmp"
+            warn '现有 config.json 无法解析；为防止丢失 SS2022 或其他自定义节点，已停止重建。请先修复原配置。'
+            return 1
+        fi
+        merged="$tmp.merge.$$"
+        if ! jq -s '
+          .[0] as $new | .[1] as $old |
+          (["anytls-in","vless-ws-argo-in","vless-ws-tls-in","vless-reality-in","naive-in","anytls-reality-in","snell-in"] as $managed |
+           $new + {
+             inbounds: (($new.inbounds // []) + [($old.inbounds // [])[] | select((.tag // "") as $t | ($managed | index($t)) == null)]),
+             outbounds: (($new.outbounds // []) + [($old.outbounds // [])[] | select((.tag // "") != "direct")])
+           } + (($old | to_entries | map(select(.key as $k | (["log","inbounds","outbounds"] | index($k)) == null and ($new | has($k) | not))) | from_entries))
+          )
+        ' "$tmp" "$CONFIG_FILE" > "$merged"; then
+            rm -f "$tmp" "$merged"
+            warn '合并现有自定义协议配置失败；原配置未更改。'
+            return 1
+        fi
+        mv -f "$merged" "$tmp"
+    fi
     if ! "$SB_BIN" check -c "$tmp"; then
         rm -f "$tmp"
         warn 'sing-box 配置检查失败，原配置未更改。'
@@ -3336,6 +3372,168 @@ manage_snell_node() {
     msg "Snell 已安装。请放行 VPS / 云安全组 / NAT 的 TCP $SNELL_PORT。"
 }
 
+# Unified terminal management for every protocol implemented by this script.
+# Add/remove is transactional via build_config(); credentials are retained in
+# manager.json when a node is disabled, and unrelated config entries survive.
+protocol_flag() {
+    case "$1" in
+        1) printf '%s' "$ENABLE_ANYTLS" ;; 2) printf '%s' "$ENABLE_WS_TLS" ;;
+        3) printf '%s' "$ENABLE_VLESS_REALITY" ;; 4) printf '%s' "$ENABLE_NAIVE" ;;
+        5) printf '%s' "$ENABLE_ANYTLS_REALITY" ;; 6) printf '%s' "$ENABLE_XHTTP" ;;
+        7) printf '%s' "$ENABLE_SNELL" ;; esac
+}
+protocol_name() {
+    case "$1" in 1) printf AnyTLS ;; 2) printf 'VLESS WS' ;; 3) printf 'VLESS Reality' ;; 4) printf NaiveProxy ;; 5) printf 'AnyTLS Reality' ;; 6) printf 'VLESS XHTTP ECH' ;; 7) printf Snell ;; esac
+}
+
+add_base_protocol() {
+    kind=$1
+    choose_free_added_port || { warn '端口输入中断或无可用端口；已取消。'; return 1; }
+    p=$CHOSEN_PORT
+    case "$kind" in
+      1)
+        [ -s "$CERT_FILE" ] && [ -s "$KEY_FILE" ] || { warn 'AnyTLS 需要有效 TLS 证书；请先完成证书配置。'; return 1; }
+        ANYTLS_PORT=$p; ANYTLS_PASSWORD=${ANYTLS_PASSWORD:-$(openssl rand -hex 24)}; ENABLE_ANYTLS=1 ;;
+      2)
+        if [ "$WS_MODE" = direct ]; then [ -s "$CERT_FILE" ] && [ -s "$KEY_FILE" ] || { warn '直连 WS TLS 需要有效证书；请先完成证书配置。'; return 1; }; fi
+        WS_PORT=$p; WS_UUID=${WS_UUID:-$($SB_BIN generate uuid)}; WS_PATH=${WS_PATH:-"/ws-$(openssl rand -hex 8)"}; ENABLE_WS_TLS=1 ;;
+      3)
+        REALITY_PORT=$p
+        REALITY_UUID=${REALITY_UUID:-$($SB_BIN generate uuid)}
+        if [ -z "$REALITY_PRIVATE" ] || [ -z "$REALITY_PUBLIC" ]; then
+          kp=$($SB_BIN generate reality-keypair) || return 1
+          REALITY_PRIVATE=$(printf '%s\n' "$kp" | awk '/PrivateKey/ {print $2}')
+          REALITY_PUBLIC=$(printf '%s\n' "$kp" | awk '/PublicKey/ {print $2}')
+        fi
+        REALITY_SID=${REALITY_SID:-$(openssl rand -hex 4)}
+        ENABLE_VLESS_REALITY=1 ;;
+      4)
+        [ -s "$CERT_FILE" ] && [ -s "$KEY_FILE" ] || { warn 'NaiveProxy 需要有效 TLS 证书；请先完成证书配置。'; return 1; }
+        NAIVE_PORT=$p; NAIVE_USERNAME=${NAIVE_USERNAME:-"naive-$(openssl rand -hex 6)"}; NAIVE_PASSWORD=${NAIVE_PASSWORD:-$(openssl rand -hex 24)}; ENABLE_NAIVE=1 ;;
+      5)
+        ANYREALITY_PORT=$p; ANYREALITY_PASSWORD=${ANYREALITY_PASSWORD:-$(openssl rand -hex 24)}
+        if [ -z "$ANYREALITY_PRIVATE" ] || [ -z "$ANYREALITY_PUBLIC" ]; then
+          kp=$($SB_BIN generate reality-keypair) || return 1
+          ANYREALITY_PRIVATE=$(printf '%s\n' "$kp" | awk '/PrivateKey/ {print $2}')
+          ANYREALITY_PUBLIC=$(printf '%s\n' "$kp" | awk '/PublicKey/ {print $2}')
+        fi
+        ANYREALITY_SID=${ANYREALITY_SID:-$(openssl rand -hex 4)}
+        ENABLE_ANYTLS_REALITY=1 ;;
+      *) return 1 ;;
+    esac
+    if ! build_config; then
+      case "$kind" in 1) ENABLE_ANYTLS=0 ;; 2) ENABLE_WS_TLS=0 ;; 3) ENABLE_VLESS_REALITY=0 ;; 4) ENABLE_NAIVE=0 ;; 5) ENABLE_ANYTLS_REALITY=0 ;; esac
+      return 1
+    fi
+    show_nodes
+    msg "$(protocol_name "$kind") 已添加；端口 $p/tcp。请检查防火墙和 NAT 映射。"
+}
+
+remove_base_protocol() {
+    kind=$1
+    case "$kind" in
+      1) old=$ENABLE_ANYTLS; ENABLE_ANYTLS=0 ;;
+      2) old=$ENABLE_WS_TLS; ENABLE_WS_TLS=0 ;;
+      3) old=$ENABLE_VLESS_REALITY; ENABLE_VLESS_REALITY=0 ;;
+      4) old=$ENABLE_NAIVE; ENABLE_NAIVE=0 ;;
+      5) old=$ENABLE_ANYTLS_REALITY; ENABLE_ANYTLS_REALITY=0 ;;
+    esac
+    [ "$old" = 1 ] || { warn "$(protocol_name "$kind") 当前未安装。"; return 0; }
+    ask_value "确认移除 $(protocol_name "$kind")？输入 yes 确认" no
+    [ "$REPLY" = yes ] || { case "$kind" in 1) ENABLE_ANYTLS=1 ;; 2) ENABLE_WS_TLS=1 ;; 3) ENABLE_VLESS_REALITY=1 ;; 4) ENABLE_NAIVE=1 ;; 5) ENABLE_ANYTLS_REALITY=1 ;; esac; msg '已取消。'; return 0; }
+    if ! build_config; then
+      case "$kind" in 1) ENABLE_ANYTLS=1 ;; 2) ENABLE_WS_TLS=1 ;; 3) ENABLE_VLESS_REALITY=1 ;; 4) ENABLE_NAIVE=1 ;; 5) ENABLE_ANYTLS_REALITY=1 ;; esac
+      return 1
+    fi
+    msg "$(protocol_name "$kind") 已移除；其他节点和自定义入站保持不变。"
+}
+
+modify_base_protocol() {
+    kind=$1
+    old_anytls_password=$ANYTLS_PASSWORD; old_ws_path=$WS_PATH; old_reality_uuid=$REALITY_UUID
+    old_naive_password=$NAIVE_PASSWORD; old_anyreality_password=$ANYREALITY_PASSWORD
+    case "$kind" in
+      1) [ "$ENABLE_ANYTLS" = 1 ] || { warn 'AnyTLS 未安装。'; return 1; }; ask_value 'AnyTLS 密码（留空保持不变；输入 rotate 自动生成）' ''; v=$REPLY; [ "$v" = rotate ] && ANYTLS_PASSWORD=$(openssl rand -hex 24) || { [ -z "$v" ] || ANYTLS_PASSWORD=$v; } ;;
+      2) [ "$ENABLE_WS_TLS" = 1 ] || { warn 'VLESS WS 未安装。'; return 1; }; ask_value 'WS Path（留空保持不变；输入 rotate 自动生成）' ''; v=$REPLY; [ "$v" = rotate ] && WS_PATH="/ws-$(openssl rand -hex 8)" || { [ -z "$v" ] || WS_PATH=$v; } ;;
+      3) [ "$ENABLE_VLESS_REALITY" = 1 ] || { warn 'VLESS Reality 未安装。'; return 1; }; ask_value 'Reality UUID（留空保持不变；输入 rotate 自动生成）' ''; v=$REPLY; [ "$v" = rotate ] && REALITY_UUID=$($SB_BIN generate uuid) || { [ -z "$v" ] || REALITY_UUID=$v; } ;;
+      4) [ "$ENABLE_NAIVE" = 1 ] || { warn 'NaiveProxy 未安装。'; return 1; }; ask_value 'NaiveProxy 密码（留空保持不变；输入 rotate 自动生成）' ''; v=$REPLY; [ "$v" = rotate ] && NAIVE_PASSWORD=$(openssl rand -hex 24) || { [ -z "$v" ] || NAIVE_PASSWORD=$v; } ;;
+      5) [ "$ENABLE_ANYTLS_REALITY" = 1 ] || { warn 'AnyTLS Reality 未安装。'; return 1; }; ask_value 'AnyTLS Reality 密码（留空保持不变；输入 rotate 自动生成）' ''; v=$REPLY; [ "$v" = rotate ] && ANYREALITY_PASSWORD=$(openssl rand -hex 24) || { [ -z "$v" ] || ANYREALITY_PASSWORD=$v; } ;;
+    esac
+    if build_config; then save_state && show_nodes && msg "$(protocol_name "$kind") 参数已更新。"; else
+      ANYTLS_PASSWORD=$old_anytls_password; WS_PATH=$old_ws_path; REALITY_UUID=$old_reality_uuid
+      NAIVE_PASSWORD=$old_naive_password; ANYREALITY_PASSWORD=$old_anyreality_password
+      warn '修改失败，配置已回滚。'; return 1
+    fi
+}
+
+modify_xhttp_node() {
+    [ "$ENABLE_XHTTP" = 1 ] || { warn 'XHTTP 未安装。'; return 1; }
+    old_mode=$XHTTP_MODE; old_path=$XHTTP_PATH; old_public=$XHTTP_ECH_PUBLIC_NAME
+    ask_value 'XHTTP Mode（auto/packet-up/stream-up/stream-one；留空保持）' "$XHTTP_MODE"
+    v=$(trim_value "$REPLY")
+    case "$v" in auto|packet-up|stream-up|stream-one) XHTTP_MODE=$v ;; *) warn 'XHTTP Mode 无效。'; return 1 ;; esac
+    ask_value 'XHTTP Path（留空保持；输入 rotate 自动生成）' "$XHTTP_PATH"
+    v=$(trim_value "$REPLY")
+    if [ "$v" = rotate ]; then XHTTP_PATH="/xhttp-$(openssl rand -hex 10)"; elif [ -n "$v" ]; then case "$v" in /*) XHTTP_PATH=$v ;; *) warn 'XHTTP Path 必须以 / 开头。'; return 1 ;; esac; fi
+    ask_value 'ECH Public Name（留空保持）' "$XHTTP_ECH_PUBLIC_NAME"
+    v=$(trim_value "$REPLY")
+    valid_domain "$v" || { warn 'ECH Public Name 格式无效。'; return 1; }
+    XHTTP_ECH_PUBLIC_NAME=$v
+    if ! build_xray_config || ! save_state; then
+      XHTTP_MODE=$old_mode; XHTTP_PATH=$old_path; XHTTP_ECH_PUBLIC_NAME=$old_public
+      build_xray_config || true
+      warn 'XHTTP 修改失败，已恢复原参数。'; return 1
+    fi
+    write_xhttp_client_json || warn 'XHTTP 客户端 JSON 更新失败。'
+    show_nodes
+}
+
+manage_all_protocols() {
+    while :; do
+      printf '\n========== 全协议终端管理（添加 / 删除 / 修改） ==========\n'
+      for n in 1 2 3 4 5 6 7; do
+        f=$(protocol_flag "$n"); [ "$f" = 1 ] && st=已安装 || st=未安装
+        printf '%s. %-22s %s\n' "$n" "$(protocol_name "$n")" "$st"
+      done
+      printf '0. 返回\n选择协议：'
+      IFS= read -r k || return 0
+      case "$k" in 1|2|3|4|5|6|7) ;; 0) return 0 ;; *) warn '无效选择。'; continue ;; esac
+      f=$(protocol_flag "$k")
+      if [ "$f" = 1 ]; then
+        printf '1. 修改参数 / 凭据\n2. 删除节点\n0. 返回\n选择操作：'
+        IFS= read -r op || return 0
+        case "$op" in
+          1) case "$k" in 1|2|3|4|5) modify_base_protocol "$k" ;; 6) modify_xhttp_node ;; 7) modify_snell_node ;; esac ;;
+          2) case "$k" in 1|2|3|4|5) remove_base_protocol "$k" ;; 6) remove_xhttp_node ;; 7) remove_snell_node ;; esac ;;
+          0) : ;; *) warn '无效操作。' ;;
+        esac
+      else
+        case "$k" in 1|2|3|4|5) add_base_protocol "$k" ;; 6) manage_xhttp_node ;; 7) manage_snell_node ;; esac
+      fi
+    done
+}
+
+modify_snell_node() {
+    [ "$ENABLE_SNELL" = 1 ] || return 1
+    old_snell_version=$SNELL_VERSION; old_snell_mode=$SNELL_MODE; old_snell_obfs=$SNELL_OBFS_MODE
+    old_snell_psk=$SNELL_PSK; old_snell_userkey=$SNELL_USERKEY
+    printf '当前 Snell v%s，mode=%s，obfs=%s\n' "$SNELL_VERSION" "$SNELL_MODE" "$SNELL_OBFS_MODE"
+    ask_value 'Snell 版本（5/6；留空保持不变）' "$SNELL_VERSION"
+    v=$(trim_value "$REPLY")
+    case "$v" in
+      5) SNELL_VERSION=5; ask_value 'Snell v5 obfs（http/none）' "$SNELL_OBFS_MODE"; SNELL_OBFS_MODE=$(trim_value "$REPLY"); case "$SNELL_OBFS_MODE" in http|none) ;; *) warn '无效 obfs。'; return 1 ;; esac ;;
+      6) SNELL_VERSION=6; ask_value 'Snell v6 mode（default/unshaped/unsafe-raw）' "$SNELL_MODE"; SNELL_MODE=$(trim_value "$REPLY"); case "$SNELL_MODE" in default|unshaped|unsafe-raw) ;; *) warn '无效 mode。'; return 1 ;; esac; SNELL_OBFS_MODE=none ;;
+      '') : ;; *) warn '版本只能是 5 或 6。'; return 1 ;;
+    esac
+    ask_value 'PSK（留空保持不变；输入 rotate 重新生成）' ''; v=$REPLY; [ "$v" = rotate ] && SNELL_PSK=$(openssl rand -hex 32) || { [ -z "$v" ] || SNELL_PSK=$v; }
+    ask_value 'UserKey（留空保持不变；输入 rotate 重新生成）' ''; v=$REPLY; [ "$v" = rotate ] && SNELL_USERKEY=$(openssl rand -hex 24) || { [ -z "$v" ] || SNELL_USERKEY=$v; }
+    if build_config; then write_snell_client_json || true; show_nodes; else
+      SNELL_VERSION=$old_snell_version; SNELL_MODE=$old_snell_mode; SNELL_OBFS_MODE=$old_snell_obfs
+      SNELL_PSK=$old_snell_psk; SNELL_USERKEY=$old_snell_userkey
+      warn 'Snell 修改失败，已恢复原参数。'; return 1
+    fi
+}
+
 rotate_xhttp_ech_keys() {
     [ "$ENABLE_XHTTP" = 1 ] || { warn '当前未安装 XHTTP。'; return 1; }
     backup=$(mktemp -d) || return 1
@@ -3402,6 +3600,7 @@ menu() {
         printf '20. 重新生成 XHTTP ECH 密钥（会更新客户端配置）\n'
         printf '21. 查看 Xray 服务状态\n'
         printf '22. 查看 Xray 最近日志\n'
+        printf '23. 全协议终端管理（添加 / 删除 / 修改）\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -3428,6 +3627,7 @@ menu() {
             20) rotate_xhttp_ech_keys ;;
             21) xray_service_status ;;
             22) [ "$ENABLE_XHTTP" = 1 ] && { if [ "$SERVICE_KIND" = systemd ]; then journalctl -u "$XRAY_SERVICE" -n 80 --no-pager || true; else tail -n 80 /var/log/messages 2>/dev/null | grep -i xray || true; fi; } || warn '当前未安装 XHTTP/Xray。' ;;
+            23) manage_all_protocols ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac

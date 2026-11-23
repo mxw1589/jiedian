@@ -4,9 +4,11 @@
 
 # sing-box / Xray 多协议节点选择性安装与管理工具
 
-> **v1.0.2 修复说明：** Snell / XHTTP 添加节点时，端口输入不再放在命令替换子 Shell 中执行，而是在当前交互 Shell 读取。若 SSH 输入流中断，会安全取消，不会把 EOF 当作空输入而误触发自动分配。留空（正常按 Enter）才会自动分配端口。
+> **v1.0.3 修复说明：** 自定义 sing-box 配置（包括 SS2022）在增删改脚本托管协议时会自动保留；新增终端菜单 23，支持脚本全部七种协议的添加、删除和参数修改。
 
-适用于 Debian / Ubuntu / Alpine 的 sing-box + Xray 安装脚本和静态网页配置面板。无需安装全部协议；只勾选需要的协议，网页会根据选择启用相关字段、禁用无关字段，并在填写完成后自动更新一键安装命令。
+**v1.0.2 修复说明：** Snell / XHTTP 添加节点时，端口输入不再放在命令替换子 Shell 中执行，而是在当前交互 Shell 读取。若 SSH 输入流中断，会安全取消，不会把 EOF 当作空输入而误触发自动分配。留空（正常按 Enter）才会自动分配端口。
+
+适用于 Debian / Ubuntu / Alpine 的 sing-box + Xray 安装脚本和静态网页配置面板。当前版本 v1.0.3。无需安装全部协议；只勾选需要的协议，网页会根据选择启用相关字段、禁用无关字段，并在填写完成后自动更新一键安装命令。
 
 ## 项目文件
 
@@ -21,6 +23,7 @@ jiedian/
 - `README.md`：安装、Argo Tunnel 配置、管理和卸载说明。
 - `sb-manager-debian-alpine.sh`：Debian / Ubuntu / Alpine 安装及管理脚本（sing-box + 独立 Xray-core）。
 - `tests/test-added-port-input.sh`：端口交互回归测试（手动端口、自动分配、EOF 安全取消）。
+- `tests/test-config-preservation.sh`：配置合并回归测试（SS2022、outbounds、route、DNS 自定义配置保留）。
 
 ## 功能简介
 
@@ -65,6 +68,8 @@ jiedian/
 - 支持 IPv4 / IPv6 源站地址自动检测；Argo-only 安装不需要填写源站公网 IP。
 - 端口冲突时自动更换可用端口；配置检查或服务重启失败时尝试回滚。
 - 管理菜单支持单个协议修改端口、批量修改端口、查看节点、日志、固定 Tunnel 状态、Tunnel Token 轮换、BBR 状态和卸载。
+- 菜单 `23` 提供统一终端协议管理：对脚本支持的 AnyTLS、VLESS WS/Argo、VLESS Reality、NaiveProxy、AnyTLS Reality、VLESS XHTTP + ECH、Snell 执行增量添加、删除和参数修改。
+- 每次重建 sing-box 配置时保留所有非 sb-manager 管理的 inbound/outbound 和额外顶层配置；例如自定义 SS2022 入站的端口、method、password 不会因添加/删除 Snell 而被清除。若旧 config.json 无法解析，脚本会停止操作而不是覆盖。
 - `sb-manager` 可在已有安装上增量添加 / 移除 XHTTP + ECH 和 Snell，不会重置现有协议凭据。
 - XHTTP ECH Server Keys 和客户端 ECH Config List 分开保存；ECH 轮换后会重新生成客户端配置。
 
@@ -122,7 +127,50 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
 
 网页命令会携带 Base64 编码的 JSON 配置。Base64 不是加密；命令中可能包含 Cloudflare DNS API Token 或 Tunnel Token。不要公开分享命令、截图或提交到 GitHub。
 
-如果 VPS 已经存在本脚本的有效安装，网页安装入口会执行覆盖升级并保留原有节点凭据和配置，不会使用网页新参数覆盖现有节点。已安装节点需要更换固定 Tunnel Token 时，请使用管理菜单 `17`；需要在已有服务器上增量添加 XHTTP / Snell 时，请使用管理菜单 `18` / `19`。
+如果 VPS 已经存在本脚本的有效安装，网页安装入口会执行覆盖升级并保留原有节点凭据和配置，不会使用网页新参数覆盖现有节点。已安装节点需要更换固定 Tunnel Token 时，请使用管理菜单 `17`；XHTTP / Snell 可使用菜单 `18` / `19`，也可从菜单 `23` 统一管理全部脚本支持的协议。
+
+## 三、v1.0.3：配置保留与终端全协议管理
+
+### SS2022 和自定义配置保留
+
+- 添加、删除或修改 Snell / 其他脚本协议时，脚本会把当前 `config.json` 中非 sb-manager 管理的 inbound 原样合并回候选配置。因此手动添加的 Shadowsocks 2022 inbound（包括 `listen_port`、`method`、`password`、用户字段等）不会被覆盖。
+- 非管理的 outbounds，以及 `route`、`dns` 等其他顶层配置也会保留。
+- 旧配置中的脚本托管 inbound 会由当前管理器生成的版本替换，避免重复监听或重复 tag。
+- 如果旧 `config.json` 不是有效 JSON，管理器会停止修改并保留原文件，不会继续生成一个缺少自定义节点的新配置。
+- `manager.json` 中当前版本不认识的扩展字段也会保留；当前管理器拥有的字段以本次配置为准。
+- SS2022 本身目前不是此脚本的托管协议，故不会在菜单 23 中增删改；但会被当作自定义 inbound 保留。请继续通过你原来的方式管理 SS2022。
+
+### 终端菜单 23：全协议添加 / 删除 / 修改
+
+执行 `/usr/local/sbin/sb-manager`，选择 `23`，然后选择协议。脚本支持的七种协议均可通过终端管理：
+
+| 协议 | 添加 | 删除 | 修改 |
+|---|---|---|---|
+| AnyTLS | 自动生成凭据和端口；复用已有 TLS 证书 | 支持 | 修改密码；端口用菜单 7 / 15 |
+| VLESS + WS / Argo | 自动生成 UUID、Path 和端口；直连模式复用证书 | 支持 | 修改 Path；端口用菜单 7 / 15 |
+| VLESS + Reality | 自动生成 UUID、Reality 密钥和端口 | 支持 | 修改 UUID；端口用菜单 7 / 15 |
+| NaiveProxy | 自动生成用户名、密码和端口；复用已有 TLS 证书 | 支持 | 修改密码；端口用菜单 7 / 15 |
+| AnyTLS + Reality | 自动生成密码、Reality 密钥和端口 | 支持 | 修改密码；端口用菜单 7 / 15 |
+| VLESS XHTTP + ECH | 调用独立 Xray 安装流程 | 支持 | 修改 XHTTP Mode / Path / ECH Public Name，或轮换 ECH Key |
+| Snell v5 / v6 | 自动生成 PSK、UserKey 和端口 | 支持 | 修改版本、混淆 / traffic shaping、PSK、UserKey |
+
+添加时如果端口输入留空，会自动选择空闲端口。需要 TLS 证书的协议在证书不存在时会拒绝添加，不会伪造证书或破坏现有节点。每次变更均先做配置校验；校验或服务重启失败时回滚原配置。
+
+**部署 v1.0.3 脚本：** 将 ZIP 内 `sb-manager-debian-alpine.sh` 上传并覆盖 GitHub 仓库同名文件后，在 VPS 执行：
+
+```bash
+curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh' -o /tmp/sb-manager.new
+sh -n /tmp/sb-manager.new || exit 1
+install -m 700 /tmp/sb-manager.new /usr/local/sbin/sb-manager
+/usr/local/sbin/sb-manager
+```
+
+也可以先将现有配置备份：
+
+```bash
+cp -a /etc/sing-box/config.json /etc/sing-box/config.json.before-v1.0.3
+cp -a /etc/sing-box/manager.json /etc/sing-box/manager.json.before-v1.0.3
+```
 
 ## 三、VLESS + XHTTP + ECH 与 Snell
 
@@ -162,7 +210,7 @@ Snell 入站由 sing-box `1.14.0` 或更新版本提供，不会安装第二个 
 - sing-box 客户端 outbound 配置片段保存在 `/etc/sing-box/snell-client.json`。将该 outbound 对象合并到客户端 sing-box 配置的 `outbounds` 数组中。
 - Snell 需要公网 TCP 入站；NAT VPS 需要配置服务商端口映射及云安全组 / 系统防火墙。
 
-### 3. 在已有 sb-manager 上增量添加
+### 3. 在已有 sb-manager 上增量添加和管理
 
 运行：
 
@@ -175,6 +223,9 @@ Snell 入站由 sing-box `1.14.0` 或更新版本提供，不会安装第二个 
 - `20`：重新生成 XHTTP ECH 密钥，并更新客户端 JSON。轮换后旧 ECH Config 不再匹配，必须重新导入客户端配置。
 - `21`：查看 Xray 服务状态。
 - `22`：查看 Xray 最近日志。
+- `23`：统一管理全部七种脚本支持的协议。选择协议后，已安装节点可修改参数或删除；未安装节点可添加。基础 AnyTLS、VLESS WS、VLESS Reality、NaiveProxy、AnyTLS Reality 会自动生成凭据；需要证书的协议会复用已有证书，证书缺失时拒绝添加并提示先完成证书配置。XHTTP 和 Snell 调用各自完整的安装/删除/修改流程。
+
+修改端口仍使用菜单 `7`（单节点）或 `15`（批量）。`rotate` 可在支持的凭据输入项中重新生成随机凭据。
 
 添加 XHTTP 时，如果当前已有匹配的 TLS 证书，会优先复用；否则会引导选择 Cloudflare DNS-01、HTTP-01 或手动证书。添加 Snell 时会检查 sing-box 版本，不足时提示升级。
 
