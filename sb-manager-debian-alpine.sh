@@ -3186,8 +3186,12 @@ configure_xhttp_certificate() {
 }
 
 choose_free_added_port() {
-    ask_value '新节点 TCP 端口（留空自动分配 10000–65535）' ''
-    requested=$(normalize_optional_port "$REPLY" '新节点') || return 1
+    # This function is called through command substitution (new_port=$(...)).
+    # Keep the interactive prompt on stderr so it remains visible and does not
+    # get concatenated into the captured port value on stdout.
+    printf '新节点 TCP 端口（留空自动分配 10000–65535）: ' >&2
+    IFS= read -r requested_input || requested_input=""
+    requested=$(normalize_optional_port "$requested_input" '新节点') || return 1
     other="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT"
     if [ -n "$requested" ]; then
         case " $other " in *" $requested "*) warn '该端口已被本脚本其他节点占用。'; return 1 ;; esac
