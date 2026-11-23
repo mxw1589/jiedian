@@ -4,11 +4,11 @@
 
 # sing-box / Xray 多协议节点选择性安装与管理工具
 
-> **v1.0.4 修复说明：** SS2022 成为一等托管协议，支持网页选择、端口同栏填写、终端增删改和密码轮换；接管已有 SS2022 时优先保留端口、method、password。每个协议端口输入框已移动到协议选择项右侧。Alpine / 官方 sing-box 版本识别增加兼容解析和失败诊断。
+> **v1.0.6 修复说明：** SS2022 成为一等托管协议，支持网页选择、端口同栏填写、终端增删改和密码轮换；接管已有 SS2022 时优先保留端口、method、password。每个协议端口输入框已移动到协议选择项右侧。Alpine / 官方 sing-box 版本识别增加兼容解析和失败诊断。
 
 **v1.0.2 修复说明：** Snell / XHTTP 添加节点时，端口输入不再放在命令替换子 Shell 中执行，而是在当前交互 Shell 读取。若 SSH 输入流中断，会安全取消，不会把 EOF 当作空输入而误触发自动分配。留空（正常按 Enter）才会自动分配端口。
 
-适用于 Debian / Ubuntu / Alpine 的 sing-box + Xray 安装脚本和静态网页配置面板。当前版本 v1.0.4。无需安装全部协议；只勾选需要的协议，网页会根据选择启用相关字段、禁用无关字段，并在填写完成后自动更新一键安装命令。
+适用于 Debian / Ubuntu / Alpine 的 sing-box + Xray 安装脚本和静态网页配置面板。当前版本 v1.0.6。无需安装全部协议；只勾选需要的协议，网页会根据选择启用相关字段、禁用无关字段，并在填写完成后自动更新一键安装命令。
 
 ## 项目文件
 
@@ -58,7 +58,7 @@ jiedian/
 ### 服务端脚本
 
 - 支持 Debian / Ubuntu 和 Alpine，使用 systemd 或 OpenRC。
-- Alpine 仓库版本低于 NaiveProxy 所需的 sing-box `1.13.0` 时，自动尝试官方 Linux 发布版；选择 Snell 时要求 sing-box `1.14.0` 或更新版本。
+- Debian / Ubuntu 使用 SagerNet 官方 APT 源安装/升级 sing-box；Alpine 直接使用 SagerNet 官方 GitHub Releases 最新稳定版。项目最低要求 sing-box `1.13.0`，选择 Snell 时要求 `1.14.0` 或更新版本。
 - Snell v5 / v6 由 sing-box 原生 inbound 提供，PSK 和 UserKey 在服务器本机生成。
 - Shadowsocks 2022 由 sing-box 原生 shadowsocks inbound 提供，支持 `2022-blake3-aes-128-gcm` 和 `2022-blake3-aes-256-gcm`；密码在服务器生成并以 0600 权限保存在 manager.json。
 - VLESS XHTTP + ECH 使用独立 Xray-core，独立配置、服务、日志和 ECH 密钥；不会把 XHTTP 伪装成 sing-box WS。
@@ -75,6 +75,43 @@ jiedian/
 - 每次重建 sing-box 配置时保留所有非 sb-manager 管理的 inbound/outbound 和额外顶层配置；例如自定义 SS2022 入站的端口、method、password 不会因添加/删除 Snell 而被清除。通过终端首次接管单个旧 SS2022 入站时，会导入原端口、method 和密码，避免重复创建。若旧 config.json 无法解析，脚本会停止操作而不是覆盖。
 - `sb-manager` 可在已有安装上增量添加 / 移除 XHTTP + ECH 和 Snell，不会重置现有协议凭据。
 - XHTTP ECH Server Keys 和客户端 ECH Config List 分开保存；ECH 轮换后会重新生成客户端配置。
+
+## 网页生成命令会自动安装对应协议核心
+
+无需先手动执行 `prepare-core`。网页生成的一键命令会自动完成两个阶段：
+
+1. **核心阶段**：读取本次勾选的协议，安装/升级 sing-box、系统依赖和 cron/cronie；若勾选 VLESS + XHTTP + ECH，则同时安装独立 Xray-core。
+2. **协议阶段**：核心版本检查通过后，再申请/检查证书、生成协议配置、写入节点信息并启动服务。
+
+生成命令执行期间会显示“第一阶段：预装本次所选协议的核心”和“第二阶段：安装证书、协议配置和节点服务”。任一核心安装或版本检查失败都会停止，不会继续写入新协议配置。原有手动 `prepare-core` 命令仍可用于提前单独准备环境。
+
+## 核心前置环境分阶段安装（推荐）
+
+如果你希望先把所需核心和系统依赖安装好，再通过网页命令部署协议，可以先执行核心预装阶段。该阶段不会创建代理入站，也不会覆盖现有 `config.json` / `manager.json`。
+
+**仅预装 sing-box 和系统依赖：**
+
+```bash
+curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh' -o /tmp/sb-manager-debian-alpine.sh
+sh -n /tmp/sb-manager-debian-alpine.sh || exit 1
+sh /tmp/sb-manager-debian-alpine.sh prepare-core
+```
+
+**如果后续还要部署 VLESS + XHTTP + ECH，同时预装 Xray-core：**
+
+```bash
+sh /tmp/sb-manager-debian-alpine.sh prepare-core --xhttp
+```
+
+核心预装行为：
+
+- Debian / Ubuntu：安装基础依赖、cron，并配置 SagerNet 官方 APT 源，安装/升级该源当前最新稳定版 sing-box。
+- Alpine：安装基础依赖、cronie，并从 SagerNet 官方 GitHub Releases 获取最新稳定版 sing-box 二进制，避免旧 APK 包导致 NaiveProxy / Snell 版本不足。
+- `--xhttp`：额外下载并安装 Xray-core 官方最新稳定版；此阶段不启动 Xray 服务、不创建节点配置。
+- 安装后会显示 sing-box 版本和实际二进制路径。版本解析失败或低于项目最低要求时立即停止，不会继续写入协议配置。
+- cron / cronie 会被安装并启用，供后续 acme.sh 自动续期使用。
+
+核心预装成功后，再打开网页选择协议并运行网页生成的安装命令。正式安装阶段会再次检查核心版本和依赖；已安装的最新版会复用或按官方源升级，然后才生成证书、节点配置和服务。
 
 ## 一、不通过 HTML 直接安装
 
@@ -132,7 +169,7 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
 
 如果 VPS 已经存在本脚本的有效安装，网页安装入口会执行覆盖升级并保留原有节点凭据和配置，不会使用网页新参数覆盖现有节点。已安装节点需要更换固定 Tunnel Token 时，请使用管理菜单 `17`；XHTTP / Snell 可使用菜单 `18` / `19`，也可从菜单 `23` 统一管理全部脚本支持的协议。
 
-## 三、v1.0.4：SS2022 托管与端口界面调整
+## 三、v1.0.4：SS2022 托管与端口界面调整（历史版本说明）
 
 ### SS2022 和自定义配置保留
 
@@ -160,7 +197,7 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
 
 添加时如果端口输入留空，会自动选择空闲端口。网页中每种协议的端口输入框均放在该协议选择项右侧，不再需要滚动到独立端口区域。需要 TLS 证书的协议在证书不存在时会拒绝添加，不会伪造证书或破坏现有节点。每次变更均先做配置校验；校验或服务重启失败时回滚原配置。
 
-**部署 v1.0.4 脚本：** 将 ZIP 内 `sb-manager-debian-alpine.sh` 上传并覆盖 GitHub 仓库同名文件后，在 VPS 执行：
+**部署 v1.0.6 脚本：** 将 ZIP 内 `sb-manager-debian-alpine.sh` 上传并覆盖 GitHub 仓库同名文件后，在 VPS 执行：
 
 ```bash
 curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh' -o /tmp/sb-manager.new
@@ -172,8 +209,8 @@ install -m 700 /tmp/sb-manager.new /usr/local/sbin/sb-manager
 也可以先将现有配置备份：
 
 ```bash
-cp -a /etc/sing-box/config.json /etc/sing-box/config.json.before-v1.0.4
-cp -a /etc/sing-box/manager.json /etc/sing-box/manager.json.before-v1.0.4
+cp -a /etc/sing-box/config.json /etc/sing-box/config.json.before-v1.0.6
+cp -a /etc/sing-box/manager.json /etc/sing-box/manager.json.before-v1.0.6
 ```
 
 ## 三、VLESS + XHTTP + ECH 与 Snell

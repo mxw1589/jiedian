@@ -5,7 +5,7 @@
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=8; selective protocol installation, Argo Tunnel, VLESS XHTTP+ECH, Snell and SS2022
-# v1.0.4; first-class SS2022 management, inline protocol ports, preserve existing nodes and Alpine version parsing
+# v1.0.6; generated one-command installer preinstalls protocol-specific cores before protocol setup
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -709,17 +709,10 @@ sing_box_version_from() {
     candidate_bin=$1
     [ -x "$candidate_bin" ] || return 1
     version_output=$("$candidate_bin" version 2>&1 || true)
-    # Upstream and distro builds differ slightly: "sing-box version 1.14.4",
-    # "sing-box version v1.14.4 (...)" and package wrappers are all accepted.
-    version_value=$(printf '%s\n' "$version_output" | awk '
-      NR <= 8 {
-        line=$0
-        if (match(line, /[vV]?[0-9]+\.[0-9]+(\.[0-9]+)?/)) {
-          value=substr(line, RSTART, RLENGTH)
-          sub(/^[vV]/, "", value)
-          if (line ~ /sing-box|version|Version/) { print value; exit }
-        }
-      }')
+    # Handle upstream, distro and BusyBox environments without non-POSIX awk
+    # match(..., array). Only accept a version found on a line identifying
+    # sing-box/version; never infer a version from unrelated build metadata.
+    version_value=$(printf '%s\n' "$version_output" | grep -Ei 'sing[- ]?[Bb]ox|[Vv]ersion' | grep -Eo '[vV]?[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/^[vV]//' | sed -n '1p')
     [ -n "$version_value" ] || return 1
     printf '%s\n' "$version_value"
 }
@@ -753,107 +746,102 @@ version_supports_naive() {
 }
 
 resolve_sing_box_binary() {
-    # Prefer the upstream binary installed under /usr/local/bin. On Alpine,
-    # an older APK binary may still exist under /usr/bin after fallback.
-    if [ -x /usr/local/bin/sing-box ]; then
-        printf '%s\n' /usr/local/bin/sing-box
+    # Choose the highest parseable version when both a package-managed binary
+    # and an upstream /usr/local binary exist. Path precedence alone can leave
+    # an older local binary shadowing a newly upgraded Debian package.
+    local_best=""
+    local_best_version=""
+    for candidate in /usr/local/bin/sing-box /usr/bin/sing-box; do
+        [ -x "$candidate" ] || continue
+        candidate_version=$(sing_box_version_from "$candidate" || true)
+        [ -n "$candidate_version" ] || continue
+        if [ -z "$local_best" ] || version_at_least "$candidate_version" "$local_best_version"; then
+            local_best=$candidate
+            local_best_version=$candidate_version
+        fi
+    done
+    if [ -n "$local_best" ]; then
+        printf '%s\n' "$local_best"
         return 0
     fi
     command -v sing-box 2>/dev/null
 }
 
 install_alpine_official_release() {
-    msg 'Alpine 仓库中的 sing-box 不存在或版本不满足所选协议最低要求，改用 sing-box 官方 Linux 发布版……'
-    if ! release_json=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest); then
+    msg '安装 sing-box 官方最新稳定版（Alpine APK 版本不作为最终版本依据）……'
+    release_json=$(curl -fsSL --retry 2 --connect-timeout 15 https://api.github.com/repos/SagerNet/sing-box/releases/latest) ||
         err '无法访问 GitHub Releases API；请检查 VPS 网络后重试。'
-    fi
-    tag=$(printf '%s\n' "$release_json" | jq -r '.tag_name // empty') ||
-        err '无法解析 GitHub 最新 sing-box 版本信息。'
-    case "$tag" in ''|null) err 'GitHub 未返回 sing-box 最新版本号。' ;; esac
+    tag=$(printf '%s\n' "$release_json" | jq -r '.tag_name // empty') || err '无法解析 sing-box 最新版本信息。'
+    case "$tag" in ''|null) err 'GitHub 未返回 sing-box 最新稳定版 tag。' ;; esac
     ver=${tag#v}
     case "$(uname -m)" in
-        x86_64) rel_arch=amd64 ;;
-        aarch64) rel_arch=arm64 ;;
+        x86_64|amd64) rel_arch=amd64 ;;
+        aarch64|arm64) rel_arch=arm64 ;;
         armv7l|armv7) rel_arch=armv7 ;;
-        *) err "暂不支持此 Alpine CPU 架构：$(uname -m)" ;;
+        *) err "暂不支持此 CPU 架构：$(uname -m)" ;;
     esac
     archive="sing-box-${ver}-linux-${rel_arch}.tar.gz"
+    asset_url=$(printf '%s\n' "$release_json" | jq -r --arg n "$archive" '.assets[]? | select(.name==$n) | .browser_download_url' | sed -n '1p')
+    asset_digest=$(printf '%s\n' "$release_json" | jq -r --arg n "$archive" '.assets[]? | select(.name==$n) | .digest // empty' | sed -n '1p')
+    [ -n "$asset_url" ] || err "官方最新版本 $tag 未提供架构文件 $archive。"
     unpack_dir=$(mktemp -d /tmp/sing-box-unpack.XXXXXX) || err '无法创建 sing-box 临时解压目录。'
-    if ! curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "/tmp/${archive}"; then
-        rm -rf "$unpack_dir" "/tmp/${archive}"
-        err "下载 sing-box 官方发布版失败（${archive}）；请检查 GitHub 网络连接后重试。"
+    if ! curl -fL --retry 2 --connect-timeout 15 "$asset_url" -o "$unpack_dir/$archive"; then
+        rm -rf "$unpack_dir"; err "下载 sing-box 官方发布版失败：$archive。"
     fi
-    if ! tar -xzf "/tmp/${archive}" -C "$unpack_dir"; then
-        rm -rf "$unpack_dir" "/tmp/${archive}"
-        err '解压 sing-box 官方发布版失败。'
-    fi
-    mkdir -p /usr/local/bin
-    if ! install -m 0755 "$unpack_dir/sing-box-${ver}-linux-${rel_arch}/sing-box" /usr/local/bin/sing-box; then
-        rm -rf "$unpack_dir" "/tmp/${archive}"
-        err '安装 sing-box 官方 Linux 二进制文件失败。'
-    fi
-    rm -rf "$unpack_dir" "/tmp/${archive}"
-
-    # Pin the manager/service to the official binary explicitly. Do not let an
-    # older /usr/bin/sing-box from Alpine's APK package shadow this version.
+    case "$asset_digest" in
+        sha256:*)
+            expected_digest=${asset_digest#sha256:}
+            actual_digest=$(sha256sum "$unpack_dir/$archive" | awk '{print $1}')
+            [ "$actual_digest" = "$expected_digest" ] || { rm -rf "$unpack_dir"; err 'sing-box 发布包 SHA-256 校验失败，拒绝安装。'; }
+            ;;
+        *) warn 'GitHub API 未提供该资产 SHA-256 digest；已通过 HTTPS 下载，继续安装。' ;;
+    esac
+    tar -xzf "$unpack_dir/$archive" -C "$unpack_dir" || { rm -rf "$unpack_dir"; err '解压 sing-box 官方发布版失败。'; }
+    binary="$unpack_dir/sing-box-${ver}-linux-${rel_arch}/sing-box"
+    [ -x "$binary" ] || { rm -rf "$unpack_dir"; err '官方发布包中没有找到 sing-box 可执行文件。'; }
+    install -d -m 0755 /usr/local/bin
+    install -m 0755 "$binary" /usr/local/bin/sing-box || { rm -rf "$unpack_dir"; err '安装 sing-box 官方二进制失败。'; }
+    rm -rf "$unpack_dir"
     SB_BIN=/usr/local/bin/sing-box
     release_version=$(sing_box_version_from "$SB_BIN" || true)
-    [ -n "$release_version" ] || err "官方 sing-box 版本解析失败。二进制路径：$SB_BIN；原始输出：$("$SB_BIN" version 2>&1 | sed -n '1,4p' | tr '\n' ' ')。为避免错误判断版本，已停止安装。"
-    version_supports_naive "$release_version" ||
-        err "官方发布版版本检查失败（检测到：${release_version:-无法识别}）；NaiveProxy 需要 sing-box 1.13.0 或更新版本。"
-    if [ "$ENABLE_SNELL" = 1 ]; then
-        version_supports_snell "$release_version" || err "Snell 入站需要 sing-box 1.14.0 或更新版本；检测到：${release_version:-无法识别}。"
+    [ -n "$release_version" ] || err "官方 sing-box 版本无法识别；路径：$SB_BIN；输出：$("$SB_BIN" version 2>&1 | sed -n '1,4p' | tr '\n' ' ')。已停止后续安装。"
+    version_at_least "$release_version" 1.13.0 || err "sing-box $release_version 低于项目最低要求 1.13.0。"
+    if [ "$ENABLE_SNELL" = 1 ]; then version_supports_snell "$release_version" || err "Snell 需要 sing-box >=1.14.0；当前 $release_version。"; fi
+    msg "sing-box 官方最新稳定版安装完成：$release_version ($SB_BIN)"
+}
+
+enable_cron_scheduler() {
+    if [ "$OS_FAMILY" = debian ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y cron
+        if command -v systemctl >/dev/null 2>&1; then systemctl enable --now cron; else service cron start; fi
+        command -v crontab >/dev/null 2>&1 || err 'cron 已安装但找不到 crontab；ACME 自动续期无法保证。'
+    elif [ "$OS_FAMILY" = alpine ]; then
+        apk add --no-cache cronie
+        rc-update add crond default >/dev/null 2>&1 || true
+        rc-service crond start >/dev/null 2>&1 || pgrep crond >/dev/null 2>&1 || err '无法启动 Alpine crond；ACME 自动续期无法保证。'
+        command -v crontab >/dev/null 2>&1 || err 'cronie 已安装但找不到 crontab；ACME 自动续期无法保证。'
     fi
-    msg "已安装官方 sing-box：$release_version（满足所选协议版本要求）。"
 }
 
 install_dependencies_and_core() {
     if [ -f /etc/alpine-release ]; then
         OS_FAMILY=alpine
-        msg '检测到 Alpine Linux，安装 sing-box 和依赖……'
+        SERVICE_KIND=openrc
+        msg '检测到 Alpine Linux，先安装核心依赖，再安装 sing-box 官方最新稳定版……'
         apk update
-        apk add --no-cache ca-certificates curl jq openssl iproute2 tar gzip kmod unzip
-
-        # Some Alpine repositories provide sing-box, but older branches may
-        # package a release below 1.13.0. Naive inbound requires >= 1.13.0.
-        # Install the APK when available, inspect its actual binary version,
-        # and fall back to the upstream release whenever it is absent, broken,
-        # or too old.
-        if apk search -x sing-box 2>/dev/null | grep -q .; then
-            if ! apk add --no-cache sing-box; then
-                warn 'Alpine sing-box APK 安装失败；将尝试官方 Linux 发布版。'
-            fi
-        fi
-
-        candidate_bin=$(command -v sing-box 2>/dev/null || true)
-        candidate_version=""
-        if [ -n "$candidate_bin" ]; then
-            candidate_version=$(sing_box_version_from "$candidate_bin" || true)
-        fi
-
-        if [ -n "$candidate_bin" ] && version_supports_naive "$candidate_version" && { [ "$ENABLE_SNELL" = 0 ] || version_supports_snell "$candidate_version"; }; then
-            SB_BIN=$candidate_bin
-            msg "使用 Alpine 仓库 sing-box：$candidate_version（满足 NaiveProxy 最低版本要求）。"
-        else
-            if [ -n "$candidate_bin" ]; then
-                if [ -z "$candidate_version" ]; then
-                    warn "Alpine sing-box 版本无法解析（路径：$candidate_bin；原始输出：$("$candidate_bin" version 2>&1 | sed -n '1,2p' | tr '\n' ' ')）；将尝试官方发布版。"
-                else
-                    warn "Alpine 仓库提供的 sing-box 版本为 $candidate_version，低于所选协议最低要求；自动切换到官方新版。"
-                fi
-            else
-                warn 'Alpine 仓库没有可用的 sing-box 二进制；自动切换到官方新版。'
-            fi
-            install_alpine_official_release
-        fi
+        apk add --no-cache ca-certificates curl jq openssl iproute2 tar gzip kmod unzip coreutils cronie
         update-ca-certificates 2>/dev/null || true
+        enable_cron_scheduler
+        install_alpine_official_release
     elif [ -f /etc/debian_version ]; then
         OS_FAMILY=debian
-        msg '检测到 Debian，安装 sing-box 官方仓库和依赖……'
+        SERVICE_KIND=systemd
+        msg '检测到 Debian / Ubuntu，先安装核心依赖，再安装 sing-box 官方 APT 仓库最新版本……'
         apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq openssl iproute2 gpg procps kmod unzip
+        DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq openssl iproute2 gpg procps kmod unzip cron
+        enable_cron_scheduler
         install -d -m 0755 /etc/apt/keyrings
-        curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
+        curl -fsSL --retry 2 https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
         chmod a+r /etc/apt/keyrings/sagernet.asc
         cat > /etc/apt/sources.list.d/sagernet.sources <<'APT_EOF'
 Types: deb
@@ -865,28 +853,28 @@ Signed-By: /etc/apt/keyrings/sagernet.asc
 APT_EOF
         apt-get update
         DEBIAN_FRONTEND=noninteractive apt-get install -y sing-box
-        SB_BIN="$(command -v sing-box 2>/dev/null || true)"
+        SB_BIN=$(command -v sing-box 2>/dev/null || true)
     else
-        err '仅支持 Debian 和 Alpine Linux。'
+        err '仅支持 Debian / Ubuntu 和 Alpine Linux。'
     fi
 
-    [ -n "$SB_BIN" ] && [ -x "$SB_BIN" ] ||
-        err 'sing-box 安装失败：没有找到可执行文件。请检查软件源或网络后重试。'
-    "$SB_BIN" version | head -n 1 || true
-    require_naive_version
+    [ -n "$SB_BIN" ] && [ -x "$SB_BIN" ] || err 'sing-box 核心安装失败：没有找到可执行文件。'
+    version=$(sing_box_version_from "$SB_BIN" || true)
+    [ -n "$version" ] || err "无法解析 sing-box 版本；路径：$SB_BIN；原始输出：$("$SB_BIN" version 2>&1 | sed -n '1,4p' | tr '\n' ' ')。请勿继续安装协议。"
+    version_at_least "$version" 1.13.0 || err "sing-box $version 低于本项目最低版本 1.13.0。"
+    if [ "$ENABLE_SNELL" = 1 ]; then version_supports_snell "$version" || err "Snell 需要 sing-box >=1.14.0；当前 $version。"; fi
+    if [ "$ENABLE_NAIVE" = 1 ]; then version_supports_naive "$version" || err "NaiveProxy 需要 sing-box >=1.13.0；当前 $version。"; fi
+    SB_BIN=$(resolve_sing_box_binary 2>/dev/null || printf '%s' "$SB_BIN")
+    msg "核心阶段完成：sing-box $version ($SB_BIN)；协议配置尚未写入。"
 }
 
 require_naive_version() {
     version=$(sing_box_version_from "$SB_BIN" || true)
-    [ -n "$version" ] || err '无法读取 sing-box 版本，无法确认 Naive 入站兼容性。'
-    version_supports_naive "$version" ||
-        err "当前 sing-box 版本 $version 过旧；NaiveProxy 入站需要 sing-box 1.13.0 或更新版本。"
-    if [ "$ENABLE_SNELL" = 1 ]; then
-        version_supports_snell "$version" || err "当前 sing-box 版本 $version 不支持 Snell 入站；需要 1.14.0 或更新版本。"
-    fi
+    [ -n "$version" ] || err "无法读取 sing-box 版本；路径：$SB_BIN。"
+    version_at_least "$version" 1.13.0 || err "当前 sing-box 版本 $version 低于项目最低版本 1.13.0。"
+    if [ "$ENABLE_NAIVE" = 1 ]; then version_supports_naive "$version" || err "NaiveProxy 需要 sing-box >=1.13.0；当前 $version。"; fi
+    if [ "$ENABLE_SNELL" = 1 ]; then version_supports_snell "$version" || err "Snell 需要 sing-box >=1.14.0；当前 $version。"; fi
 }
-
-
 
 install_xray_core() {
     [ "$ENABLE_XHTTP" = 1 ] || return 0
@@ -2030,7 +2018,11 @@ overlay_install() {
         [ -s "$ARGO_TOKEN_FILE" ] || err 'Cloudflare Tunnel Token 文件缺失，停止覆盖升级。'
     fi
 
-    install_dependencies_and_core
+    if [ "${SB_CORE_PREPARED:-0}" != 1 ]; then
+        install_dependencies_and_core
+    else
+        msg '核心已由网页一键命令预装并通过版本检查，跳过重复安装。'
+    fi
     ensure_service_account
     enable_bbr
     create_service
@@ -2290,7 +2282,11 @@ install_from_config() {
     resolve_install_addresses
 
     if [ ! -e "$STATE_FILE" ] && [ -d "$APP_DIR" ]; then backup_existing_install; fi
-    install_dependencies_and_core
+    if [ "${SB_CORE_PREPARED:-0}" != 1 ]; then
+        install_dependencies_and_core
+    else
+        msg '核心已由网页一键命令预装并通过版本检查，跳过重复安装。'
+    fi
     PREVIOUS_ANYTLS_PORT=""; PREVIOUS_WS_PORT=""; PREVIOUS_REALITY_PORT=""; PREVIOUS_NAIVE_PORT=""; PREVIOUS_ANYREALITY_PORT=""; PREVIOUS_XHTTP_PORT=""; PREVIOUS_SNELL_PORT=""
     assign_ports
 
@@ -3835,8 +3831,74 @@ install_manager_command() {
     fi
 }
 
+
+prepare_web_config_core() {
+    need_root
+    web_cfg=${1:-}
+    [ -n "$web_cfg" ] && [ -s "$web_cfg" ] || err '用法：sb-manager prepare-web-config-core /path/to/config.json'
+
+    # Bootstrap only the small tools needed to inspect the generated config.
+    if [ -f /etc/alpine-release ]; then
+        apk add --no-cache ca-certificates curl jq openssl tar gzip unzip coreutils cronie
+        OS_FAMILY=alpine; SERVICE_KIND=openrc
+    elif [ -f /etc/debian_version ]; then
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq openssl tar gzip unzip cron gpg
+        OS_FAMILY=debian; SERVICE_KIND=systemd
+    else
+        err '仅支持 Debian / Ubuntu 和 Alpine Linux。'
+    fi
+    jq -e '.schema == 8 and (.protocols | type == "object")' "$web_cfg" >/dev/null 2>&1 || err '网页配置 JSON 格式不正确或版本不匹配，无法预装对应核心。'
+
+    ENABLE_ANYTLS=$(jq -r 'if .protocols.anytls == true then 1 else 0 end' "$web_cfg")
+    ENABLE_WS_TLS=$(jq -r 'if .protocols.ws_tls == true then 1 else 0 end' "$web_cfg")
+    ENABLE_VLESS_REALITY=$(jq -r 'if .protocols.vless_reality == true then 1 else 0 end' "$web_cfg")
+    ENABLE_NAIVE=$(jq -r 'if .protocols.naive == true then 1 else 0 end' "$web_cfg")
+    ENABLE_ANYTLS_REALITY=$(jq -r 'if .protocols.anytls_reality == true then 1 else 0 end' "$web_cfg")
+    ENABLE_XHTTP=$(jq -r 'if .protocols.xhttp == true then 1 else 0 end' "$web_cfg")
+    ENABLE_SNELL=$(jq -r 'if .protocols.snell == true then 1 else 0 end' "$web_cfg")
+    ENABLE_SS2022=$(jq -r 'if .protocols.ss2022 == true then 1 else 0 end' "$web_cfg")
+
+    msg '========== 第一阶段：安装本次所选协议需要的核心 =========='
+    install_dependencies_and_core
+    if [ "$ENABLE_XHTTP" = 1 ]; then
+        msg '检测到 VLESS + XHTTP + ECH，预装独立 Xray-core……'
+        install_xray_core
+    fi
+    msg '========== 核心预装完成，开始进入协议配置阶段 =========='
+    msg "sing-box：$SB_BIN"
+    "$SB_BIN" version | sed -n '1,2p'
+    if [ "$ENABLE_XHTTP" = 1 ]; then "$XRAY_BIN" version | sed -n '1,2p'; fi
+}
+
+prepare_core_only() {
+    need_root
+    ENABLE_ANYTLS=0; ENABLE_WS_TLS=0; ENABLE_VLESS_REALITY=0; ENABLE_NAIVE=0
+    ENABLE_ANYTLS_REALITY=0; ENABLE_XHTTP=0; ENABLE_SNELL=0; ENABLE_SS2022=0
+    install_dependencies_and_core
+    if [ "${1:-}" = --xhttp ]; then
+        ENABLE_XHTTP=1
+        install_xray_core
+        msg "Xray-core 前置安装完成：$XRAY_BIN"
+    elif [ -n "${1:-}" ]; then
+        err '用法：sb-manager prepare-core [--xhttp]'
+    fi
+    msg '核心前置环境已准备完成。现在可以运行网页生成的 install-web-config 命令，或重新运行脚本进行协议向导安装。'
+    msg '注意：此阶段只安装核心、系统依赖和 cron 定时服务，不创建代理入站、不覆盖现有节点配置。'
+}
+
 main() {
     need_root
+    if [ "${1:-}" = prepare-web-config-core ]; then
+        [ "$#" -eq 2 ] || err '用法：sb-manager prepare-web-config-core /path/to/config.json'
+        prepare_web_config_core "$2"
+        return 0
+    fi
+    if [ "${1:-}" = prepare-core ] || [ "${1:-}" = bootstrap-core ]; then
+        shift
+        prepare_core_only "${1:-}"
+        return 0
+    fi
     if [ "${1:-}" = bbr ] || [ "${1:-}" = bbr-status ]; then
         if [ -f /etc/alpine-release ]; then
             OS_FAMILY=alpine

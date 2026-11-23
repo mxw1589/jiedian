@@ -1,3 +1,20 @@
+# v1.0.6
+
+- 网页生成的一键安装命令现在明确分两阶段执行：先按所选协议预装 sing-box / Xray-core 和系统依赖，再安装证书、协议配置与服务。
+- 新增 `prepare-web-config-core CONFIG.json`，读取网页所选协议，检查版本要求；选择 XHTTP + ECH 时先安装独立 Xray-core。
+- 通过 `SB_CORE_PREPARED=1` 避免协议配置阶段重复执行 apt/apk 核心安装。
+- 保留手动 `prepare-core [--xhttp]` 命令，供用户单独预装核心。
+
+# 更新记录 v1.0.5
+
+- 新增分阶段核心预装命令：`sb-manager prepare-core`，先安装系统依赖、最新稳定版 sing-box 与证书自动续期所需 cron/cronie，不创建代理入站、不覆盖现有节点配置。
+- 新增可选 `sb-manager prepare-core --xhttp`，在核心阶段额外预装最新 Xray-core（用于后续 VLESS + XHTTP + ECH）。
+- Alpine 不再依赖发行版仓库中可能滞后的 sing-box 包，直接安装 SagerNet 官方 GitHub Releases 最新稳定版；按 CPU 架构选择官方二进制，若 GitHub API 提供 SHA-256 digest 则校验后安装。
+- Debian / Ubuntu 使用 sing-box 官方 APT 仓库，并通过 apt 安装/升级到仓库当前最新稳定版。
+- 版本解析改为 POSIX grep/sed 管线，兼容 BusyBox/Alpine 环境和带 Go 构建信息的版本输出；无法识别版本时显示二进制路径与原始输出并停止，不把解析失败误判为低版本。
+- 将 cron（Debian）/cronie（Alpine）纳入前置依赖并启用，避免后续 acme.sh 因缺少 crontab 而失败。
+- 新增核心预装流程和 sing-box 版本解析回归测试。
+
 # 更新记录
 
 ## v1.0.4

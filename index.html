@@ -261,7 +261,10 @@ grep -q 'WEB_CONFIG_MODE=1' "$SH"
 grep -q 'WEB_CONFIG_SCHEMA=8' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
 install -m 700 "$SH" /usr/local/sbin/sb-manager
 rm -f "$SH"
-/usr/local/sbin/sb-manager install-web-config "$CFG"
+echo '========== 第一阶段：预装本次所选协议的核心和系统依赖 =========='
+/usr/local/sbin/sb-manager prepare-web-config-core "$CFG"
+echo '========== 第二阶段：安装证书、协议配置和节点服务 =========='
+SB_CORE_PREPARED=1 /usr/local/sbin/sb-manager install-web-config "$CFG"
 SB_INSTALL
 then
   :

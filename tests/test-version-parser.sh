@@ -19,6 +19,12 @@ chmod +x "$LIB/sing-box"
 [ "$(sh -c '. "$1"; sing_box_version_from "$2"' sh "$LIB/parser.sh" "$LIB/sing-box")" = 1.13.2 ]
 cat > "$LIB/sing-box" <<'BIN'
 #!/bin/sh
+printf '%s\n' 'sing-box version 1.14.4 (go1.25.4 linux/amd64)'
+BIN
+chmod +x "$LIB/sing-box"
+[ "$(sh -c '. "$1"; sing_box_version_from "$2"' sh "$LIB/parser.sh" "$LIB/sing-box")" = 1.14.4 ]
+cat > "$LIB/sing-box" <<'BIN'
+#!/bin/sh
 printf '%s\n' 'unexpected output'
 BIN
 chmod +x "$LIB/sing-box"
