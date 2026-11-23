@@ -4,8 +4,8 @@
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
-# WEB_CONFIG_SCHEMA=6; selective protocol installation, Argo Tunnel, VLESS XHTTP+ECH and Snell
-# v1.0.3; preserve unmanaged sing-box config (including SS2022) and add unified terminal CRUD
+# WEB_CONFIG_SCHEMA=8; selective protocol installation, Argo Tunnel, VLESS XHTTP+ECH, Snell and SS2022
+# v1.0.4; first-class SS2022 management, inline protocol ports, preserve existing nodes and Alpine version parsing
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -60,6 +60,10 @@ SNELL_USERKEY=""
 SNELL_OBFS_MODE=http
 SNELL_OBFS_HOST=www.bing.com
 SNELL_MODE=default
+ENABLE_SS2022=0
+SS2022_PORT=""
+SS2022_METHOD="2022-blake3-aes-256-gcm"
+SS2022_PASSWORD=""
 PREVIOUS_ANYTLS_PORT=""
 PREVIOUS_WS_PORT=""
 PREVIOUS_REALITY_PORT=""
@@ -511,6 +515,7 @@ assign_ports() {
     ANYREALITY_PORT=$(normalize_optional_port "$ANYREALITY_PORT" 'AnyTLS + Reality') || exit 1
     XHTTP_PORT=$(normalize_optional_port "$XHTTP_PORT" 'VLESS XHTTP + ECH') || exit 1
     SNELL_PORT=$(normalize_optional_port "$SNELL_PORT" 'Snell') || exit 1
+    SS2022_PORT=$(normalize_optional_port "$SS2022_PORT" 'SS2022') || exit 1
 
     [ "$ENABLE_ANYTLS" = 1 ] || ANYTLS_PORT=""
     [ "$ENABLE_WS_TLS" = 1 ] || WS_PORT=""
@@ -519,10 +524,11 @@ assign_ports() {
     [ "$ENABLE_ANYTLS_REALITY" = 1 ] || ANYREALITY_PORT=""
     [ "$ENABLE_XHTTP" = 1 ] || XHTTP_PORT=""
     [ "$ENABLE_SNELL" = 1 ] || SNELL_PORT=""
+    [ "$ENABLE_SS2022" = 1 ] || SS2022_PORT=""
 
     used_ports=""
     PORT_FALLBACK_USED=0
-    for protocol_name in 'AnyTLS' 'VLESS WS TLS' 'VLESS Reality' 'NaiveProxy' 'AnyTLS + Reality' 'VLESS XHTTP + ECH' 'Snell'; do
+    for protocol_name in 'AnyTLS' 'VLESS WS TLS' 'VLESS Reality' 'NaiveProxy' 'AnyTLS + Reality' 'VLESS XHTTP + ECH' 'Snell' 'Shadowsocks 2022'; do
         case "$protocol_name" in
             'AnyTLS') enabled=$ENABLE_ANYTLS; item_port=$ANYTLS_PORT ;;
             'VLESS WS TLS') enabled=$ENABLE_WS_TLS; item_port=$WS_PORT ;;
@@ -531,6 +537,7 @@ assign_ports() {
             'AnyTLS + Reality') enabled=$ENABLE_ANYTLS_REALITY; item_port=$ANYREALITY_PORT ;;
             'VLESS XHTTP + ECH') enabled=$ENABLE_XHTTP; item_port=$XHTTP_PORT ;;
             'Snell') enabled=$ENABLE_SNELL; item_port=$SNELL_PORT ;;
+            'Shadowsocks 2022') enabled=$ENABLE_SS2022; item_port=$SS2022_PORT ;;
         esac
         [ "$enabled" = 1 ] || continue
 
@@ -544,7 +551,7 @@ assign_ports() {
                 *)
                     if ! manual_port_available "$item_port" \
                         "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" \
-                        "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" "$PREVIOUS_XHTTP_PORT" "$PREVIOUS_SNELL_PORT"; then
+                        "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" "$PREVIOUS_XHTTP_PORT" "$PREVIOUS_SNELL_PORT" "$SS2022_PORT"; then
                         warn "$protocol_name 指定 TCP 端口 $item_port 已被其他程序占用；将自动随机分配。"
                         item_port=""
                         PORT_FALLBACK_USED=1
@@ -574,10 +581,11 @@ assign_ports() {
             'AnyTLS + Reality') ANYREALITY_PORT=$item_port ;;
             'VLESS XHTTP + ECH') XHTTP_PORT=$item_port ;;
             'Snell') SNELL_PORT=$item_port ;;
+            'Shadowsocks 2022') SS2022_PORT=$item_port ;;
         esac
     done
 
-    msg "已选择协议端口：AnyTLS=${ANYTLS_PORT:-未安装}，WS TLS=${WS_PORT:-未安装}，VLESS Reality=${REALITY_PORT:-未安装}，NaiveProxy=${NAIVE_PORT:-未安装}，AnyTLS Reality=${ANYREALITY_PORT:-未安装}，XHTTP=${XHTTP_PORT:-未安装}，Snell=${SNELL_PORT:-未安装}"
+    msg "已选择协议端口：AnyTLS=${ANYTLS_PORT:-未安装}，WS TLS=${WS_PORT:-未安装}，VLESS Reality=${REALITY_PORT:-未安装}，NaiveProxy=${NAIVE_PORT:-未安装}，AnyTLS Reality=${ANYREALITY_PORT:-未安装}，XHTTP=${XHTTP_PORT:-未安装}，Snell=${SNELL_PORT:-未安装}，SS2022=${SS2022_PORT:-未安装}"
     if [ "$PORT_FALLBACK_USED" -eq 1 ]; then
         warn '至少一个手动端口发生冲突，已自动改用空闲随机端口。请检查 NAT 映射和防火墙。'
     fi
@@ -618,6 +626,10 @@ ask_ports() {
         ask_value 'Snell TCP 端口（留空随机选 10000–65535）' "${SNELL_PORT:-}"
         SNELL_PORT=$REPLY
     else SNELL_PORT=""; fi
+    if [ "$ENABLE_SS2022" = 1 ]; then
+        ask_value 'Shadowsocks 2022 TCP 端口（留空随机选 10000–65535）' "${SS2022_PORT:-}"
+        SS2022_PORT=$REPLY
+    else SS2022_PORT=""; fi
 }
 
 ipv6_kernel_enabled() {
@@ -696,9 +708,20 @@ write_argo_token_file() {
 sing_box_version_from() {
     candidate_bin=$1
     [ -x "$candidate_bin" ] || return 1
-    version_line=$("$candidate_bin" version 2>/dev/null | sed -n '1p' || true)
-    printf '%s\n' "$version_line" |
-        sed -n 's/.*version[[:space:]]*v\{0,1\}\([0-9][0-9.]*\).*/\1/p'
+    version_output=$("$candidate_bin" version 2>&1 || true)
+    # Upstream and distro builds differ slightly: "sing-box version 1.14.4",
+    # "sing-box version v1.14.4 (...)" and package wrappers are all accepted.
+    version_value=$(printf '%s\n' "$version_output" | awk '
+      NR <= 8 {
+        line=$0
+        if (match(line, /[vV]?[0-9]+\.[0-9]+(\.[0-9]+)?/)) {
+          value=substr(line, RSTART, RLENGTH)
+          sub(/^[vV]/, "", value)
+          if (line ~ /sing-box|version|Version/) { print value; exit }
+        }
+      }')
+    [ -n "$version_value" ] || return 1
+    printf '%s\n' "$version_value"
 }
 
 version_at_least() {
@@ -775,6 +798,7 @@ install_alpine_official_release() {
     # older /usr/bin/sing-box from Alpine's APK package shadow this version.
     SB_BIN=/usr/local/bin/sing-box
     release_version=$(sing_box_version_from "$SB_BIN" || true)
+    [ -n "$release_version" ] || err "官方 sing-box 版本解析失败。二进制路径：$SB_BIN；原始输出：$("$SB_BIN" version 2>&1 | sed -n '1,4p' | tr '\n' ' ')。为避免错误判断版本，已停止安装。"
     version_supports_naive "$release_version" ||
         err "官方发布版版本检查失败（检测到：${release_version:-无法识别}）；NaiveProxy 需要 sing-box 1.13.0 或更新版本。"
     if [ "$ENABLE_SNELL" = 1 ]; then
@@ -812,7 +836,11 @@ install_dependencies_and_core() {
             msg "使用 Alpine 仓库 sing-box：$candidate_version（满足 NaiveProxy 最低版本要求）。"
         else
             if [ -n "$candidate_bin" ]; then
-                warn "Alpine 仓库提供的 sing-box 版本为 ${candidate_version:-无法识别}，低于 NaiveProxy 所需的 1.13.0；自动切换到官方新版。"
+                if [ -z "$candidate_version" ]; then
+                    warn "Alpine sing-box 版本无法解析（路径：$candidate_bin；原始输出：$("$candidate_bin" version 2>&1 | sed -n '1,2p' | tr '\n' ' ')）；将尝试官方发布版。"
+                else
+                    warn "Alpine 仓库提供的 sing-box 版本为 $candidate_version，低于所选协议最低要求；自动切换到官方新版。"
+                fi
             else
                 warn 'Alpine 仓库没有可用的 sing-box 二进制；自动切换到官方新版。'
             fi
@@ -1555,7 +1583,8 @@ save_state() {
       --arg enable_snell "$ENABLE_SNELL" --arg snell_port "$SNELL_PORT" --arg snell_version "$SNELL_VERSION" \
       --arg snell_psk "$SNELL_PSK" --arg snell_userkey "$SNELL_USERKEY" --arg snell_obfs_mode "$SNELL_OBFS_MODE" \
       --arg snell_obfs_host "$SNELL_OBFS_HOST" --arg snell_mode "$SNELL_MODE" \
-      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,ws_mode:$ws_mode,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label,enabled_xhttp:($enable_xhttp=="1"),xhttp_port:(if $enable_xhttp=="1" then ($xhttp_port|tonumber) else null end),xhttp_uuid:$xhttp_uuid,xhttp_path:$xhttp_path,xhttp_mode:$xhttp_mode,xhttp_ech_public_name:$xhttp_ech_public_name,enabled_snell:($enable_snell=="1"),snell_port:(if $enable_snell=="1" then ($snell_port|tonumber) else null end),snell_version:($snell_version|tonumber),snell_psk:$snell_psk,snell_userkey:$snell_userkey,snell_obfs_mode:$snell_obfs_mode,snell_obfs_host:$snell_obfs_host,snell_mode:$snell_mode}' > "$tmp"; then
+      --arg enable_ss2022 "$ENABLE_SS2022" --arg ss2022_port "$SS2022_PORT" --arg ss2022_method "$SS2022_METHOD" --arg ss2022_password "$SS2022_PASSWORD" \
+      '{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,ws_mode:$ws_mode,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label,enabled_xhttp:($enable_xhttp=="1"),xhttp_port:(if $enable_xhttp=="1" then ($xhttp_port|tonumber) else null end),xhttp_uuid:$xhttp_uuid,xhttp_path:$xhttp_path,xhttp_mode:$xhttp_mode,xhttp_ech_public_name:$xhttp_ech_public_name,enabled_snell:($enable_snell=="1"),snell_port:(if $enable_snell=="1" then ($snell_port|tonumber) else null end),snell_version:($snell_version|tonumber),snell_psk:$snell_psk,snell_userkey:$snell_userkey,snell_obfs_mode:$snell_obfs_mode,snell_obfs_host:$snell_obfs_host,snell_mode:$snell_mode,enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_method:$ss2022_method,ss2022_password:$ss2022_password}' > "$tmp"; then
         rm -f "$tmp"
         warn '无法生成 manager.json；原有管理状态未更改。'
         return 1
@@ -1640,6 +1669,10 @@ load_state() {
     SNELL_OBFS_MODE=$(jq -r '.snell_obfs_mode // "http"' "$STATE_FILE")
     SNELL_OBFS_HOST=$(jq -r '.snell_obfs_host // "www.bing.com"' "$STATE_FILE")
     SNELL_MODE=$(jq -r '.snell_mode // "default"' "$STATE_FILE")
+    ENABLE_SS2022=$(jq -r 'if .enabled_ss2022 == true then "1" else "0" end' "$STATE_FILE")
+    SS2022_PORT=$(jq -r '.ss2022_port // ""' "$STATE_FILE")
+    SS2022_METHOD=$(jq -r '.ss2022_method // "2022-blake3-aes-256-gcm"' "$STATE_FILE")
+    SS2022_PASSWORD=$(jq -r '.ss2022_password // ""' "$STATE_FILE")
     [ -s "$ARGO_TOKEN_FILE" ] && ARGO_TOKEN=$(cat "$ARGO_TOKEN_FILE") || ARGO_TOKEN=""
 }
 
@@ -1651,6 +1684,7 @@ derive_runtime_needs() {
     [ "$ENABLE_VLESS_REALITY" = 1 ] && NEED_ORIGIN=1
     [ "$ENABLE_ANYTLS_REALITY" = 1 ] && NEED_ORIGIN=1
     [ "$ENABLE_SNELL" = 1 ] && NEED_ORIGIN=1
+    [ "$ENABLE_SS2022" = 1 ] && NEED_ORIGIN=1
     [ "$ENABLE_XHTTP" = 1 ] && NEED_CERT=1
     if [ "$ENABLE_WS_TLS" = 1 ] && [ "$WS_MODE" = direct ]; then NEED_CERT=1; fi
 }
@@ -1687,6 +1721,8 @@ build_config() {
       --arg anyreality_sid "$ANYREALITY_SID" \
       --arg snell_port "$SNELL_PORT" --arg snell_version "$SNELL_VERSION" --arg snell_psk "$SNELL_PSK" \
       --arg snell_userkey "$SNELL_USERKEY" --arg snell_obfs_mode "$SNELL_OBFS_MODE" --arg snell_mode "$SNELL_MODE" \
+      --arg ss2022_port "$SS2022_PORT" --arg ss2022_method "$SS2022_METHOD" --arg ss2022_password "$SS2022_PASSWORD" \
+      --argjson enable_ss2022 "$([ "$ENABLE_SS2022" = 1 ] && printf true || printf false)" \
       --argjson enable_snell "$([ "$ENABLE_SNELL" = 1 ] && printf true || printf false)" \
       --argjson enable_anytls "$([ "$ENABLE_ANYTLS" = 1 ] && printf true || printf false)" \
       --argjson enable_ws_tls "$([ "$ENABLE_WS_TLS" = 1 ] && printf true || printf false)" \
@@ -1699,6 +1735,7 @@ build_config() {
         (if $enable_vless_reality then {type:"vless",tag:"vless-reality-in",listen:$listen_addr,listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}} else empty end),
         (if $enable_naive then {type:"naive",tag:"naive-in",network:"tcp",listen:$listen_addr,listen_port:($naive_port|tonumber),users:[{username:$naive_username,password:$naive_password}],tls:{enabled:true,certificate_path:$cert_file,key_path:$key_file}} else empty end),
         (if $enable_anytls_reality then {type:"anytls",tag:"anytls-reality-in",listen:$listen_addr,listen_port:($anyreality_port|tonumber),users:[{name:"primary",password:$anyreality_password}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$anyreality_private,short_id:[$anyreality_sid]}}} else empty end),
+        (if $enable_ss2022 then {type:"shadowsocks",tag:"ss2022-in",listen:$listen_addr,listen_port:($ss2022_port|tonumber),method:$ss2022_method,password:$ss2022_password} else empty end),
         (if $enable_snell then (if $snell_version=="5" then {type:"snell",tag:"snell-in",listen:$listen_addr,listen_port:($snell_port|tonumber),version:5,psk:$snell_psk,users:[{name:"primary",userkey:$snell_userkey}],obfs_mode:$snell_obfs_mode} else {type:"snell",tag:"snell-in",listen:$listen_addr,listen_port:($snell_port|tonumber),version:6,psk:$snell_psk,users:[{name:"primary",userkey:$snell_userkey}],mode:$snell_mode} end) else empty end)
       ],outbounds:[{type:"direct",tag:"direct"}]}' > "$tmp" || {
         rm -f "$tmp"
@@ -1715,11 +1752,21 @@ build_config() {
             return 1
         fi
         merged="$tmp.merge.$$"
-        if ! jq -s '
+        if [ "$ENABLE_SS2022" = 1 ] || { [ -s "$STATE_FILE" ] && jq -e '.enabled_ss2022 == true' "$STATE_FILE" >/dev/null 2>&1; }; then
+            manage_ss2022_tag=true
+        else
+            manage_ss2022_tag=false
+        fi
+        if ! jq -s --argjson manage_ss2022 "$manage_ss2022_tag" '
           .[0] as $new | .[1] as $old |
-          (["anytls-in","vless-ws-argo-in","vless-ws-tls-in","vless-reality-in","naive-in","anytls-reality-in","snell-in"] as $managed |
+          ((["anytls-in","vless-ws-argo-in","vless-ws-tls-in","vless-reality-in","naive-in","anytls-reality-in","snell-in"] + (if $manage_ss2022 or any(($new.inbounds // [])[]; .tag == "ss2022-in") then ["ss2022-in"] else [] end)) as $managed |
            $new + {
-             inbounds: (($new.inbounds // []) + [($old.inbounds // [])[] | select((.tag // "") as $t | ($managed | index($t)) == null)]),
+             inbounds: (($new.inbounds // []) + [($old.inbounds // [])[] | select(
+               ((.tag // "") as $t | ($managed | index($t)) == null) and
+               (if any(($new.inbounds // [])[]; .tag == "ss2022-in") then
+                  ((.type != "shadowsocks") or ((.method // "" | startswith("2022-blake3-") | not)) or (.listen_port != (($new.inbounds // [])[] | select(.tag == "ss2022-in") | .listen_port)))
+                else true end)
+             )]),
              outbounds: (($new.outbounds // []) + [($old.outbounds // [])[] | select((.tag // "") != "direct")])
            } + (($old | to_entries | map(select(.key as $k | (["log","inbounds","outbounds"] | index($k)) == null and ($new | has($k) | not))) | from_entries))
           )
@@ -1896,6 +1943,15 @@ show_nodes() {
             printf '完整 Xray 客户端配置：%s\n' "$XRAY_CLIENT_CONFIG_FILE"
             printf '提示：VLESS 分享链接本身不包含 ECH Config；需要导入上述 JSON，或在客户端手动填写 ECH Config List。\n\n'
         fi
+        if [ "$ENABLE_SS2022" = 1 ]; then
+            ss_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
+            ss_tag="${ss_server}"; [ -z "$NODE_LABEL" ] || ss_tag="${ss_tag}-${NODE_LABEL}"
+            ss_host_uri=$(uri_host "$ss_server")
+            ss_tag_uri=$(jq -nr --arg tag "${ss_tag}-ss2022" '$tag | @uri')
+            ss_userinfo=$(printf '%s' "$SS2022_METHOD:$SS2022_PASSWORD" | base64 | tr -d '\r\n')
+            SS2022_LINK="ss://${ss_userinfo}@${ss_host_uri}:${SS2022_PORT}#${ss_tag_uri}"
+            printf '[%s-ss2022] Shadowsocks 2022 | 地址：%s | TCP：%s | method：%s\n密码：%s\n%s\n\n' "$ss_tag" "$ss_server" "$SS2022_PORT" "$SS2022_METHOD" "$SS2022_PASSWORD" "$SS2022_LINK"
+        fi
         if [ "$ENABLE_SNELL" = 1 ]; then
             snell_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
             snell_tag="${snell_server}"
@@ -1951,7 +2007,7 @@ overlay_install() {
     [ -s "$STATE_FILE" ] || err '找不到现有 manager.json，不能执行覆盖安装。'
     manager_state_is_valid || err '现有 manager.json 缺少已启用协议所需参数；为避免破坏原配置，停止覆盖安装。'
 
-    selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_XHTTP + ENABLE_SNELL))
+    selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_XHTTP + ENABLE_SNELL + ENABLE_SS2022))
     [ "$selected_count" -gt 0 ] || err '当前没有启用的协议。'
     NEED_CERT=0; NEED_ORIGIN=0
     [ "$ENABLE_ANYTLS" = 1 ] && NEED_CERT=1 && NEED_ORIGIN=1
@@ -1959,6 +2015,7 @@ overlay_install() {
     [ "$ENABLE_VLESS_REALITY" = 1 ] && NEED_ORIGIN=1
     [ "$ENABLE_ANYTLS_REALITY" = 1 ] && NEED_ORIGIN=1
     [ "$ENABLE_SNELL" = 1 ] && NEED_ORIGIN=1
+    [ "$ENABLE_SS2022" = 1 ] && NEED_ORIGIN=1
     [ "$ENABLE_XHTTP" = 1 ] && NEED_CERT=1
     if [ "$ENABLE_WS_TLS" = 1 ] && [ "$WS_MODE" = direct ]; then NEED_CERT=1; fi
     if [ "$NEED_CERT" = 1 ]; then
@@ -2000,7 +2057,7 @@ overlay_install() {
 install_wizard() {
     need_root
     ORIGIN_ADDR=""; ORIGIN_IPV6=""; WS_SERVER=""; WS_HOST=""
-    ENABLE_ANYTLS=0; ENABLE_WS_TLS=0; ENABLE_VLESS_REALITY=0; ENABLE_NAIVE=0; ENABLE_ANYTLS_REALITY=0; ENABLE_XHTTP=0; ENABLE_SNELL=0
+    ENABLE_ANYTLS=0; ENABLE_WS_TLS=0; ENABLE_VLESS_REALITY=0; ENABLE_NAIVE=0; ENABLE_ANYTLS_REALITY=0; ENABLE_XHTTP=0; ENABLE_SNELL=0; ENABLE_SS2022=0
     msg '========== sing-box 选择性安装向导 =========='
     ask_value '安装普通 AnyTLS？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_ANYTLS=1 ;; esac
     ask_value '安装 VLESS + WS？(y/N)' 'y'; case "$REPLY" in y|Y|yes|YES) ENABLE_WS_TLS=1 ;; esac
@@ -2009,7 +2066,13 @@ install_wizard() {
     ask_value '安装 AnyTLS + Reality？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_ANYTLS_REALITY=1 ;; esac
     ask_value '安装 VLESS + XHTTP + ECH？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_XHTTP=1 ;; esac
     ask_value '安装 Snell？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_SNELL=1 ;; esac
-    selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_XHTTP + ENABLE_SNELL))
+    ask_value '安装 Shadowsocks 2022（SS2022）？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_SS2022=1 ;; esac
+    SS2022_METHOD=2022-blake3-aes-256-gcm; SS2022_PASSWORD=""; SS2022_PORT=""
+    if [ "$ENABLE_SS2022" = 1 ]; then
+        ask_value 'SS2022 加密方式（128/256）' '256'
+        case "$(trim_value "$REPLY")" in 128) SS2022_METHOD=2022-blake3-aes-128-gcm ;; 256) SS2022_METHOD=2022-blake3-aes-256-gcm ;; *) err 'SS2022 仅支持 128 或 256。' ;; esac
+    fi
+    selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_XHTTP + ENABLE_SNELL + ENABLE_SS2022))
     [ "$selected_count" -gt 0 ] || err '至少选择一种协议。'
 
     WS_MODE=direct; ARGO_HOST=""; ARGO_TUNNEL_NAME=""; ARGO_TOKEN=""
@@ -2170,7 +2233,7 @@ resolve_install_addresses() {
 
 install_from_config() {
     selected_count=0
-    for enabled in "$ENABLE_ANYTLS" "$ENABLE_WS_TLS" "$ENABLE_VLESS_REALITY" "$ENABLE_NAIVE" "$ENABLE_ANYTLS_REALITY" "$ENABLE_XHTTP" "$ENABLE_SNELL"; do
+    for enabled in "$ENABLE_ANYTLS" "$ENABLE_WS_TLS" "$ENABLE_VLESS_REALITY" "$ENABLE_NAIVE" "$ENABLE_ANYTLS_REALITY" "$ENABLE_XHTTP" "$ENABLE_SNELL" "$ENABLE_SS2022"; do
         [ "$enabled" = 1 ] && selected_count=$((selected_count + 1))
     done
     [ "$selected_count" -gt 0 ] || err '至少选择一种协议。'
@@ -2182,6 +2245,7 @@ install_from_config() {
     [ "$ENABLE_VLESS_REALITY" = 1 ] && NEED_ORIGIN=1
     [ "$ENABLE_ANYTLS_REALITY" = 1 ] && NEED_ORIGIN=1
     [ "$ENABLE_SNELL" = 1 ] && NEED_ORIGIN=1
+    [ "$ENABLE_SS2022" = 1 ] && NEED_ORIGIN=1
     [ "$ENABLE_XHTTP" = 1 ] && NEED_CERT=1
     if [ "$ENABLE_WS_TLS" = 1 ]; then
         case "$WS_MODE" in
@@ -2283,6 +2347,13 @@ install_from_config() {
         SNELL_PSK=$(openssl rand -hex 32)
         SNELL_USERKEY=$(openssl rand -hex 24)
     fi
+    if [ "$ENABLE_SS2022" = 1 ]; then
+        [ -n "$SS2022_PASSWORD" ] || SS2022_PASSWORD=$(openssl rand -base64 "$( [ "$SS2022_METHOD" = 2022-blake3-aes-128-gcm ] && printf 16 || printf 32 )")
+        case "$SS2022_METHOD:$SS2022_PASSWORD" in
+          2022-blake3-aes-128-gcm:????????????????????????|2022-blake3-aes-256-gcm:????????????????????????????????????????????) ;;
+          *) err 'SS2022 密码长度与加密方式不匹配；请使用正确长度的 Base64 密钥。' ;;
+        esac
+    fi
     if [ "$ENABLE_XHTTP" = 1 ]; then
         XHTTP_UUID=$("$XRAY_BIN" uuid 2>/dev/null || "$SB_BIN" generate uuid)
         XHTTP_PATH=${XHTTP_PATH:-"/xhttp-$(openssl rand -hex 10)"}
@@ -2376,8 +2447,9 @@ manager_state_is_valid() {
       ((enabled("enabled_naive") | not) or (nonempty(.naive_username) and nonempty(.naive_password) and (.naive_port | type == "number") and nonempty(.tls_domain))) and
       ((enabled("enabled_anytls_reality") | not) or (nonempty(.anyreality_password) and nonempty(.anyreality_private) and nonempty(.anyreality_public) and nonempty(.anyreality_sid) and (.anyreality_port | type == "number") and nonempty(.reality_sni))) and
       ((.enabled_xhttp != true) or (nonempty(.xhttp_uuid) and nonempty(.xhttp_path) and (.xhttp_port | type == "number") and nonempty(.tls_domain) and nonempty(.xhttp_ech_public_name))) and
+      ((.enabled_ss2022 != true) or (.ss2022_method as $m | nonempty(.ss2022_password) and (.ss2022_port | type == "number") and (["2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm"] | index($m) != null))) and
       ((.enabled_snell != true) or (nonempty(.snell_psk) and nonempty(.snell_userkey) and (.snell_port | type == "number") and ((.snell_version == 5) or (.snell_version == 6)))) and
-      (if (enabled("enabled_anytls") or enabled("enabled_naive") or enabled("enabled_vless_reality") or enabled("enabled_anytls_reality") or (.enabled_snell == true)) then (nonempty(.origin_addr) or nonempty(.origin_ipv6)) else true end) and
+      (if (enabled("enabled_anytls") or enabled("enabled_naive") or enabled("enabled_vless_reality") or enabled("enabled_anytls_reality") or (.enabled_snell == true) or (.enabled_ss2022 == true)) then (nonempty(.origin_addr) or nonempty(.origin_ipv6)) else true end) and
       (if (enabled("enabled_anytls") or enabled("enabled_naive") or (.enabled_xhttp == true) or (enabled("enabled_ws_tls") and (.ws_mode // "direct") == "direct")) then nonempty(.tls_domain) and nonempty(.cert_file) and nonempty(.key_file) and nonempty(.cert_mode) else true end)
     ' "$STATE_FILE" >/dev/null 2>&1
 }
@@ -2400,9 +2472,9 @@ install_web_config() {
 
     jq -e '
       def text: type == "string" and (explode | all(. != 0 and . != 10 and . != 13));
-      type == "object" and (.schema == 6) and
+      type == "object" and (.schema == 8) and
       (.protocols | type == "object") and
-      ([.origin_ipv4,.origin_ipv6,.ws_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id,.xhttp_mode,.xhttp_path,.xhttp_ech_public_name,.snell_obfs_mode,.snell_obfs_host,.snell_mode]
+      ([.origin_ipv4,.origin_ipv6,.ws_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id,.xhttp_mode,.xhttp_path,.xhttp_ech_public_name,.snell_obfs_mode,.snell_obfs_host,.snell_mode,.ss2022_method]
         | all(. == null or text)) and
       (.ports | type == "object")
     ' "$web_cfg" >/dev/null 2>&1 || err '网页配置 JSON 格式不正确或版本不匹配，请刷新最新版 HTML 后重新生成命令。'
@@ -2414,6 +2486,7 @@ install_web_config() {
     ENABLE_ANYTLS_REALITY=$(jq -r 'if .protocols.anytls_reality == true then "1" else "0" end' "$web_cfg")
     ENABLE_XHTTP=$(jq -r 'if .protocols.xhttp == true then "1" else "0" end' "$web_cfg")
     ENABLE_SNELL=$(jq -r 'if .protocols.snell == true then "1" else "0" end' "$web_cfg")
+    ENABLE_SS2022=$(jq -r 'if .protocols.ss2022 == true then "1" else "0" end' "$web_cfg")
     WS_MODE=$(web_string ws_mode); WS_MODE=${WS_MODE:-direct}
     ARGO_HOST=$(web_string argo_host)
     ARGO_TUNNEL_NAME=$(web_string argo_tunnel_name)
@@ -2436,11 +2509,13 @@ install_web_config() {
     ANYREALITY_PORT=$(jq -r '.ports.anytls_reality // ""' "$web_cfg")
     XHTTP_PORT=$(jq -r '.ports.xhttp // ""' "$web_cfg")
     SNELL_PORT=$(jq -r '.ports.snell // ""' "$web_cfg")
+    SS2022_PORT=$(jq -r '.ports.ss2022 // ""' "$web_cfg")
+    SS2022_METHOD=$(jq -r '.ss2022_method // "2022-blake3-aes-256-gcm"' "$web_cfg")
     cert_mode=$(web_string cert_mode); CF_ZONE_NAME=$(web_string cf_zone_name)
     cf_token=$(web_string cf_token); cert_email=$(web_string cf_email); zone_id=$(web_string cf_zone_id)
     case "$cert_mode" in cloudflare) CERT_MODE=cloudflare ;; http01) CERT_MODE=standalone ;; none|'') CERT_MODE=none ;; *) err '不支持的证书方式。' ;; esac
 
-    selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_XHTTP + ENABLE_SNELL))
+    selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_XHTTP + ENABLE_SNELL + ENABLE_SS2022))
     [ "$selected_count" -gt 0 ] || err '请至少选择一种协议。'
     NEED_CERT=0
     [ "$ENABLE_ANYTLS" = 1 ] && NEED_CERT=1
@@ -2451,6 +2526,10 @@ install_web_config() {
         valid_domain "$XHTTP_ECH_PUBLIC_NAME" || err 'ECH Public Name 必须是有效域名。'
         case "$XHTTP_MODE" in auto|packet-up|stream-up|stream-one) ;; *) err 'XHTTP mode 无效。' ;; esac
         [ -z "$XHTTP_PATH" ] || case "$XHTTP_PATH" in /*) ;; *) err 'XHTTP Path 必须以 / 开头。' ;; esac
+    fi
+    if [ "$ENABLE_SS2022" = 1 ]; then
+        case "$SS2022_METHOD" in 2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm) ;; *) err 'SS2022 method 无效。' ;; esac
+        valid_port "$SS2022_PORT" || SS2022_PORT=$(pick_random_range_port 10000 65535 "$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT")
     fi
     if [ "$ENABLE_SNELL" = 1 ]; then
         case "$SNELL_VERSION" in 5) case "$SNELL_OBFS_MODE" in http|none) ;; *) err 'Snell v5 obfs_mode 无效。' ;; esac ;; 6) case "$SNELL_MODE" in default|unshaped|unsafe-raw) ;; *) err 'Snell v6 mode 无效。' ;; esac ;; *) err 'Snell version 只能是 5 或 6。' ;; esac
@@ -2856,6 +2935,7 @@ change_single_port() {
     printf '5. AnyTLS + Reality    %s/tcp\n' "$ANYREALITY_PORT"
     printf '6. VLESS XHTTP + ECH  %s/tcp\n' "$XHTTP_PORT"
     printf '7. Snell               %s/tcp\n' "$SNELL_PORT"
+    printf '8. Shadowsocks 2022    %s/tcp\n' "$SS2022_PORT"
     printf '0. 返回\n'
     printf '请选择要修改端口的单个节点：'
     IFS= read -r selected_choice || selected_choice=0
@@ -2865,35 +2945,35 @@ change_single_port() {
             [ "$ENABLE_ANYTLS" = 1 ] || { warn '当前未安装 AnyTLS。'; return 0; }
             selected_name='AnyTLS'
             selected_current=$ANYTLS_PORT
-            other_ports="$WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT"
+            other_ports="$WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT $SS2022_PORT"
             selected_kind=range
             ;;
         2)
             [ "$ENABLE_WS_TLS" = 1 ] || { warn '当前未安装 VLESS + WS + TLS。'; return 0; }
             selected_name='VLESS + WS + TLS'
             selected_current=$WS_PORT
-            other_ports="$ANYTLS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT"
+            other_ports="$ANYTLS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT $SS2022_PORT"
             if [ "$WS_MODE" = argo ]; then selected_kind=argo; else selected_kind=ws; fi
             ;;
         3)
             [ "$ENABLE_VLESS_REALITY" = 1 ] || { warn '当前未安装 VLESS + Reality。'; return 0; }
             selected_name='VLESS + Reality'
             selected_current=$REALITY_PORT
-            other_ports="$ANYTLS_PORT $WS_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT"
+            other_ports="$ANYTLS_PORT $WS_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT $SS2022_PORT"
             selected_kind=range
             ;;
         4)
             [ "$ENABLE_NAIVE" = 1 ] || { warn '当前未安装 NaiveProxy。'; return 0; }
             selected_name='NaiveProxy'
             selected_current=$NAIVE_PORT
-            other_ports="$ANYTLS_PORT $WS_PORT $REALITY_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT"
+            other_ports="$ANYTLS_PORT $WS_PORT $REALITY_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT $SS2022_PORT"
             selected_kind=range
             ;;
         5)
             [ "$ENABLE_ANYTLS_REALITY" = 1 ] || { warn '当前未安装 AnyTLS + Reality。'; return 0; }
             selected_name='AnyTLS + Reality'
             selected_current=$ANYREALITY_PORT
-            other_ports="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $XHTTP_PORT $SNELL_PORT"
+            other_ports="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $XHTTP_PORT $SNELL_PORT $SS2022_PORT"
             selected_kind=range
             ;;
         6)
@@ -2907,8 +2987,15 @@ change_single_port() {
             [ "$ENABLE_SNELL" = 1 ] || { warn '当前未安装 Snell。'; return 0; }
             selected_name='Snell'
             selected_current=$SNELL_PORT
-            other_ports="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT"
+            other_ports="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SS2022_PORT"
             selected_kind=range
+            ;;
+        8)
+            [ "$ENABLE_SS2022" = 1 ] || { warn '当前未安装 SS2022。'; return 0; }
+            selected_name='Shadowsocks 2022'
+            selected_current=$SS2022_PORT
+            other_ports="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT"
+            selected_kind=ss2022
             ;;
         0) return 0 ;;
         *) warn '无效选择。'; return 0 ;;
@@ -2923,7 +3010,7 @@ change_single_port() {
         ask_value '输入新的本机 WS 端口（留空自动随机）' ''
     elif [ "$selected_kind" = xhttp ]; then
         ask_value '输入新的 XHTTP TCP 端口（1024–65535；留空自动随机）' ''
-    elif [ "$selected_kind" = range ]; then
+    elif [ "$selected_kind" = range ] || [ "$selected_kind" = ss2022 ]; then
         ask_value '输入新端口（1024–65535；留空自动随机）' ''
     fi
     requested_port=$(trim_value "$REPLY")
@@ -2987,6 +3074,7 @@ change_single_port() {
         5) ANYREALITY_PORT=$selected_new_port ;;
         6) XHTTP_PORT=$selected_new_port ;;
         7) SNELL_PORT=$selected_new_port ;;
+        8) SS2022_PORT=$selected_new_port ;;
     esac
 
     msg "正在仅修改 $selected_name 端口，并检查对应配置……"
@@ -3002,6 +3090,7 @@ change_single_port() {
             5) ANYREALITY_PORT=$old_selected_port ;;
             6) XHTTP_PORT=$old_selected_port ;;
             7) SNELL_PORT=$old_selected_port ;;
+            8) SS2022_PORT=$old_selected_port ;;
         esac
         warn "$selected_name 端口修改失败；已恢复原端口 $old_selected_port，其他节点参数未修改。"
         return 0
@@ -3013,7 +3102,7 @@ change_single_port() {
 }
 
 change_ports() {
-    printf '当前端口：AnyTLS=%s, WS+TLS=%s, VLESS Reality=%s, NaiveProxy=%s, AnyTLS Reality=%s, XHTTP=%s, Snell=%s\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT" "$XHTTP_PORT" "$SNELL_PORT"
+    printf '当前端口：AnyTLS=%s, WS+TLS=%s, VLESS Reality=%s, NaiveProxy=%s, AnyTLS Reality=%s, XHTTP=%s, Snell=%s, SS2022=%s\n' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT" "$XHTTP_PORT" "$SNELL_PORT" "$SS2022_PORT"
     old_anytls=$ANYTLS_PORT
     old_ws=$WS_PORT
     old_reality=$REALITY_PORT
@@ -3021,6 +3110,7 @@ change_ports() {
     old_anyreality=$ANYREALITY_PORT
     old_xhttp=$XHTTP_PORT
     old_snell=$SNELL_PORT
+    old_ss2022=$SS2022_PORT
     PREVIOUS_ANYTLS_PORT=$old_anytls
     PREVIOUS_WS_PORT=$old_ws
     PREVIOUS_REALITY_PORT=$old_reality
@@ -3038,6 +3128,7 @@ change_ports() {
         ANYREALITY_PORT=$old_anyreality
         XHTTP_PORT=$old_xhttp
         SNELL_PORT=$old_snell
+        SS2022_PORT=$old_ss2022
         return 0
     fi
     if [ "$ENABLE_XHTTP" = 1 ] && [ "$XHTTP_PORT" != "$old_xhttp" ]; then
@@ -3234,7 +3325,7 @@ choose_free_added_port() {
         return 1
     fi
     requested=$(normalize_optional_port "$requested_input" '新节点') || return 1
-    other="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT"
+    other="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT $SS2022_PORT"
     if [ -n "$requested" ]; then
         case " $other " in *" $requested "*) warn '该端口已被本脚本其他节点占用。'; return 1 ;; esac
         if port_listening "$requested"; then warn "端口 $requested 已被其他进程监听。"; return 1; fi
@@ -3380,10 +3471,10 @@ protocol_flag() {
         1) printf '%s' "$ENABLE_ANYTLS" ;; 2) printf '%s' "$ENABLE_WS_TLS" ;;
         3) printf '%s' "$ENABLE_VLESS_REALITY" ;; 4) printf '%s' "$ENABLE_NAIVE" ;;
         5) printf '%s' "$ENABLE_ANYTLS_REALITY" ;; 6) printf '%s' "$ENABLE_XHTTP" ;;
-        7) printf '%s' "$ENABLE_SNELL" ;; esac
+        7) printf '%s' "$ENABLE_SNELL" ;; 8) printf '%s' "$ENABLE_SS2022" ;; esac
 }
 protocol_name() {
-    case "$1" in 1) printf AnyTLS ;; 2) printf 'VLESS WS' ;; 3) printf 'VLESS Reality' ;; 4) printf NaiveProxy ;; 5) printf 'AnyTLS Reality' ;; 6) printf 'VLESS XHTTP ECH' ;; 7) printf Snell ;; esac
+    case "$1" in 1) printf AnyTLS ;; 2) printf 'VLESS WS' ;; 3) printf 'VLESS Reality' ;; 4) printf NaiveProxy ;; 5) printf 'AnyTLS Reality' ;; 6) printf 'VLESS XHTTP ECH' ;; 7) printf Snell ;; 8) printf 'Shadowsocks 2022' ;; esac
 }
 
 add_base_protocol() {
@@ -3488,27 +3579,121 @@ modify_xhttp_node() {
     show_nodes
 }
 
+add_ss2022() {
+    [ "$ENABLE_SS2022" = 0 ] || { warn 'SS2022 已安装。'; return 1; }
+    old_method=$SS2022_METHOD; old_password=$SS2022_PASSWORD; old_port=$SS2022_PORT
+    # Adopt one existing unmanaged SS2022 inbound instead of silently replacing
+    # its credentials/port when the user upgrades to first-class management.
+    if [ -s "$CONFIG_FILE" ]; then
+      existing_count=$(jq '[.inbounds[]? | select(.type == "shadowsocks" and (.method // "" | startswith("2022-blake3-")))] | length' "$CONFIG_FILE" 2>/dev/null || printf 0)
+      if [ "$existing_count" = 1 ]; then
+        existing_ss=$(jq -c '[.inbounds[]? | select(.type == "shadowsocks" and (.method // "" | startswith("2022-blake3-")))][0]' "$CONFIG_FILE")
+        existing_method=$(printf '%s' "$existing_ss" | jq -r '.method')
+        existing_port=$(printf '%s' "$existing_ss" | jq -r '.listen_port')
+        existing_password=$(printf '%s' "$existing_ss" | jq -r '.password // ""')
+        if [ -n "$existing_password" ] && valid_port "$existing_port"; then
+          case "$existing_method" in 2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm) ;; *) existing_password="" ;; esac
+          if [ -n "$existing_password" ]; then
+            SS2022_METHOD=$existing_method; SS2022_PORT=$existing_port; SS2022_PASSWORD=$existing_password
+            ENABLE_SS2022=1
+            if build_config; then
+              show_nodes
+              msg "已接管现有 SS2022 入站，原端口 $SS2022_PORT、method 和密码均保留。"
+              return 0
+            fi
+            ENABLE_SS2022=0; SS2022_METHOD=$old_method; SS2022_PASSWORD=$old_password; SS2022_PORT=$old_port
+            warn '接管现有 SS2022 失败，原配置保持不变。'; return 1
+          fi
+        fi
+      elif [ "$existing_count" -gt 1 ]; then
+        warn '检测到多个未托管 SS2022 入站。为避免选错节点，请先手动确定要接管的入站，当前未做任何修改。'
+        return 1
+      fi
+    fi
+    choose_free_added_port || { warn '端口输入中断或无可用端口；已取消。'; return 1; }
+    p=$CHOSEN_PORT
+    ask_value 'SS2022 加密方式（2022-blake3-aes-128-gcm / 2022-blake3-aes-256-gcm）' "${SS2022_METHOD:-2022-blake3-aes-256-gcm}"
+    method=$(trim_value "$REPLY")
+    case "$method" in
+      2022-blake3-aes-128-gcm) key_bytes=16 ;;
+      2022-blake3-aes-256-gcm) key_bytes=32 ;;
+      *) warn 'SS2022 加密方式无效。'; return 1 ;;
+    esac
+    SS2022_METHOD=$method; SS2022_PORT=$p
+    SS2022_PASSWORD=$(openssl rand -base64 "$key_bytes")
+    ENABLE_SS2022=1
+    if build_config && save_state; then
+      show_nodes
+      msg "Shadowsocks 2022 已添加：TCP $SS2022_PORT；method=$SS2022_METHOD。密码已保存至 manager.json（权限 0600）。"
+    else
+      ENABLE_SS2022=0; SS2022_METHOD=$old_method; SS2022_PASSWORD=$old_password; SS2022_PORT=$old_port
+      warn 'SS2022 添加失败，已回滚。'; return 1
+    fi
+}
+
+remove_ss2022() {
+    [ "$ENABLE_SS2022" = 1 ] || { warn 'SS2022 当前未由管理器托管。若 config.json 中存在自定义 SS2022，将保持不变。'; return 0; }
+    ask_value '确认移除 Shadowsocks 2022？输入 yes 确认' no
+    [ "$REPLY" = yes ] || { msg '已取消。'; return 0; }
+    old=$ENABLE_SS2022; ENABLE_SS2022=0
+    if build_config && save_state; then msg 'SS2022 已移除；其他节点不受影响。'
+    else ENABLE_SS2022=$old; warn 'SS2022 删除失败，已恢复。'; return 1; fi
+}
+
+modify_ss2022() {
+    [ "$ENABLE_SS2022" = 1 ] || { warn 'SS2022 未安装。'; return 1; }
+    old_method=$SS2022_METHOD; old_password=$SS2022_PASSWORD; old_port=$SS2022_PORT
+    ask_value 'SS2022 method（留空保持；128/256）' "$SS2022_METHOD"
+    v=$(trim_value "$REPLY")
+    case "$v" in
+      128|2022-blake3-aes-128-gcm) SS2022_METHOD=2022-blake3-aes-128-gcm; bytes=16 ;;
+      256|2022-blake3-aes-256-gcm) SS2022_METHOD=2022-blake3-aes-256-gcm; bytes=32 ;;
+      '') bytes=$([ "$SS2022_METHOD" = 2022-blake3-aes-128-gcm ] && printf 16 || printf 32) ;;
+      *) warn 'method 仅支持 128 或 256。'; return 1 ;;
+    esac
+    if [ "$SS2022_METHOD" != "$old_method" ]; then SS2022_PASSWORD=$(openssl rand -base64 "$bytes"); fi
+    ask_value 'SS2022 TCP 端口（留空保持；输入 auto 自动分配）' "$SS2022_PORT"
+    v=$(trim_value "$REPLY")
+    if [ "$v" = auto ]; then
+      choose_free_added_port || return 1; SS2022_PORT=$CHOSEN_PORT
+    elif [ -n "$v" ]; then
+      valid_port "$v" || { warn '端口无效。'; return 1; }
+      case " $ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT " in *" $v "*) warn '该端口已被其他节点占用。'; return 1 ;; esac
+      if port_listening "$v" && [ "$v" != "$SS2022_PORT" ]; then warn '该端口已被其他进程监听。'; return 1; fi
+      SS2022_PORT=$v
+    fi
+    ask_value 'SS2022 密码（留空保持；输入 rotate 重新生成）' ''
+    v=$(trim_value "$REPLY")
+    if [ "$v" = rotate ]; then SS2022_PASSWORD=$(openssl rand -base64 "$bytes"); elif [ -n "$v" ]; then SS2022_PASSWORD=$v; fi
+    case "$SS2022_METHOD:$SS2022_PASSWORD" in
+      2022-blake3-aes-128-gcm:????????????????????????|2022-blake3-aes-256-gcm:????????????????????????????????????????????) ;;
+      *) warn 'SS2022 密码必须是与所选 AES 方法匹配的 Base64 密钥；输入 rotate 自动生成。'; SS2022_METHOD=$old_method; SS2022_PASSWORD=$old_password; SS2022_PORT=$old_port; return 1 ;;
+    esac
+    if build_config && save_state; then show_nodes; msg 'SS2022 参数已更新。';
+    else SS2022_METHOD=$old_method; SS2022_PASSWORD=$old_password; SS2022_PORT=$old_port; warn '修改失败，已回滚。'; return 1; fi
+}
+
 manage_all_protocols() {
     while :; do
       printf '\n========== 全协议终端管理（添加 / 删除 / 修改） ==========\n'
-      for n in 1 2 3 4 5 6 7; do
+      for n in 1 2 3 4 5 6 7 8; do
         f=$(protocol_flag "$n"); [ "$f" = 1 ] && st=已安装 || st=未安装
         printf '%s. %-22s %s\n' "$n" "$(protocol_name "$n")" "$st"
       done
       printf '0. 返回\n选择协议：'
       IFS= read -r k || return 0
-      case "$k" in 1|2|3|4|5|6|7) ;; 0) return 0 ;; *) warn '无效选择。'; continue ;; esac
+      case "$k" in 1|2|3|4|5|6|7|8) ;; 0) return 0 ;; *) warn '无效选择。'; continue ;; esac
       f=$(protocol_flag "$k")
       if [ "$f" = 1 ]; then
         printf '1. 修改参数 / 凭据\n2. 删除节点\n0. 返回\n选择操作：'
         IFS= read -r op || return 0
         case "$op" in
-          1) case "$k" in 1|2|3|4|5) modify_base_protocol "$k" ;; 6) modify_xhttp_node ;; 7) modify_snell_node ;; esac ;;
-          2) case "$k" in 1|2|3|4|5) remove_base_protocol "$k" ;; 6) remove_xhttp_node ;; 7) remove_snell_node ;; esac ;;
+          1) case "$k" in 1|2|3|4|5) modify_base_protocol "$k" ;; 8) modify_ss2022 ;; 6) modify_xhttp_node ;; 7) modify_snell_node ;; esac ;;
+          2) case "$k" in 1|2|3|4|5) remove_base_protocol "$k" ;; 8) remove_ss2022 ;; 6) remove_xhttp_node ;; 7) remove_snell_node ;; esac ;;
           0) : ;; *) warn '无效操作。' ;;
         esac
       else
-        case "$k" in 1|2|3|4|5) add_base_protocol "$k" ;; 6) manage_xhttp_node ;; 7) manage_snell_node ;; esac
+        case "$k" in 1|2|3|4|5) add_base_protocol "$k" ;; 8) add_ss2022 ;; 6) manage_xhttp_node ;; 7) manage_snell_node ;; esac
       fi
     done
 }
@@ -3576,7 +3761,7 @@ menu() {
         fi
         printf '\nReality SNI（VLESS Reality + AnyTLS Reality；默认 www.bing.com）：%s' "$REALITY_SNI" 
         printf '\n节点辨识符：%s' "${NODE_LABEL:-未设置}"
-        printf '\n端口：AnyTLS %s | WS TLS %s | VLESS Reality %s | NaiveProxy %s/TCP | AnyTLS Reality %s | XHTTP %s | Snell %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT" "$XHTTP_PORT" "$SNELL_PORT"
+        printf '\n端口：AnyTLS %s | WS TLS %s | VLESS Reality %s | NaiveProxy %s/TCP | AnyTLS Reality %s | XHTTP %s | Snell %s | SS2022 %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT" "$XHTTP_PORT" "$SNELL_PORT" "$SS2022_PORT"
         printf '\n---------------------------------------\n'
         printf '1. 查看已安装协议节点链接\n'
         printf '2. 修改 TLS 证书域名 / TLS SNI（AnyTLS + 直连 WS + NaiveProxy）\n'
@@ -3601,6 +3786,7 @@ menu() {
         printf '21. 查看 Xray 服务状态\n'
         printf '22. 查看 Xray 最近日志\n'
         printf '23. 全协议终端管理（添加 / 删除 / 修改）\n'
+        printf '24. Shadowsocks 2022 专项管理（添加 / 删除 / 修改）\n'
         printf '0. 退出\n'
         printf '请选择：'
         IFS= read -r choice || choice=0
@@ -3628,6 +3814,7 @@ menu() {
             21) xray_service_status ;;
             22) [ "$ENABLE_XHTTP" = 1 ] && { if [ "$SERVICE_KIND" = systemd ]; then journalctl -u "$XRAY_SERVICE" -n 80 --no-pager || true; else tail -n 80 /var/log/messages 2>/dev/null | grep -i xray || true; fi; } || warn '当前未安装 XHTTP/Xray。' ;;
             23) manage_all_protocols ;;
+            24) manage_all_protocols ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac

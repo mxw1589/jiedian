@@ -13,6 +13,7 @@ NAIVE_PORT=10004
 ANYREALITY_PORT=10005
 XHTTP_PORT=10006
 SNELL_PORT=""
+SS2022_PORT=""
 warn() { printf '[WARN] %s\n' "$*" >&2; }
 trim_value() { printf '%s\n' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 valid_port() {

@@ -7,14 +7,14 @@
 <title>sing-box / Xray 多协议节点管理器</title>
 <style>
 :root{color-scheme:light;--bg:#f3f6fb;--surface:#fff;--soft:#f8faff;--line:#dce4ef;--line2:#c8d5e5;--text:#17243a;--muted:#64748b;--blue:#2563eb;--blue2:#1d4ed8;--green:#15803d;--greenbg:#f0fdf4;--amber:#92400e;--amberbg:#fffbeb;--red:#b91c1c;--shadow:0 8px 26px rgba(30,55,90,.07)}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -28%,rgba(219,234,254,.9),transparent 48%),var(--bg);color:var(--text);font:14px/1.65 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1180px;margin:auto;padding:28px 22px 60px}header{padding:27px 20px;margin-bottom:18px;text-align:center;background:#ffffffdf;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow)}h1{font-size:clamp(24px,3vw,36px);line-height:1.25;margin:0 0 8px;color:#13233d}.sub,.small{color:var(--muted)}.sub{font-size:13px}.topnote{display:inline-block;margin-top:13px;padding:6px 12px;border:1px solid #bfdbfe;border-radius:99px;background:#eff6ff;color:#1e40af;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:17px;align-items:start}.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow);min-width:0}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:13px}.panel h2{font-size:17px;line-height:1.35;margin:0;color:#172b49}.panel h3{font-size:14px;margin:17px 0 8px;color:#33445d}.badge{font-size:11px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:3px 9px;white-space:nowrap;font-weight:650}.small{font-size:12px;line-height:1.7}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.protocol{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:11px;background:var(--soft);padding:11px;cursor:pointer}.protocol input{width:17px;height:17px;accent-color:var(--blue)}.protocol b{font-size:13px}.protocol span{display:block;font-size:11px;color:var(--muted)}.field{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:10px;margin:10px 0}.field label{font-size:13px;font-weight:650;color:#33445d}.field input,.field select{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;color:var(--text);font:inherit;outline:none}.field input:focus,.field select:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 3px #3b82f61f}.field input:disabled,.field select:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder{color:#94a3b8}.divider{height:1px;background:var(--line);margin:16px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.port{border:1px solid var(--line);border-radius:10px;padding:9px;background:var(--soft)}.port label{display:block;font-size:11px;font-weight:650;color:#33445d;margin-bottom:5px}.port input{width:100%;border:1px solid var(--line2);border-radius:7px;padding:8px;color:var(--text);min-width:0}.notice{margin-top:11px;padding:10px 12px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:10px;font-size:12px;line-height:1.65}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px}button{border:1px solid var(--blue);background:linear-gradient(180deg,#3b82f6,#2563eb);color:white;border-radius:9px;padding:9px 14px;font:700 13px inherit;cursor:pointer;box-shadow:0 4px 10px #2563eb29}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;box-shadow:none}button.ghost{background:white;border-color:var(--line2);color:#33445d;box-shadow:none}button:disabled{opacity:.45;cursor:not-allowed}.command{width:100%;min-height:185px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:10px;padding:12px;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;}.preview{background:#f8fafc;color:#24344d;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:260px;overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}.bottom{margin-top:17px}.hidden{display:none!important}.status{font-size:12px;margin-top:7px;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.footer{text-align:center;color:#718096;font-size:12px;padding-top:22px}code{background:#eff6ff;color:#1e40af;padding:1px 4px;border-radius:4px}@media(max-width:850px){.grid{grid-template-columns:1fr}.wrap{padding:16px 12px 40px}}@media(max-width:560px){.wrap{padding:10px 9px 30px}header{padding:20px 13px}.panel{padding:14px}.protocols{grid-template-columns:1fr}.field{grid-template-columns:1fr;gap:4px}.portgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -28%,rgba(219,234,254,.9),transparent 48%),var(--bg);color:var(--text);font:14px/1.65 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1180px;margin:auto;padding:28px 22px 60px}header{padding:27px 20px;margin-bottom:18px;text-align:center;background:#ffffffdf;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow)}h1{font-size:clamp(24px,3vw,36px);line-height:1.25;margin:0 0 8px;color:#13233d}.sub,.small{color:var(--muted)}.sub{font-size:13px}.topnote{display:inline-block;margin-top:13px;padding:6px 12px;border:1px solid #bfdbfe;border-radius:99px;background:#eff6ff;color:#1e40af;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:17px;align-items:start}.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow);min-width:0}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:13px}.panel h2{font-size:17px;line-height:1.35;margin:0;color:#172b49}.panel h3{font-size:14px;margin:17px 0 8px;color:#33445d}.badge{font-size:11px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:3px 9px;white-space:nowrap;font-weight:650}.small{font-size:12px;line-height:1.7}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.protocol{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:11px;background:var(--soft);padding:9px;cursor:pointer;min-width:0}.protocol-main{display:flex;align-items:center;gap:8px;flex:1;min-width:0}.protocol-main input{width:17px;height:17px;flex:none}.protocol-main span{min-width:0}.protocol-port{width:88px;flex:none;border:1px solid var(--line2);border-radius:7px;padding:6px 7px;font:12px ui-monospace,monospace;color:var(--text);background:#fff}.protocol input.protocol-port{width:88px;height:auto;accent-color:auto}.protocol-port:disabled{background:#f1f5f9;color:#94a3b8}.protocol-port::placeholder{color:#94a3b8}.protocol input{width:17px;height:17px;accent-color:var(--blue)}.protocol b{font-size:13px}.protocol span{display:block;font-size:11px;color:var(--muted)}.field{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:10px;margin:10px 0}.field label{font-size:13px;font-weight:650;color:#33445d}.field input,.field select{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;color:var(--text);font:inherit;outline:none}.field input:focus,.field select:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 3px #3b82f61f}.field input:disabled,.field select:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder{color:#94a3b8}.divider{height:1px;background:var(--line);margin:16px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.port{border:1px solid var(--line);border-radius:10px;padding:9px;background:var(--soft)}.port label{display:block;font-size:11px;font-weight:650;color:#33445d;margin-bottom:5px}.port input{width:100%;border:1px solid var(--line2);border-radius:7px;padding:8px;color:var(--text);min-width:0}.notice{margin-top:11px;padding:10px 12px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:10px;font-size:12px;line-height:1.65}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px}button{border:1px solid var(--blue);background:linear-gradient(180deg,#3b82f6,#2563eb);color:white;border-radius:9px;padding:9px 14px;font:700 13px inherit;cursor:pointer;box-shadow:0 4px 10px #2563eb29}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;box-shadow:none}button.ghost{background:white;border-color:var(--line2);color:#33445d;box-shadow:none}button:disabled{opacity:.45;cursor:not-allowed}.command{width:100%;min-height:185px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:10px;padding:12px;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;}.preview{background:#f8fafc;color:#24344d;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:260px;overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}.bottom{margin-top:17px}.hidden{display:none!important}.status{font-size:12px;margin-top:7px;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.footer{text-align:center;color:#718096;font-size:12px;padding-top:22px}code{background:#eff6ff;color:#1e40af;padding:1px 4px;border-radius:4px}@media(max-width:850px){.grid{grid-template-columns:1fr}.wrap{padding:16px 12px 40px}}@media(max-width:560px){.wrap{padding:10px 9px 30px}header{padding:20px 13px}.panel{padding:14px}.protocols{grid-template-columns:1fr}.protocol-port{width:100px}.protocol input.protocol-port{width:100px;height:auto}.field{grid-template-columns:1fr;gap:4px}.portgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header>
   <h1>⚡ sing-box / Xray 多协议节点管理器</h1>
-  <div class="sub">Debian / Ubuntu / Alpine · 按需选择协议 · Argo 固定隧道 · VLESS XHTTP + ECH · Snell</div>
+  <div class="sub">Debian / Ubuntu / Alpine · 按需选择协议 · Argo 固定隧道 · VLESS XHTTP + ECH · Snell · Shadowsocks 2022</div>
   <div class="topnote">🔒 静态网页 · 参数仅在当前浏览器生成；不会上传到 GitHub Pages</div>
 </header>
 
@@ -22,13 +22,14 @@
 <section class="panel">
   <div class="panelhead"><h2>① 选择需要安装的协议</h2><span class="badge">可单选 / 多选</span></div>
   <div class="protocols">
-    <label class="protocol"><input type="checkbox" id="pAnytls"><span><b>AnyTLS</b><span>需要源站 TLS 证书及公网 TCP 映射</span></span></label>
-    <label class="protocol"><input type="checkbox" id="pWs" checked><span><b>VLESS + WebSocket</b><span>支持直连 TLS 或 Cloudflare Tunnel（Argo）</span></span></label>
-    <label class="protocol"><input type="checkbox" id="pReality"><span><b>VLESS + Reality</b><span>不需要源站证书；需要公网 TCP 映射</span></span></label>
-    <label class="protocol"><input type="checkbox" id="pNaive"><span><b>NaiveProxy</b><span>需要源站 TLS 证书及公网 TCP 映射</span></span></label>
-    <label class="protocol"><input type="checkbox" id="pAnyReality"><span><b>AnyTLS + Reality</b><span>不需要源站证书；需要公网 TCP 映射</span></span></label>
-    <label class="protocol"><input type="checkbox" id="pXhttp"><span><b>VLESS + XHTTP + ECH</b><span>Xray-core 独立服务；需要 TLS 证书、DNS Only 域名和公网 TCP 入站</span></span></label>
-    <label class="protocol"><input type="checkbox" id="pSnell"><span><b>Snell v5 / v6</b><span>sing-box 1.14.0+ 入站；支持 v5 HTTP 混淆与 v6 流量整形</span></span></label>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pAnytls"><span><b>AnyTLS</b><span>需要源站 TLS 证书</span></span></label><input class="protocol-port" id="portAnytls" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="AnyTLS TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pWs" checked><span><b>VLESS + WebSocket</b><span>直连 TLS 或 Cloudflare Argo</span></span></label><input class="protocol-port" id="portWs" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="WS 本机 / TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pReality"><span><b>VLESS + Reality</b><span>不需要源站证书</span></span></label><input class="protocol-port" id="portReality" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="Reality TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pNaive"><span><b>NaiveProxy</b><span>需要源站 TLS 证书</span></span></label><input class="protocol-port" id="portNaive" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="NaiveProxy TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pAnyReality"><span><b>AnyTLS + Reality</b><span>不需要源站证书</span></span></label><input class="protocol-port" id="portAnyReality" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="AnyTLS Reality TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pXhttp"><span><b>VLESS + XHTTP + ECH</b><span>独立 Xray；TLS 证书 + DNS Only</span></span></label><input class="protocol-port" id="portXhttp" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="XHTTP TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pSnell"><span><b>Snell v5 / v6</b><span>sing-box 1.14.0+</span></span></label><input class="protocol-port" id="portSnell" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="Snell TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pSs2022"><span><b>Shadowsocks 2022</b><span>SS2022 · AES-GCM</span></span></label><input class="protocol-port" id="portSs2022" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="SS2022 TCP 端口"></div>
   </div>
   <div id="selectionHint" class="notice ok">默认选择 VLESS + WebSocket，并使用 Argo Tunnel。你可以取消或增加其他协议。</div>
   <div class="divider"></div>
@@ -93,18 +94,13 @@
     </div>
     <div class="small">PSK 和 UserKey 会在服务器上随机生成，不需要在网页填写。安装后会输出 sing-box 客户端配置片段。</div>
   </div>
-  <div class="divider"></div>
-  <h3>所选协议的端口（留空自动分配）</h3>
-  <div class="portgrid">
-    <div class="port"><label id="lPortAnytls" for="portAnytls">AnyTLS TCP</label><input id="portAnytls" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
-    <div class="port"><label id="lPortWs" for="portWs">WS TLS TCP</label><input id="portWs" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
-    <div class="port"><label for="portReality">VLESS Reality TCP</label><input id="portReality" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
-    <div class="port"><label for="portNaive">NaiveProxy TCP</label><input id="portNaive" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
-    <div class="port"><label for="portAnyReality">AnyTLS Reality TCP</label><input id="portAnyReality" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
-    <div class="port"><label for="portXhttp">VLESS XHTTP + ECH TCP</label><input id="portXhttp" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
-    <div class="port"><label for="portSnell">Snell TCP</label><input id="portSnell" type="number" min="1024" max="65535" placeholder="自动随机" disabled></div>
+  <div id="ss2022Fields" class="hidden">
+    <div class="divider"></div>
+    <h3>Shadowsocks 2022 入站</h3>
+    <div class="field"><label for="ss2022Method">加密方式</label><select id="ss2022Method"><option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm（推荐）</option><option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option></select></div>
+    <div class="small">密码在 VPS 本机按所选方法生成并保存在权限为 0600 的 manager.json；安装完成后终端会显示连接参数。端口在上方 SS2022 旁边填写，留空自动分配。</div>
   </div>
-  <div id="portHint" class="notice">仅已勾选协议的端口输入框可以填写。Argo 模式的 WS 端口是 VPS 本机端口，不是公网端口；客户端连接端口固定为 443。</div>
+  <div class="notice" id="portHint">端口直接填写在上方对应协议旁边；留空自动分配。Argo 模式的 WS 端口是 VPS 本机端口，客户端连接端口固定为 443。</div>
 </section>
 </div>
 
@@ -156,17 +152,17 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
   <div class="actions"><button id="copyUninstall" class="secondary">复制卸载命令</button></div>
   <div class="small">卸载会删除本脚本管理的 sing-box / Xray 配置、服务、ECH 密钥及 Cloudflare Tunnel 专用服务和 Token 文件。若 cloudflared 二进制由本脚本下载，也会删除；系统中原本存在的 cloudflared 二进制不会删除。不会删除 Cloudflare 控制台中的 Tunnel、DNS 记录或服务商端口映射。</div>
 </section>
-<div class="footer">静态前端配置生成器。网页不会自动部署或连接 VPS；实际安装结果以服务器上的 sing-box / Xray 配置检查和服务状态为准。XHTTP + ECH 使用独立 Xray 服务，Snell 使用 sing-box 1.14.0+。</div>
+<div class="footer">静态前端配置生成器。网页不会自动部署或连接 VPS；实际安装结果以服务器上的 sing-box / Xray 配置检查和服务状态为准。XHTTP + ECH 使用独立 Xray 服务；Snell 使用 sing-box 1.14.0+；SS2022 使用 sing-box 原生 Shadowsocks 入站。</div>
 </div>
 <script>
 "use strict";
 const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
 const $=id=>document.getElementById(id);
-const ids=["pAnytls","pWs","pReality","pNaive","pAnyReality","pXhttp","pSnell","xhttpEchPublicName","xhttpMode","xhttpPath","snellVersion","snellObfsMode","snellObfsHost","snellMode","portXhttp","portSnell","wsMode","argoHost","argoToken","directWsHost","wsServer","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portReality","portNaive","portAnyReality"];
+const ids=["pAnytls","pWs","pReality","pNaive","pAnyReality","pXhttp","pSnell","pSs2022","ss2022Method","xhttpEchPublicName","xhttpMode","xhttpPath","snellVersion","snellObfsMode","snellObfsHost","snellMode","portXhttp","portSnell","portSs2022","wsMode","argoHost","argoToken","directWsHost","wsServer","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portReality","portNaive","portAnyReality"];
 const v=id=>$(id).value.trim();
-function selected(){return {anytls:$("pAnytls").checked,ws_tls:$("pWs").checked,vless_reality:$("pReality").checked,naive:$("pNaive").checked,anytls_reality:$("pAnyReality").checked,xhttp:$("pXhttp").checked,snell:$("pSnell").checked};}
+function selected(){return {anytls:$("pAnytls").checked,ws_tls:$("pWs").checked,vless_reality:$("pReality").checked,naive:$("pNaive").checked,anytls_reality:$("pAnyReality").checked,xhttp:$("pXhttp").checked,snell:$("pSnell").checked,ss2022:$("pSs2022").checked};}
 function needsCert(p,mode){return p.anytls||p.naive||p.xhttp||(p.ws_tls&&mode==="direct");}
-function needsOrigin(p,mode){return p.anytls||p.vless_reality||p.naive||p.anytls_reality||p.snell;}
+function needsOrigin(p,mode){return p.anytls||p.vless_reality||p.naive||p.anytls_reality||p.snell||p.ss2022;}
 function b64(s){return btoa(unescape(encodeURIComponent(s)));}
 function cfgFromForm(){
   const p=selected(),mode=v("wsMode"),certNeeded=needsCert(p,mode);
@@ -176,7 +172,7 @@ function cfgFromForm(){
   const wsHost=p.ws_tls?(mode==="argo"?argoHost:(v("directWsHost")||tlsDomain)):"";
   const wsServer=p.ws_tls?(v("wsServer")||(mode==="argo"?argoHost:(v("directWsHost")||tlsDomain))):"";
   return {
-    schema:6,protocols:p,ws_mode:p.ws_tls?mode:"none",argo_host:argoHost,
+    schema:8,protocols:p,ws_mode:p.ws_tls?mode:"none",argo_host:argoHost,
     argo_token:p.ws_tls&&mode==="argo"?v("argoToken"):"",
     origin_ipv4:needsOrigin(p,mode)?v("originIPv4"):"",
     origin_ipv6:needsOrigin(p,mode)?v("originIPv6"):"",
@@ -189,8 +185,9 @@ function cfgFromForm(){
     snell_obfs_mode:p.snell&&v("snellVersion")==="5"?v("snellObfsMode"):"http",
     snell_obfs_host:p.snell&&v("snellVersion")==="5"?v("snellObfsHost"):"www.bing.com",
     snell_mode:p.snell&&v("snellVersion")==="6"?v("snellMode"):"default",
+    ss2022_method:p.ss2022?v("ss2022Method"):"2022-blake3-aes-256-gcm",
     node_label:v("nodeLabel"),
-    ports:{anytls:p.anytls?v("portAnytls"):"",ws_tls:p.ws_tls?v("portWs"):"",vless_reality:p.vless_reality?v("portReality"):"",naive:p.naive?v("portNaive"):"",anytls_reality:p.anytls_reality?v("portAnyReality"):"",xhttp:p.xhttp?v("portXhttp"):"",snell:p.snell?v("portSnell"):""},
+    ports:{anytls:p.anytls?v("portAnytls"):"",ws_tls:p.ws_tls?v("portWs"):"",vless_reality:p.vless_reality?v("portReality"):"",naive:p.naive?v("portNaive"):"",anytls_reality:p.anytls_reality?v("portAnyReality"):"",xhttp:p.xhttp?v("portXhttp"):"",snell:p.snell?v("portSnell"):"",ss2022:p.ss2022?v("portSs2022"):""},
     cert_mode:certMode,cf_zone_name:certNeeded&&certMode==="cloudflare"?v("cfZone"):"",
     cf_zone_id:certNeeded&&certMode==="cloudflare"?v("cfZoneId"):"",
     cf_email:certNeeded&&certMode==="cloudflare"?v("cfEmail"):"",
@@ -221,6 +218,7 @@ function validate(c){
     if(!["auto","packet-up","stream-up","stream-one"].includes(c.xhttp_mode))throw Error("XHTTP 模式无效。");
     if(c.xhttp_path&&!c.xhttp_path.startsWith("/"))throw Error("XHTTP Path 必须以 / 开头，或留空自动生成。");
   }
+  if(p.ss2022&&! ["2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm"].includes(c.ss2022_method))throw Error("SS2022 加密方式无效。");
   if(p.snell){
     if(![5,6].includes(c.snell_version))throw Error("Snell 版本只能选择 5 或 6。");
     if(c.snell_version===5&&!['http','none'].includes(c.snell_obfs_mode))throw Error("Snell v5 混淆模式无效。");
@@ -260,7 +258,7 @@ if command -v curl >/dev/null 2>&1; then curl -fsSL '${RAW_URL}' -o "$SH"
 else wget -qO "$SH" '${RAW_URL}'; fi
 head -n 1 "$SH" | grep -qx '#!/bin/sh'
 grep -q 'WEB_CONFIG_MODE=1' "$SH"
-grep -q 'WEB_CONFIG_SCHEMA=6' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
+grep -q 'WEB_CONFIG_SCHEMA=8' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
 install -m 700 "$SH" /usr/local/sbin/sb-manager
 rm -f "$SH"
 /usr/local/sbin/sb-manager install-web-config "$CFG"
@@ -285,10 +283,8 @@ function syncUI(){
   $("certFields").classList.toggle("hidden",!cert);setEnabled("certMode",cert);setEnabled("tlsDomain",cert);
   const cf=cert&&v("certMode")==="cloudflare";$("cfCertFields").classList.toggle("hidden",!cf);["cfZone","cfToken","cfZoneId","cfEmail"].forEach(id=>setEnabled(id,cf));
   $("httpCertHint").classList.toggle("hidden",!cert||v("certMode")!=="http01");
-  const portMap=[["portAnytls",p.anytls],["portWs",ws],["portReality",p.vless_reality],["portNaive",p.naive],["portAnyReality",p.anytls_reality],["portXhttp",p.xhttp],["portSnell",p.snell]];portMap.forEach(([id,on])=>setEnabled(id,on));
-  $("lPortWs").textContent=ws?(mode==="argo"?"Argo 本机 WS 端口":"WS TLS TCP 端口"):"WS TLS TCP 端口";
-  $("portWs").placeholder=mode==="argo"?"本机随机":"自动：2053 等";
-  $("portHint").textContent=ws&&mode==="argo"?"Argo 模式的 WS 端口仅是 VPS 本机 127.0.0.1 监听端口，不需要 NAT 入站映射；客户端端口固定为 443。其他已启用直连协议仍需要服务商公网端口映射。":"仅已勾选协议的端口输入框可以填写。直连 WS TLS 使用 Cloudflare 橙云时，只能使用 443、2053、2083、2087、2096、8443 等支持的 HTTPS 端口。";
+  const portMap=[["portAnytls",p.anytls],["portWs",ws],["portReality",p.vless_reality],["portNaive",p.naive],["portAnyReality",p.anytls_reality],["portXhttp",p.xhttp],["portSnell",p.snell],["portSs2022",p.ss2022]];portMap.forEach(([id,on])=>setEnabled(id,on));
+  $("ss2022Fields").classList.toggle("hidden",!p.ss2022);setEnabled("ss2022Method",p.ss2022);
   $("selectionHint").textContent=Object.values(p).some(Boolean)?`已选择 ${Object.values(p).filter(Boolean).length} 种协议。未选择协议的参数输入框会禁用，不会写入安装配置。`:"请至少选择一种协议。";
 }
 function render(){
@@ -297,7 +293,7 @@ function render(){
   try{const c=validate(cfgFromForm());out.value="# 配置变化时自动更新；请以 root 登录目标 VPS 执行。\n# 命令含敏感 Token，请勿公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="配置完整，安装命令已自动生成。";[copy,down,exp].forEach(b=>b.disabled=false);updatePreview(c);}
   catch(e){out.value="";status.className="status error";status.textContent=e.message;[copy,down,exp].forEach(b=>b.disabled=true);updatePreview(null);}
 }
-function updatePreview(c){const p=selected(),rows=[];if(!Object.values(p).some(Boolean)){ $("nodePreview")&&($("nodePreview").textContent="尚未选择协议。");return;}if(p.anytls)rows.push("AnyTLS");if(p.ws_tls)rows.push(v("wsMode")==="argo"?`VLESS WS TLS → ${v("argoHost")||"Argo 主机名待填写"}:443`:`VLESS WS TLS → ${v("directWsHost")||v("tlsDomain")||"TLS 域名待填写"}`);if(p.vless_reality)rows.push("VLESS Reality");if(p.naive)rows.push("NaiveProxy");if(p.anytls_reality)rows.push("AnyTLS + Reality");if(p.xhttp)rows.push(`VLESS XHTTP + ECH → ${v("tlsDomain")||"TLS 域名待填写"} (${v("xhttpMode")||"auto"})`);if(p.snell)rows.push(`Snell v${v("snellVersion")||"5"}`);const el=$("nodePreview");if(el)el.textContent=rows.join("\n");}
+function updatePreview(c){const p=selected(),rows=[];if(!Object.values(p).some(Boolean)){ $("nodePreview")&&($("nodePreview").textContent="尚未选择协议。");return;}if(p.anytls)rows.push("AnyTLS");if(p.ws_tls)rows.push(v("wsMode")==="argo"?`VLESS WS TLS → ${v("argoHost")||"Argo 主机名待填写"}:443`:`VLESS WS TLS → ${v("directWsHost")||v("tlsDomain")||"TLS 域名待填写"}`);if(p.vless_reality)rows.push("VLESS Reality");if(p.naive)rows.push("NaiveProxy");if(p.anytls_reality)rows.push("AnyTLS + Reality");if(p.xhttp)rows.push(`VLESS XHTTP + ECH → ${v("tlsDomain")||"TLS 域名待填写"} (${v("xhttpMode")||"auto"})`);if(p.snell)rows.push(`Snell v${v("snellVersion")||"5"}`);if(p.ss2022)rows.push(`Shadowsocks 2022 (${v("ss2022Method")})`);const el=$("nodePreview");if(el)el.textContent=rows.join("\n");}
 async function copyText(t){try{await navigator.clipboard.writeText(t);alert("已复制到剪贴板。");}catch{const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();const ok=document.execCommand("copy");a.remove();alert(ok?"已复制。":"复制失败，请手动复制。");}}
 function download(name,text,type="text/plain;charset=utf-8"){const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
 ids.forEach(id=>{$(id).addEventListener("input",render);$(id).addEventListener("change",render);});

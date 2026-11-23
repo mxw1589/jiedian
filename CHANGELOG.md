@@ -1,3 +1,14 @@
+# 更新记录
+
+## v1.0.4
+- 将 Shadowsocks 2022 纳入网页协议选择和终端统一协议管理。
+- SS2022 支持 AES-128-GCM / AES-256-GCM，自动生成正确长度的 Base64 密钥。
+- 首次接管单个现有 SS2022 入站时保留端口、method 和 password；重建配置时不重复创建同端口 SS2022。
+- 所有协议的端口输入框移动到协议选择项右侧；取消独立端口区域。
+- 终端菜单支持 SS2022 添加、删除、修改 method/password/port，单节点端口菜单也加入 SS2022。
+- sing-box 版本解析兼容常见 upstream / v-prefixed 输出；解析失败显示二进制路径和原始版本输出，不会将未知版本当作旧版本继续。
+- 新增 SS2022 配置保留、接管、版本解析回归测试。
+
 # 更新记录 v1.0.3
 
 - 修复核心问题：每次重建 sing-box `config.json` 时，自动保留不属于 sb-manager 管理的自定义 inbounds / outbounds 和其他顶层配置；SS2022 的端口、method、password 等原始字段不再因添加/删除 Snell 而消失。
