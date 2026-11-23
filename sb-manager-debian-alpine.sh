@@ -5,6 +5,7 @@
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=6; selective protocol installation, Argo Tunnel, VLESS XHTTP+ECH and Snell
+# v1.0.2; interactive added-port input is read in the current shell, not command substitution
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -3186,20 +3187,27 @@ configure_xhttp_certificate() {
 }
 
 choose_free_added_port() {
-    # This function is called through command substitution (new_port=$(...)).
-    # Keep the interactive prompt on stderr so it remains visible and does not
-    # get concatenated into the captured port value on stdout.
-    printf '新节点 TCP 端口（留空自动分配 10000–65535）: ' >&2
-    IFS= read -r requested_input || requested_input=""
+    # IMPORTANT: call this function in the current shell, never as $(...):
+    # command substitution creates a subshell and makes interactive stdin
+    # handling fragile in SSH terminal clients. The selected port is returned
+    # through CHOSEN_PORT; stdout remains free of prompts and data.
+    CHOSEN_PORT=""
+    printf '新节点 TCP 端口（留空自动分配 10000–65535）: '
+    if ! IFS= read -r requested_input; then
+        warn '终端输入流已关闭，已取消添加节点；没有修改任何配置。'
+        return 1
+    fi
     requested=$(normalize_optional_port "$requested_input" '新节点') || return 1
     other="$ANYTLS_PORT $WS_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $XHTTP_PORT $SNELL_PORT"
     if [ -n "$requested" ]; then
         case " $other " in *" $requested "*) warn '该端口已被本脚本其他节点占用。'; return 1 ;; esac
         if port_listening "$requested"; then warn "端口 $requested 已被其他进程监听。"; return 1; fi
-        printf '%s\n' "$requested"
+        CHOSEN_PORT=$requested
     else
-        pick_random_range_port 10000 65535 $other
+        CHOSEN_PORT=$(pick_random_range_port 10000 65535 $other) || return 1
     fi
+    valid_port "$CHOSEN_PORT" || { CHOSEN_PORT=""; warn '端口分配结果无效；已取消添加。'; return 1; }
+    return 0
 }
 
 remove_xhttp_node() {
@@ -3237,7 +3245,8 @@ manage_xhttp_node() {
     ask_value 'XHTTP 模式（auto / packet-up / stream-up / stream-one）' "${XHTTP_MODE:-auto}"
     XHTTP_MODE=$(trim_value "$REPLY")
     case "$XHTTP_MODE" in auto|packet-up|stream-up|stream-one) ;; *) warn 'XHTTP mode 无效。'; return 1 ;; esac
-    new_port=$(choose_free_added_port) || { warn '无法分配端口。'; return 1; }
+    choose_free_added_port || { warn '无法分配端口；没有启用 XHTTP。'; return 1; }
+    new_port=$CHOSEN_PORT
     install_xray_core || return 1
     ensure_service_account
     XHTTP_PORT=$new_port
@@ -3317,7 +3326,8 @@ manage_snell_node() {
     esac
     version=$(sing_box_version_from "$SB_BIN" || true)
     version_supports_snell "$version" || { warn "当前 sing-box $version 不支持 Snell；需要 1.14.0 或更新版本。请先运行覆盖升级。"; return 1; }
-    new_port=$(choose_free_added_port) || { warn '无法分配端口。'; return 1; }
+    choose_free_added_port || { warn '无法分配端口；没有启用 Snell。'; return 1; }
+    new_port=$CHOSEN_PORT
     old_port=$SNELL_PORT; old_psk=$SNELL_PSK; old_userkey=$SNELL_USERKEY; old_enabled=$ENABLE_SNELL
     SNELL_PORT=$new_port; SNELL_PSK=$(openssl rand -hex 32); SNELL_USERKEY=$(openssl rand -hex 24); ENABLE_SNELL=1
     if ! build_config; then ENABLE_SNELL=$old_enabled; SNELL_PORT=$old_port; SNELL_PSK=$old_psk; SNELL_USERKEY=$old_userkey; return 1; fi
