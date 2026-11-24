@@ -73,3 +73,10 @@ grep -Fq 'ipv4-203.0.113.10-dual-snell' "$NODES"
 grep -Fq 'ipv6-2001:db8::10-dual-snell' "$NODES"
 if grep -Fq '没有启用任何协议' "$NODES"; then echo 'FAIL: SS2022/Snell-only configuration was marked empty.' >&2; exit 1; fi
 echo 'PASS: SS2022-only/Snell-only dual-stack node export prints IPv4 and IPv6 entries.'
+# Combined dual-stack import file must contain both address families in one URI-only list.
+DUAL="$TMP/nodes-dualstack.txt"
+[ -s "$DUAL" ] || { echo 'FAIL: nodes-dualstack.txt was not generated.' >&2; exit 1; }
+grep -Fq 'ipv4-203.0.113.10-dual-ss2022' "$DUAL"
+grep -Fq 'ipv6-2001%3Adb8%3A%3A10-dual-ss2022' "$DUAL"
+if grep -Eq '^(节点列表|==========|（无)' "$DUAL"; then echo 'FAIL: combined list contains non-URI headings.' >&2; exit 1; fi
+[ "$(wc -l < "$DUAL" | tr -d ' ')" -eq 2 ] || { echo 'FAIL: combined list should contain exactly the two SS2022 URI nodes.' >&2; exit 1; }

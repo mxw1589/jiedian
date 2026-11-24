@@ -112,3 +112,8 @@ bash tests/run-all.sh
 ```
 
 测试覆盖：15 种协议开关、15 种 WARP 组合、变量映射、参数依赖、端口与 Token 校验、命令导入/导出、动态警告、两个页面的 UI 联动、SSH 安装命令生成、SS2022 管理菜单、节点分享链接、IPv4/IPv6 地址格式、配置保留以及 Shell 语法。
+
+
+## IPv4 + IPv6 一起导入
+
+执行 `list` 或菜单中的节点显示功能后，会生成 `nodes-dualstack.txt`。该文件把 IPv4、IPv6（以及域名/Argo）分享 URI 合并为一个紧凑列表，IPv4 在前、IPv6 在后，每行一个可独立导入的节点。标准分享 URI 通常只支持一个 server 地址，因此双栈会以两个节点条目呈现，而不是伪造一个同时含两个地址的 URI。原有 `nodes-ipv4.txt`、`nodes-ipv6.txt` 和 `nodes-domain.txt` 仍保留。Snell 等不具备通用分享 URI 的协议仍使用对应 JSON 配置文件。

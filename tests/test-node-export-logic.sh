@@ -14,4 +14,6 @@ grep -Fq '（无 IPv4 分享链接）' "$SCRIPT"
 grep -Fq '（无 IPv6 分享链接）' "$SCRIPT"
 grep -Fq '（无域名 / Argo 节点）' "$SCRIPT"
 sh -n "$SCRIPT"
-echo 'PASS: SS2022 port ownership and compact dual-stack node export checks.'
+echo 'PASS: SS2022 port ownership and combined dual-stack node export checks.'
+grep -Fq 'nodes-dualstack.txt' "$SCRIPT"
+grep -Fq 'cat "$nodes4_tmp" "$nodes6_tmp" "$nodes_domain_tmp" > "$nodes_dual_tmp"' "$SCRIPT"

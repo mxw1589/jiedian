@@ -1913,6 +1913,7 @@ write_anyreality_client_json() {
 show_nodes() {
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
     nodes_tmp="$APP_DIR/nodes.txt.tmp.$$"
+    nodes_dual_tmp="$APP_DIR/nodes-dualstack.txt.tmp.$$"
     nodes4_tmp="$APP_DIR/nodes-ipv4.txt.tmp.$$"
     nodes6_tmp="$APP_DIR/nodes-ipv6.txt.tmp.$$"
     nodes_domain_tmp="$APP_DIR/nodes-domain.txt.tmp.$$"
@@ -2052,6 +2053,11 @@ show_nodes() {
     if [ "$ENABLE_XHTTP" = 1 ]; then write_xhttp_client_json || warn 'XHTTP 客户端 JSON 生成失败。'; fi
     if [ "$ENABLE_SNELL" = 1 ]; then write_snell_client_json || warn 'Snell 客户端 JSON 生成失败。'; fi
 
+    # Build one combined URI-only list: IPv4 first, then IPv6, then domain/Argo.
+    # Each endpoint remains a separate importable node; standard share URIs cannot
+    # encode two alternative server addresses in one portable node.
+    cat "$nodes4_tmp" "$nodes6_tmp" "$nodes_domain_tmp" > "$nodes_dual_tmp"
+
     # Build copy-ready family files from the URI-only streams. Metadata-only
     # protocols such as Snell are shown in nodes.txt and have JSON files.
     {
@@ -2079,8 +2085,9 @@ show_nodes() {
         fi
     } > "$nodes_tmp"
 
-    chmod 0600 "$nodes_tmp" "$nodes4_tmp" "$nodes6_tmp" "$nodes_domain_tmp"
+    chmod 0600 "$nodes_tmp" "$nodes_dual_tmp" "$nodes4_tmp" "$nodes6_tmp" "$nodes_domain_tmp"
     mv -f "$nodes_tmp" "$APP_DIR/nodes.txt"
+    mv -f "$nodes_dual_tmp" "$APP_DIR/nodes-dualstack.txt"
     mv -f "$nodes4_tmp" "$APP_DIR/nodes-ipv4.txt"
     mv -f "$nodes6_tmp" "$APP_DIR/nodes-ipv6.txt"
     mv -f "$nodes_domain_tmp" "$APP_DIR/nodes-domain.txt"
@@ -2088,6 +2095,7 @@ show_nodes() {
 
     msg '================ 节点信息（紧凑双栈） ================'
     cat "$APP_DIR/nodes.txt"
+    printf '双栈合并导入列表：%s/nodes-dualstack.txt\n' "$APP_DIR"
     printf 'IPv4 节点：%s/nodes-ipv4.txt\n' "$APP_DIR"
     printf 'IPv6 节点：%s/nodes-ipv6.txt\n' "$APP_DIR"
     printf '域名节点：%s/nodes-domain.txt\n' "$APP_DIR"
