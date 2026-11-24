@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube 下载命令生成器（yt-dlp）
 // @namespace    ytdlp-command-generator
-// @version      1.4.3
-// @description  点击缩略图按钮打开下载选项面板，不跳转播放；保留手机/电脑六种复制命令
+// @version      1.4.4
+// @description  缩略图下载按钮优先拦截点击并打开六种复制命令选项，不跳转视频页面
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
 // @match        https://music.youtube.com/*
@@ -18,7 +18,7 @@
  * 用法：打开任意 YouTube 视频（含 Shorts），页面会出现「生成下载命令」悬浮按钮。
  *       可拖动按钮到任意位置，松手后自动吸附到左/右边缘；按钮会延时收起，悬停/点击可唤回。
  *       吸边位置会保存在脚本管理器/本地存储中，刷新后尽可能恢复。
- *       每个视频缩略图左上角也会出现 8mm × 8mm 下载按钮，点击后打开该视频的下载选项面板，不跳转播放。
+ *       每个视频缩略图左上角也会出现 8mm × 8mm 下载按钮，点击后直接打开该视频的六选项复制面板，不跳转视频详情页。
  *       面板有 6 个独立复制按钮：MP4 1080p、MP4 最高画质、MP3，每种格式都分「手机」和「电脑」两个版本：
  *       手机版粘贴到 Termux 运行，电脑版粘贴到 cmd 运行。
  * 保存位置：手机存到 /storage/emulated/0/snaptube，电脑存到 D:/snaptube，
@@ -99,6 +99,20 @@
   // 面板初始化后再绑定实际动作；按钮出现前不会有匹配事件。
   let thumbnailButtonAction = null;
 
+  function getEventPoint(event) {
+    // MouseEvent / PointerEvent 使用 clientX/Y；TouchEvent 使用 touches 或 changedTouches。
+    if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+      return { x: event.clientX, y: event.clientY };
+    }
+    const touches = event.changedTouches && event.changedTouches.length
+      ? event.changedTouches
+      : event.touches;
+    if (touches && touches.length) {
+      return { x: touches[0].clientX, y: touches[0].clientY };
+    }
+    return null;
+  }
+
   function getThumbnailButtonFromEvent(event) {
     const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
     for (const node of path) {
@@ -106,10 +120,29 @@
         return node;
       }
     }
+
     const target = event.target;
-    return target && typeof target.closest === 'function'
+    const direct = target && typeof target.closest === 'function'
       ? target.closest('.' + THUMB_BUTTON_CLASS)
       : null;
+    if (direct) return direct;
+
+    // 某些 YouTube 卡片会建立自己的层叠上下文：图标看得见，但命中目标仍可能是缩略图链接。
+    // 再按点击坐标检查按钮实际矩形，确保点在图标区域时仍按下载按钮处理。
+    const point = getEventPoint(event);
+    if (!point || !document.querySelectorAll) return null;
+    const buttons = document.querySelectorAll('.' + THUMB_BUTTON_CLASS);
+    for (let i = buttons.length - 1; i >= 0; i--) {
+      const button = buttons[i];
+      if (!button || !button.isConnected) continue;
+      const rect = button.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0 &&
+          point.x >= rect.left && point.x <= rect.right &&
+          point.y >= rect.top && point.y <= rect.bottom) {
+        return button;
+      }
+    }
+    return null;
   }
 
   function handleThumbnailButtonEvent(event) {
@@ -117,7 +150,7 @@
     if (!button) return;
 
     if (event.type === 'click') {
-      // 在捕获阶段取消链接默认导航，并阻断 YouTube 卡片的点击处理。
+      // 在 window 捕获阶段取消缩略图链接导航，并阻断 YouTube 卡片的点击处理。
       if (event.cancelable) event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
@@ -127,7 +160,7 @@
 
     // 不取消 pointer/touch 的默认行为，确保浏览器仍会生成 click；
     // 只阻断 YouTube 后续收到这些事件，避免卡片误判为播放/快捷键操作。
-    if (event.type === 'auxclick' || event.type === 'contextmenu') event.preventDefault();
+    if ((event.type === 'auxclick' || event.type === 'contextmenu') && event.cancelable) event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
   }
@@ -197,11 +230,25 @@
   // 按钮必须放在视频链接 <a> 外面，绝不退回到 anchor 本身。
   // 新版 YouTube 卡片结构不固定，因此依次尝试标准缩略图容器、父容器和祖父容器。
   function getThumbnailHost(anchor) {
+    const card = anchor.closest([
+      'ytd-rich-item-renderer', 'ytd-video-renderer', 'ytd-grid-video-renderer',
+      'ytd-compact-video-renderer', 'ytd-playlist-video-renderer',
+      'ytd-playlist-panel-video-renderer', 'ytd-reel-item-renderer', 'yt-lockup-view-model',
+    ].join(','));
     const knownHost = anchor.closest('ytd-thumbnail, yt-thumbnail-view-model, .yt-lockup-view-model__content-image-container');
-    const candidates = [knownHost, anchor.parentElement, anchor.parentElement && anchor.parentElement.parentElement];
+    // 如果缩略图被 YouTube 放进外层链接，按钮放到该链接的父级，避免把 button 嵌套进 a。
+    const outerInteractive = anchor.parentElement && anchor.parentElement.closest('a, button');
+    const candidates = [
+      knownHost,
+      anchor.parentElement,
+      anchor.parentElement && anchor.parentElement.parentElement,
+      card,
+      outerInteractive && outerInteractive.parentElement,
+    ];
     for (const candidate of candidates) {
       if (!candidate || candidate === document.body || candidate === document.documentElement) continue;
       if (candidate.tagName === 'A' || candidate.tagName === 'BUTTON') continue;
+      if (typeof candidate.contains !== 'function' || !candidate.contains(anchor)) continue;
       // 容器本身或其祖先仍是链接/按钮时，也不能把交互按钮插进去。
       if (candidate.closest('a, button')) continue;
       const rect = candidate.getBoundingClientRect();
@@ -1080,8 +1127,8 @@ button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
           button = h('button', {
             class: THUMB_BUTTON_CLASS,
             type: 'button',
-            'aria-label': '打开此视频的下载选项（不播放视频）',
-            title: '打开此视频的下载选项（不播放视频）',
+            'aria-label': '显示此视频的复制命令选项（不打开视频）',
+            title: '显示复制命令选项（不打开视频）',
             'data-video-id': id,
             'data-anchor-key': anchorKey,
           }, icon('download', 16));
