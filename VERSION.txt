@@ -1,0 +1,4 @@
+Project version: 1.2.0
+Build date: 2026-11-24
+Main generator target: ArgoSBX V26.11.20
+Node manager backend: v1.0.8

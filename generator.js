@@ -11,9 +11,9 @@ const PROTOCOLS = [
   { key: 'arpt', name: 'Any-reality', group: 'Sing-box', help: 'AnyTLS + Reality；不需要域名证书' },
   { key: 'sspt', name: 'Shadowsocks 2022', group: 'Sing-box', help: 'SS2022 入站' },
   { key: 'snpt', name: 'Snell v6', group: 'Sing-box', help: 'Snell v6 入站' },
-  { key: 'hypt', name: 'Hysteria2', group: '自动选择内核', help: '内核由官方脚本根据当前已选协议自动分配' },
-  { key: 'vmpt', name: 'VMess WebSocket', group: '自动选择内核', help: '支持 CDN/Argo' },
-  { key: 'sopt', name: 'SOCKS5', group: '自动选择内核', help: '内核由官方脚本根据当前已选协议自动分配' },
+  { key: 'hypt', name: 'Hysteria2', group: '自动选择内核', help: '内核由上游按已选协议组合分配；只选自动组时上游默认使用 Xray' },
+  { key: 'vmpt', name: 'VMess WebSocket', group: '自动选择内核', help: '支持 CDN/Argo；内核由上游按已选协议组合分配' },
+  { key: 'sopt', name: 'SOCKS5', group: '自动选择内核', help: '内核由上游按已选协议组合分配；只选自动组时上游默认使用 Xray' },
 ];
 const PROTOCOL_ORDER = ['sopt', 'vmpt', 'vlpt', 'xhpt', 'vxpt', 'vwpt', 'xupt', 'xcpt', 'hypt', 'tupt', 'nvpt', 'anpt', 'arpt', 'sspt', 'snpt'];
 const OPTION_ORDER = ['warp', 'ippz', 'uuid', 'reym', 'cfip', 'alns', 'hyjpt', 'cdnym', 'name', 'oap', 'sub', 'subid', 'subpt'];
@@ -38,8 +38,10 @@ const WARP_OPTIONS = [
 ];
 const DOMAIN_RE = /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[A-Za-z]{2,63}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SAFE_NAME_RE = /^[\p{L}\p{N}._-]{1,32}$/u;
-const SAFE_SUBID_RE = /^[A-Za-z0-9._-]{1,64}$/;
+const SAFE_NAME_RE = /^(?=.{1,32}$)[\p{L}\p{N}](?:[\p{L}\p{N}._-]*[\p{L}\p{N}])?$/u;
+// subid becomes a single URL path segment and a directory name on the VPS.
+// Require alphanumeric endpoints so '.' and '..' cannot be used as path segments.
+const SAFE_SUBID_RE = /^(?=.{1,64}$)[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const clean = value => String(value ?? '').trim();
 function validPort(value) {
   if (value === '') return true;
@@ -114,13 +116,13 @@ function validateConfig(config) {
   if (!['', '4', '6'].includes(ippz)) errors.push('IP 配置导出只能选择自动、IPv4 或 IPv6。');
   if (!['', 'y'].includes(clean(options.oap))) errors.push('开放所有端口选项无效。');
   const name = clean(options.name);
-  if (name && !SAFE_NAME_RE.test(name)) errors.push('节点名称前缀最多 32 个字符，只允许中文、字母、数字、点、下划线和短横线。');
+  if (name && !SAFE_NAME_RE.test(name)) errors.push('节点名称前缀最多 32 个字符，只允许中文、字母、数字、点、下划线和短横线，且首尾必须是字母或数字。');
   const sub = clean(options.sub);
   if (!['', 'y'].includes(sub)) errors.push('订阅开关值无效。');
   const subid = clean(options.subid);
   const subpt = clean(options.subpt);
   if (sub !== 'y' && (subid || subpt)) errors.push('请先启用订阅链接，再填写订阅密码或端口。');
-  if (subid && !SAFE_SUBID_RE.test(subid)) errors.push('订阅密码只能使用 1–64 位英文字母、数字、点、下划线或短横线。');
+  if (subid && !SAFE_SUBID_RE.test(subid)) errors.push('订阅密码只能使用 1–64 位英文字母、数字、点、下划线或短横线，且首尾必须是字母或数字。');
   if (sub === 'y' && !validPort(subpt)) errors.push('订阅端口必须是 1–65535 的整数，或留空自动分配。');
   if (subpt) {
     if (occupied.has(subpt)) errors.push(`订阅端口 ${subpt} 与 ${occupied.get(subpt)} 冲突，请更换端口。`);
@@ -136,9 +138,56 @@ function validateConfig(config) {
   if (!argoProtocol && (agn || agk || agqc)) errors.push('请先选择 Argo 主协议，再填写隧道模式、域名或 Token。');
   if (Boolean(agn) !== Boolean(agk)) errors.push('固定 Argo 隧道必须同时填写 CF 域名和 Token；两项都留空则使用临时隧道。');
   if (agn && !isDomain(agn)) errors.push('固定隧道 CF 域名格式不正确，例如 tunnel.example.com。');
-  if (agk && !/^eyJ[A-Za-z0-9._~+\/=-]+$/.test(agk)) errors.push('固定隧道 Token 格式不正确，请粘贴完整的 eyJ... Token。');
+  if (agk && (agk.length > 8192 || !/^eyJ[A-Za-z0-9+\/=_-]+$/.test(agk))) errors.push('固定隧道 Token 格式不正确；请粘贴完整的 eyJ... Token（最多 8192 个允许字符）。');
   if (argoProtocol === 'vxpt' && (!agn || !agk)) errors.push('VLESS XHTTP-Enc 的 Argo 模式仅支持固定隧道，必须填写 CF 域名和 Token。');
   return errors;
+}
+
+
+function getWarnings(config) {
+  const options = config.options ?? {};
+  const warnings = [];
+  if (clean(options.hyjpt)) {
+    warnings.push({
+      id: 'hyjpt', level: 'danger',
+      message: '上游 V26.11.20 在配置 HY2 端口跳跃时会清空 IPv4/IPv6 的 NAT PREROUTING 规则，再写入跳跃端口规则。若 VPS 正在使用 Docker、端口转发或自定义 NAT，请不要启用此项，除非已备份并确认这些规则可以重建。'
+    });
+  }
+  if (clean(options.hyjpt)) {
+    const jump = parsePortRanges(options.hyjpt);
+    const protocols = config.protocols ?? {};
+    const udpCapable = ['tupt', 'xupt', 'xcpt', 'sspt', 'sopt'];
+    const conflicts = udpCapable.filter(key => {
+      if (!protocols[key]?.enabled || !clean(protocols[key]?.port) || !jump.ok) return false;
+      const port = Number(clean(protocols[key].port));
+      return jump.ranges.some(([start, end]) => port >= start && port <= end);
+    });
+    if (conflicts.length) {
+      warnings.push({
+        id: 'hyjpt-overlap', level: 'danger',
+        message: `HY2 跳跃端口范围覆盖了这些 UDP / 可能支持 UDP 的监听端口：${conflicts.map(x => x.toUpperCase()).join(', ')}。上游 DNAT 可能把这些 UDP 流量转发到 HY2，导致对应节点不可用。请调整跳跃范围或监听端口。`
+      });
+    }
+  }
+  if (clean(options.oap) === 'y') {
+    warnings.push({
+      id: 'oap', level: 'danger',
+      message: '上游脚本会把 iptables INPUT/FORWARD/OUTPUT 默认策略设为 ACCEPT，并清空整个 IPv4 filter 规则表；这不只是放行代理端口。可能暴露 SSH、数据库和其他服务，也可能删除现有防火墙规则。通常应保持关闭。'
+    });
+  }
+  if (clean(options.sub) === 'y') {
+    warnings.push({
+      id: 'sub', level: 'info',
+      message: '上游订阅服务通过普通 HTTP 提供订阅文件，访问密码位于 URL 路径中。不要公开分享订阅地址；若需要加密传输，请在可信的 HTTPS 反向代理后使用。'
+    });
+  }
+  if (clean(options.alns) === 'y') {
+    warnings.push({
+      id: 'alns', level: 'info',
+      message: '若 /root/ygkkkca/private.key 不存在，上游脚本会调用 Acme-yg 尝试申请域名/IP 证书；只有证书文件成功生成后才会使用该证书，否则会回退到自签证书。申请过程可能需要额外等待。'
+    });
+  }
+  return warnings;
 }
 
 function collectVariables(config) {
@@ -258,6 +307,6 @@ function generateUuid(cryptoObject = globalThis.crypto) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-const ArgoGenerator = { PROTOCOLS, PROTOCOL_ORDER, OPTION_ORDER, SHORTCUTS, WARP_OPTIONS, validateConfig, collectVariables, shellQuote, buildCommand, parseCommand, configFromVariables, summarizeConfig, generateUuid };
+const ArgoGenerator = { PROTOCOLS, PROTOCOL_ORDER, OPTION_ORDER, SHORTCUTS, WARP_OPTIONS, validateConfig, getWarnings, collectVariables, shellQuote, buildCommand, parseCommand, configFromVariables, summarizeConfig, generateUuid };
 if (typeof module !== 'undefined' && module.exports) module.exports = ArgoGenerator;
 else if (typeof window !== 'undefined') window.ArgoGenerator = ArgoGenerator;

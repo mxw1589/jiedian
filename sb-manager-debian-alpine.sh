@@ -5,7 +5,7 @@
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=8; selective protocol installation, Argo Tunnel, VLESS XHTTP+ECH, Snell and SS2022
-# v1.0.7; SS2022 port ownership and dual-stack node export fixes
+# v1.0.8; compact IPv4/IPv6 node lists and per-family client configs
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -1055,19 +1055,38 @@ write_xhttp_client_json() {
     chown root:root "$client_tmp" && chmod 0600 "$client_tmp" && mv -f "$client_tmp" "$XRAY_CLIENT_CONFIG_FILE"
 }
 
-write_snell_client_json() {
-    [ "$ENABLE_SNELL" = 1 ] || { rm -f "$SNELL_CLIENT_CONFIG_FILE"; return 0; }
-    client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
-    [ -n "$client_server" ] || return 1
-    client_tmp="$SNELL_CLIENT_CONFIG_FILE.tmp.$$"
+write_snell_client_json_for() {
+    snell_server=$1
+    snell_output=$2
+    [ -n "$snell_server" ] || return 0
+    snell_tmp="$snell_output.tmp.$$"
     if [ "$SNELL_VERSION" = 5 ]; then
-        jq -n --arg server "$client_server" --arg port "$SNELL_PORT" --arg psk "$SNELL_PSK" --arg userkey "$SNELL_USERKEY" --arg obfs "$SNELL_OBFS_MODE" --arg host "$SNELL_OBFS_HOST" \
-          '{type:"snell",tag:"snell-out",server:$server,server_port:($port|tonumber),version:4,psk:$psk,userkey:$userkey,reuse:false,network:"tcp",obfs_mode:$obfs,obfs_host:(if $obfs=="http" then $host else null end)} | with_entries(select(.value!=null))' > "$client_tmp"
+        jq -n --arg server "$snell_server" --arg port "$SNELL_PORT" --arg psk "$SNELL_PSK" --arg userkey "$SNELL_USERKEY" --arg obfs "$SNELL_OBFS_MODE" --arg host "$SNELL_OBFS_HOST" \
+          '{type:"snell",tag:"snell-out",server:$server,server_port:($port|tonumber),version:4,psk:$psk,userkey:$userkey,reuse:false,network:"tcp",obfs_mode:$obfs,obfs_host:(if $obfs=="http" then $host else null end)} | with_entries(select(.value!=null))' > "$snell_tmp"
     else
-        jq -n --arg server "$client_server" --arg port "$SNELL_PORT" --arg psk "$SNELL_PSK" --arg userkey "$SNELL_USERKEY" --arg mode "$SNELL_MODE" \
-          '{type:"snell",tag:"snell-out",server:$server,server_port:($port|tonumber),version:6,psk:$psk,userkey:$userkey,reuse:false,network:"tcp",mode:$mode}' > "$client_tmp"
+        jq -n --arg server "$snell_server" --arg port "$SNELL_PORT" --arg psk "$SNELL_PSK" --arg userkey "$SNELL_USERKEY" --arg mode "$SNELL_MODE" \
+          '{type:"snell",tag:"snell-out",server:$server,server_port:($port|tonumber),version:6,psk:$psk,userkey:$userkey,reuse:false,network:"tcp",mode:$mode}' > "$snell_tmp"
     fi
-    chown root:root "$client_tmp" && chmod 0600 "$client_tmp" && mv -f "$client_tmp" "$SNELL_CLIENT_CONFIG_FILE"
+    chmod 0600 "$snell_tmp" && chown root:root "$snell_tmp" && mv "$snell_tmp" "$snell_output"
+}
+
+write_snell_client_json() {
+    [ "$ENABLE_SNELL" = 1 ] || {
+        rm -f "$SNELL_CLIENT_CONFIG_FILE" "$APP_DIR/snell-client-ipv4.json" "$APP_DIR/snell-client-ipv6.json"
+        return 0
+    }
+    client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
+    [ -n "$client_server" ] || return 0
+    write_snell_client_json_for "$client_server" "$SNELL_CLIENT_CONFIG_FILE" || return 1
+    case "$ORIGIN_ADDR" in
+        *[!0-9.]*|'') rm -f "$APP_DIR/snell-client-ipv4.json" ;;
+        *) write_snell_client_json_for "$ORIGIN_ADDR" "$APP_DIR/snell-client-ipv4.json" || return 1 ;;
+    esac
+    if [ -n "$ORIGIN_IPV6" ]; then
+        write_snell_client_json_for "$ORIGIN_IPV6" "$APP_DIR/snell-client-ipv6.json" || return 1
+    else
+        rm -f "$APP_DIR/snell-client-ipv6.json"
+    fi
 }
 
 ensure_service_account() {
@@ -1856,148 +1875,223 @@ change_node_label() {
     show_nodes
 }
 
-write_anyreality_client_json() {
-    [ "$ENABLE_ANYTLS_REALITY" = 1 ] || { rm -f "$APP_DIR/anytls-reality-client.json"; return 0; }
-    client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
-    [ -n "$client_server" ] || return 0
-    client_json_tmp="$APP_DIR/anytls-reality-client.json.tmp.$$"
+write_anyreality_client_json_for() {
+    anyreality_server=$1
+    anyreality_output=$2
+    [ -n "$anyreality_server" ] || return 0
+    anyreality_tmp="$anyreality_output.tmp.$$"
     jq -n \
-      --arg server "$client_server" \
+      --arg server "$anyreality_server" \
       --arg server_port "$ANYREALITY_PORT" \
       --arg password "$ANYREALITY_PASSWORD" \
       --arg server_name "$REALITY_SNI" \
       --arg public_key "$ANYREALITY_PUBLIC" \
       --arg short_id "$ANYREALITY_SID" \
-      '{type:"anytls",tag:"anytls-reality",server:$server,server_port:($server_port|tonumber),password:$password,tls:{enabled:true,server_name:$server_name,utls:{enabled:true,fingerprint:"chrome"},reality:{enabled:true,public_key:$public_key,short_id:$short_id}}}' > "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
-    chmod 0600 "$client_json_tmp"
-    chown root:root "$client_json_tmp"
-    mv "$client_json_tmp" "$APP_DIR/anytls-reality-client.json"
+      '{type:"anytls",tag:"anytls-reality",server:$server,server_port:($server_port|tonumber),password:$password,tls:{enabled:true,server_name:$server_name,utls:{enabled:true,fingerprint:"chrome"},reality:{enabled:true,public_key:$public_key,short_id:$short_id}}}' > "$anyreality_tmp" || { rm -f "$anyreality_tmp"; return 1; }
+    chmod 0600 "$anyreality_tmp" && chown root:root "$anyreality_tmp" && mv "$anyreality_tmp" "$anyreality_output"
+}
+
+write_anyreality_client_json() {
+    [ "$ENABLE_ANYTLS_REALITY" = 1 ] || {
+        rm -f "$APP_DIR/anytls-reality-client.json" "$APP_DIR/anytls-reality-client-ipv4.json" "$APP_DIR/anytls-reality-client-ipv6.json"
+        return 0
+    }
+    client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
+    [ -n "$client_server" ] || return 0
+    write_anyreality_client_json_for "$client_server" "$APP_DIR/anytls-reality-client.json" || return 1
+    case "$ORIGIN_ADDR" in
+        *[!0-9.]*|'') rm -f "$APP_DIR/anytls-reality-client-ipv4.json" ;;
+        *) write_anyreality_client_json_for "$ORIGIN_ADDR" "$APP_DIR/anytls-reality-client-ipv4.json" || return 1 ;;
+    esac
+    if [ -n "$ORIGIN_IPV6" ]; then
+        write_anyreality_client_json_for "$ORIGIN_IPV6" "$APP_DIR/anytls-reality-client-ipv6.json" || return 1
+    else
+        rm -f "$APP_DIR/anytls-reality-client-ipv6.json"
+    fi
 }
 
 show_nodes() {
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
     nodes_tmp="$APP_DIR/nodes.txt.tmp.$$"
-    {
-        printf 'sing-box 节点信息（仅显示已安装协议）\n辨识符：%s\n\n' "${NODE_LABEL:-未设置}"
+    nodes4_tmp="$APP_DIR/nodes-ipv4.txt.tmp.$$"
+    nodes6_tmp="$APP_DIR/nodes-ipv6.txt.tmp.$$"
+    nodes_domain_tmp="$APP_DIR/nodes-domain.txt.tmp.$$"
+    nodes4_meta_tmp="$APP_DIR/nodes-ipv4-meta.tmp.$$"
+    nodes6_meta_tmp="$APP_DIR/nodes-ipv6-meta.tmp.$$"
+    nodes_domain_meta_tmp="$APP_DIR/nodes-domain-meta.tmp.$$"
+    : > "$nodes4_tmp"; : > "$nodes6_tmp"; : > "$nodes_domain_tmp"
+    : > "$nodes4_meta_tmp"; : > "$nodes6_meta_tmp"; : > "$nodes_domain_meta_tmp"
 
-        if [ -n "$ORIGIN_ADDR" ]; then
-            origin_uri=$(uri_host "$ORIGIN_ADDR")
-            if [ "$ENABLE_ANYTLS" = 1 ]; then
-                tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-                printf '[%s] AnyTLS | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYTLS_PORT" "$ANYTLS_LINK"
-            fi
-            if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
-                tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                ANYREALITY_LINK="anytls://${ANYREALITY_PASSWORD}@${origin_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
-                printf '[%s] AnyTLS + Reality | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYREALITY_PORT" "$ANYREALITY_LINK"
-            fi
-            if [ "$ENABLE_VLESS_REALITY" = 1 ]; then
-                tag=$(node_tag IPv4 "$ORIGIN_ADDR" vless+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
-                printf '[%s] VLESS + Reality | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
-            fi
-            if [ "$ENABLE_NAIVE" = 1 ]; then
-                tag=$(node_tag IPv4 "$ORIGIN_ADDR" naiveproxy); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                NAIVE_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-                printf '[%s] NaiveProxy | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$NAIVE_PORT" "$NAIVE_LINK"
-            fi
+    # Family files are plain importable URI lists: one URI per line, no labels
+    # or prose. Names are already embedded in each URI fragment.
+    add_node_line() {
+        printf '%s\n' "$2" >> "$3"
+    }
+    add_node_meta() {
+        printf '%s\n' "$1" >> "$2"
+    }
+    host_bucket() {
+        case "$1" in
+            *:*) printf ipv6 ;;
+            *[!0-9.]*) printf domain ;;
+            *) printf ipv4 ;;
+        esac
+    }
+    target_file() {
+        case "$1" in
+            ipv4) printf '%s' "$nodes4_tmp" ;;
+            ipv6) printf '%s' "$nodes6_tmp" ;;
+            *) printf '%s' "$nodes_domain_tmp" ;;
+        esac
+    }
+
+    if [ -n "$ORIGIN_ADDR" ]; then
+        origin_uri=$(uri_host "$ORIGIN_ADDR")
+        origin_bucket=$(host_bucket "$ORIGIN_ADDR")
+        origin_file=$(target_file "$origin_bucket")
+        if [ "$ENABLE_ANYTLS" = 1 ]; then
+            tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+            add_node_line "$tag" "$ANYTLS_LINK" "$origin_file"
         fi
-
-        if [ "$ENABLE_WS_TLS" = 1 ] && [ -n "$WS_SERVER" ]; then
-            ws_server_uri=$(uri_host "$WS_SERVER")
-            tag=$(node_tag_single vless+ws+tls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-            if [ "$WS_MODE" = argo ]; then
-                ws_link_port=443
-                ws_link_sni=$ARGO_HOST
-                ws_link_host=$ARGO_HOST
-            else
-                ws_link_port=$WS_PORT
-                ws_link_sni=$TLS_DOMAIN
-                ws_link_host=$WS_HOST
-            fi
-            WS_LINK="vless://${WS_UUID}@${ws_server_uri}:${ws_link_port}?encryption=none&security=tls&sni=${ws_link_sni}&type=ws&host=${ws_link_host}&path=${WS_PATH_ENC}#${tag_uri}"
-            printf '[%s] VLESS + WebSocket + TLS%s | 地址：%s | 客户端端口：%s | 本机端口：%s\n%s\n\n' "$tag" "$([ "$WS_MODE" = argo ] && printf ' (Cloudflare Tunnel)' || true)" "$WS_SERVER" "$ws_link_port" "$WS_PORT" "$WS_LINK"
+        if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+            tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            ANYREALITY_LINK="anytls://${ANYREALITY_PASSWORD}@${origin_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
+            add_node_line "$tag" "$ANYREALITY_LINK" "$origin_file"
         fi
-
-        if [ "$ENABLE_XHTTP" = 1 ]; then
-            xhttp_path_uri=$(jq -nr --arg p "$XHTTP_PATH" '$p | @uri')
-            xhttp_tag="domain-${TLS_DOMAIN}"
-            [ -z "$NODE_LABEL" ] || xhttp_tag="${xhttp_tag}-${NODE_LABEL}"
-            xhttp_tag="${xhttp_tag}-vless+xhttp+ech"
-            xhttp_tag_uri=$(jq -nr --arg tag "$xhttp_tag" '$tag | @uri')
-            xhttp_link="vless://${XHTTP_UUID}@${TLS_DOMAIN}:${XHTTP_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=xhttp&path=${xhttp_path_uri}&mode=${XHTTP_MODE}&fp=chrome#${xhttp_tag_uri}"
-            printf '[%s] VLESS + XHTTP + TLS + ECH | 地址：%s | TCP：%s\n%s\n' "$xhttp_tag" "$TLS_DOMAIN" "$XHTTP_PORT" "$xhttp_link"
-            printf 'ECH Config List（客户端启用 ECH 必填）：\n%s\n' "$(cat "$XRAY_ECH_CONFIG_FILE" 2>/dev/null || true)"
-            printf '完整 Xray 客户端配置：%s\n' "$XRAY_CLIENT_CONFIG_FILE"
-            printf '提示：VLESS 分享链接本身不包含 ECH Config；需要导入上述 JSON，或在客户端手动填写 ECH Config List。\n\n'
+        if [ "$ENABLE_VLESS_REALITY" = 1 ]; then
+            tag=$(node_tag IPv4 "$ORIGIN_ADDR" vless+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
+            add_node_line "$tag" "$REALITY_LINK" "$origin_file"
+        fi
+        if [ "$ENABLE_NAIVE" = 1 ]; then
+            tag=$(node_tag IPv4 "$ORIGIN_ADDR" naiveproxy); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            NAIVE_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+            add_node_line "$tag" "$NAIVE_LINK" "$origin_file"
         fi
         if [ "$ENABLE_SS2022" = 1 ]; then
             ss_userinfo=$(printf '%s' "$SS2022_METHOD:$SS2022_PASSWORD" | base64 | tr -d '\r\n')
-            if [ -n "$ORIGIN_ADDR" ]; then
-                ss_tag=$(node_tag IPv4 "$ORIGIN_ADDR" ss2022); ss_tag_uri=$(jq -nr --arg tag "$ss_tag" '$tag | @uri')
-                ss_host_uri=$(uri_host "$ORIGIN_ADDR")
-                SS2022_LINK="ss://${ss_userinfo}@${ss_host_uri}:${SS2022_PORT}#${ss_tag_uri}"
-                printf '[%s] Shadowsocks 2022 | 地址：%s | TCP：%s | method：%s\n密码：%s\n%s\n\n' "$ss_tag" "$ORIGIN_ADDR" "$SS2022_PORT" "$SS2022_METHOD" "$SS2022_PASSWORD" "$SS2022_LINK"
-            fi
-            if [ -n "$ORIGIN_IPV6" ]; then
-                ss_tag=$(node_tag IPv6 "$ORIGIN_IPV6" ss2022); ss_tag_uri=$(jq -nr --arg tag "$ss_tag" '$tag | @uri')
-                ss_host_uri=$(uri_host "$ORIGIN_IPV6")
-                SS2022_LINK="ss://${ss_userinfo}@${ss_host_uri}:${SS2022_PORT}#${ss_tag_uri}"
-                printf '[%s] Shadowsocks 2022 | 地址：[%s] | TCP：%s | method：%s\n密码：%s\n%s\n\n' "$ss_tag" "$ORIGIN_IPV6" "$SS2022_PORT" "$SS2022_METHOD" "$SS2022_PASSWORD" "$SS2022_LINK"
-            fi
+            ss_tag=$(node_tag IPv4 "$ORIGIN_ADDR" ss2022); ss_tag_uri=$(jq -nr --arg tag "$ss_tag" '$tag | @uri')
+            SS2022_LINK="ss://${ss_userinfo}@${origin_uri}:${SS2022_PORT}#${ss_tag_uri}"
+            add_node_line "$ss_tag" "$SS2022_LINK" "$origin_file"
         fi
         if [ "$ENABLE_SNELL" = 1 ]; then
-            if [ -n "$ORIGIN_ADDR" ]; then
-                snell_tag=$(node_tag IPv4 "$ORIGIN_ADDR" snell)
-                printf '[%s] Snell v%s | 地址：%s | TCP：%s\n' "$snell_tag" "$SNELL_VERSION" "$ORIGIN_ADDR" "$SNELL_PORT"
-            fi
-            if [ -n "$ORIGIN_IPV6" ]; then
-                snell_tag=$(node_tag IPv6 "$ORIGIN_IPV6" snell)
-                printf '[%s] Snell v%s | 地址：[%s] | TCP：%s\n' "$snell_tag" "$SNELL_VERSION" "$ORIGIN_IPV6" "$SNELL_PORT"
-            fi
-            printf 'PSK：%s\nUserKey：%s\n' "$SNELL_PSK" "$SNELL_USERKEY"
-            if [ "$SNELL_VERSION" = 5 ]; then printf 'HTTP 混淆：%s | Host：%s\n' "$SNELL_OBFS_MODE" "$SNELL_OBFS_HOST"; else printf 'Traffic shaping：%s\n' "$SNELL_MODE"; fi
-            printf 'sing-box 客户端配置片段（默认使用优先源站地址）：%s\n\n' "$SNELL_CLIENT_CONFIG_FILE"
+            snell_tag=$(node_tag IPv4 "$ORIGIN_ADDR" snell)
+            snell_config="snell-client.json"
+            [ "$origin_bucket" != ipv4 ] || snell_config="snell-client-ipv4.json"
+            case "$origin_bucket" in ipv4) snell_meta_file=$nodes4_meta_tmp ;; ipv6) snell_meta_file=$nodes6_meta_tmp ;; *) snell_meta_file=$nodes_domain_meta_tmp ;; esac
+            add_node_meta "[$snell_tag] Snell v${SNELL_VERSION} ${origin_uri}:${SNELL_PORT} | 配置：${snell_config}" "$snell_meta_file"
         fi
-        if [ -n "$ORIGIN_IPV6" ]; then
-            origin6_uri=$(uri_host "$ORIGIN_IPV6")
-            if [ "$ENABLE_ANYTLS" = 1 ]; then
-                tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-                printf '[%s] AnyTLS | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYTLS_PORT" "$ANYTLS6_LINK"
-            fi
-            if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
-                tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                ANYREALITY6_LINK="anytls://${ANYREALITY_PASSWORD}@${origin6_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
-                printf '[%s] AnyTLS + Reality | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$ANYREALITY_PORT" "$ANYREALITY6_LINK"
-            fi
-            if [ "$ENABLE_VLESS_REALITY" = 1 ]; then
-                tag=$(node_tag IPv6 "$ORIGIN_IPV6" vless+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
-                printf '[%s] VLESS + Reality | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$REALITY_PORT" "$REALITY6_LINK"
-            fi
-            if [ "$ENABLE_NAIVE" = 1 ]; then
-                tag=$(node_tag IPv6 "$ORIGIN_IPV6" naiveproxy); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                NAIVE6_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin6_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-                printf '[%s] NaiveProxy | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$NAIVE_PORT" "$NAIVE6_LINK"
-            fi
+    fi
+
+    if [ -n "$ORIGIN_IPV6" ]; then
+        origin6_uri=$(uri_host "$ORIGIN_IPV6")
+        if [ "$ENABLE_ANYTLS" = 1 ]; then
+            tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            ANYTLS6_LINK="anytls://${ANYTLS_PASSWORD}@${origin6_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+            add_node_line "$tag" "$ANYTLS6_LINK" "$nodes6_tmp"
         fi
-        if [ "$ENABLE_WS_TLS" = 0 ] && [ "$ENABLE_ANYTLS" = 0 ] && [ "$ENABLE_VLESS_REALITY" = 0 ] && [ "$ENABLE_NAIVE" = 0 ] && [ "$ENABLE_ANYTLS_REALITY" = 0 ] && [ "$ENABLE_XHTTP" = 0 ] && [ "$ENABLE_SNELL" = 0 ] && [ "$ENABLE_SS2022" = 0 ]; then
-            printf '没有启用任何协议。\n'
+        if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+            tag=$(node_tag IPv6 "$ORIGIN_IPV6" anytls+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            ANYREALITY6_LINK="anytls://${ANYREALITY_PASSWORD}@${origin6_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
+            add_node_line "$tag" "$ANYREALITY6_LINK" "$nodes6_tmp"
         fi
-    } > "$nodes_tmp"
-    chmod 0600 "$nodes_tmp"
-    mv "$nodes_tmp" "$APP_DIR/nodes.txt"
+        if [ "$ENABLE_VLESS_REALITY" = 1 ]; then
+            tag=$(node_tag IPv6 "$ORIGIN_IPV6" vless+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
+            add_node_line "$tag" "$REALITY6_LINK" "$nodes6_tmp"
+        fi
+        if [ "$ENABLE_NAIVE" = 1 ]; then
+            tag=$(node_tag IPv6 "$ORIGIN_IPV6" naiveproxy); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            NAIVE6_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin6_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
+            add_node_line "$tag" "$NAIVE6_LINK" "$nodes6_tmp"
+        fi
+        if [ "$ENABLE_SS2022" = 1 ]; then
+            ss_userinfo=$(printf '%s' "$SS2022_METHOD:$SS2022_PASSWORD" | base64 | tr -d '\r\n')
+            ss_tag=$(node_tag IPv6 "$ORIGIN_IPV6" ss2022); ss_tag_uri=$(jq -nr --arg tag "$ss_tag" '$tag | @uri')
+            SS2022_LINK="ss://${ss_userinfo}@${origin6_uri}:${SS2022_PORT}#${ss_tag_uri}"
+            add_node_line "$ss_tag" "$SS2022_LINK" "$nodes6_tmp"
+        fi
+        if [ "$ENABLE_SNELL" = 1 ]; then
+            snell_tag=$(node_tag IPv6 "$ORIGIN_IPV6" snell)
+            add_node_meta "[$snell_tag] Snell v${SNELL_VERSION} ${origin6_uri}:${SNELL_PORT} | 配置：snell-client-ipv6.json" "$nodes6_meta_tmp"
+        fi
+    fi
+
+    if [ "$ENABLE_WS_TLS" = 1 ] && [ -n "$WS_SERVER" ]; then
+        ws_server_uri=$(uri_host "$WS_SERVER")
+        tag=$(node_tag_single vless+ws+tls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+        if [ "$WS_MODE" = argo ]; then
+            ws_link_port=443; ws_link_sni=$ARGO_HOST; ws_link_host=$ARGO_HOST
+        else
+            ws_link_port=$WS_PORT; ws_link_sni=$TLS_DOMAIN; ws_link_host=$WS_HOST
+        fi
+        WS_LINK="vless://${WS_UUID}@${ws_server_uri}:${ws_link_port}?encryption=none&security=tls&sni=${ws_link_sni}&type=ws&host=${ws_link_host}&path=${WS_PATH_ENC}#${tag_uri}"
+        ws_bucket=$(host_bucket "$WS_SERVER")
+        ws_file=$(target_file "$ws_bucket")
+        add_node_line "$tag" "$WS_LINK" "$ws_file"
+    fi
+
+    if [ "$ENABLE_XHTTP" = 1 ]; then
+        xhttp_path_uri=$(jq -nr --arg p "$XHTTP_PATH" '$p | @uri')
+        xhttp_tag="domain-${TLS_DOMAIN}"
+        [ -z "$NODE_LABEL" ] || xhttp_tag="${xhttp_tag}-${NODE_LABEL}"
+        xhttp_tag="${xhttp_tag}-vless+xhttp+ech"
+        xhttp_tag_uri=$(jq -nr --arg tag "$xhttp_tag" '$tag | @uri')
+        xhttp_link="vless://${XHTTP_UUID}@${TLS_DOMAIN}:${XHTTP_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=xhttp&path=${xhttp_path_uri}&mode=${XHTTP_MODE}&fp=chrome#${xhttp_tag_uri}"
+        add_node_line "$xhttp_tag" "$xhttp_link" "$nodes_domain_tmp"
+    fi
+
+    # Generate auxiliary per-family JSON before composing nodes.txt so the
+    # displayed paths only refer to files that have actually been written.
     if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
-        if write_anyreality_client_json; then printf 'AnyTLS + Reality 客户端配置片段：%s/anytls-reality-client.json\n' "$APP_DIR"; else warn 'AnyTLS + Reality 客户端 JSON 片段生成失败。'; fi
-    else rm -f "$APP_DIR/anytls-reality-client.json"; fi
+        if write_anyreality_client_json; then :; else warn 'AnyTLS + Reality 客户端 JSON 生成失败。'; fi
+    else
+        rm -f "$APP_DIR/anytls-reality-client.json" "$APP_DIR/anytls-reality-client-ipv4.json" "$APP_DIR/anytls-reality-client-ipv6.json"
+    fi
     if [ "$ENABLE_XHTTP" = 1 ]; then write_xhttp_client_json || warn 'XHTTP 客户端 JSON 生成失败。'; fi
     if [ "$ENABLE_SNELL" = 1 ]; then write_snell_client_json || warn 'Snell 客户端 JSON 生成失败。'; fi
-    msg '================ 节点信息 ================'
+
+    # Build copy-ready family files from the URI-only streams. Metadata-only
+    # protocols such as Snell are shown in nodes.txt and have JSON files.
+    {
+        printf '节点列表 | %s\n' "${NODE_LABEL:-未设置辨识符}"
+        printf '\n========== IPv4 ==========\n'
+        if [ -s "$nodes4_tmp" ]; then cat "$nodes4_tmp"; else printf '（无 IPv4 分享链接）\n'; fi
+        [ ! -s "$nodes4_meta_tmp" ] || cat "$nodes4_meta_tmp"
+        printf '\n========== IPv6 ==========\n'
+        if [ -s "$nodes6_tmp" ]; then cat "$nodes6_tmp"; else printf '（无 IPv6 分享链接）\n'; fi
+        [ ! -s "$nodes6_meta_tmp" ] || cat "$nodes6_meta_tmp"
+        printf '\n========== 域名 / Argo ==========\n'
+        if [ -s "$nodes_domain_tmp" ]; then cat "$nodes_domain_tmp"; else printf '（无域名 / Argo 节点）\n'; fi
+        [ ! -s "$nodes_domain_meta_tmp" ] || cat "$nodes_domain_meta_tmp"
+        if [ "$ENABLE_XHTTP" = 1 ]; then
+            printf '\nXHTTP + ECH 需额外导入 ECH Config：%s\n' "$XRAY_ECH_CONFIG_FILE"
+            printf 'XHTTP 完整客户端配置：%s\n' "$XRAY_CLIENT_CONFIG_FILE"
+        fi
+        if [ "$ENABLE_SNELL" = 1 ]; then
+            [ ! -s "$APP_DIR/snell-client-ipv4.json" ] || printf 'Snell IPv4 JSON：%s/snell-client-ipv4.json\n' "$APP_DIR"
+            [ ! -s "$APP_DIR/snell-client-ipv6.json" ] || printf 'Snell IPv6 JSON：%s/snell-client-ipv6.json\n' "$APP_DIR"
+        fi
+        if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
+            [ ! -s "$APP_DIR/anytls-reality-client-ipv4.json" ] || printf 'AnyTLS Reality IPv4 JSON：%s/anytls-reality-client-ipv4.json\n' "$APP_DIR"
+            [ ! -s "$APP_DIR/anytls-reality-client-ipv6.json" ] || printf 'AnyTLS Reality IPv6 JSON：%s/anytls-reality-client-ipv6.json\n' "$APP_DIR"
+        fi
+    } > "$nodes_tmp"
+
+    chmod 0600 "$nodes_tmp" "$nodes4_tmp" "$nodes6_tmp" "$nodes_domain_tmp"
+    mv -f "$nodes_tmp" "$APP_DIR/nodes.txt"
+    mv -f "$nodes4_tmp" "$APP_DIR/nodes-ipv4.txt"
+    mv -f "$nodes6_tmp" "$APP_DIR/nodes-ipv6.txt"
+    mv -f "$nodes_domain_tmp" "$APP_DIR/nodes-domain.txt"
+    rm -f "$nodes4_meta_tmp" "$nodes6_meta_tmp" "$nodes_domain_meta_tmp"
+
+    msg '================ 节点信息（紧凑双栈） ================'
     cat "$APP_DIR/nodes.txt"
-    printf '节点文件：%s/nodes.txt\n' "$APP_DIR"
-    printf '===========================================\n'
+    printf 'IPv4 节点：%s/nodes-ipv4.txt\n' "$APP_DIR"
+    printf 'IPv6 节点：%s/nodes-ipv6.txt\n' "$APP_DIR"
+    printf '域名节点：%s/nodes-domain.txt\n' "$APP_DIR"
+    printf '=======================================================\n'
 }
 
 overlay_install() {
@@ -3161,7 +3255,19 @@ remove_acme_cron_entry() {
 
 uninstall_manager() {
     need_root
-    msg '========== 即将立即卸载 sing-box 管理器 =========='
+    if [ "${1:-}" != '--yes' ]; then
+        printf '\n========== 即将卸载 sing-box 管理器 ==========\n'
+
+        printf '%s\n' '卸载将删除 /etc/sing-box、/etc/xray、本脚本服务文件和管理程序。若目录内存在其他程序或手工配置，请先备份。'
+        printf '%s' '确认继续请输入大写 YES；其他输入均取消：'
+        uninstall_confirm=''
+        if ! IFS= read -r uninstall_confirm; then uninstall_confirm=''; fi
+        if [ "$uninstall_confirm" != 'YES' ]; then
+            msg '未收到 YES，已取消卸载；系统文件未更改。'
+            return 0
+        fi
+    fi
+    msg '========== 正在卸载 sing-box 管理器 =========='
     printf '%s\n' '将删除：/etc/sing-box、/etc/xray、/usr/local/sbin/sb-manager、sing-box / Xray 服务文件、Argo 专用 cloudflared 服务及本脚本安装的软件包/二进制。'
     printf '%s\n' '不会删除：/root/.acme.sh、系统依赖包、系统防火墙规则、云厂商安全组或其他 cron 任务。'
     printf '%s\n' '卸载将直接继续执行；请确认当前连接的是正确的 VPS。'
@@ -3681,6 +3787,38 @@ modify_ss2022() {
     else SS2022_METHOD=$old_method; SS2022_PASSWORD=$old_password; SS2022_PORT=$old_port; warn '修改失败，已回滚。'; return 1; fi
 }
 
+
+manage_ss2022() {
+    while :; do
+        printf '\n========== Shadowsocks 2022 专项管理 ==========\n'
+
+        if [ "$ENABLE_SS2022" = 1 ]; then
+            printf '当前状态：已安装并由管理器托管\n'
+            printf '端口：%s/tcp | method：%s\n' "$SS2022_PORT" "$SS2022_METHOD"
+            printf '1. 修改 SS2022 参数 / 密码 / 端口\n'
+            printf '2. 删除 SS2022 节点\n'
+            printf '0. 返回\n请选择：'
+            IFS= read -r ss2022_action || return 0
+            case "$ss2022_action" in
+                1) modify_ss2022 || true ;;
+                2) remove_ss2022 || true ;;
+                0) return 0 ;;
+                *) warn '无效选择。' ;;
+            esac
+        else
+            printf '当前状态：未由管理器托管\n'
+            printf '1. 添加 / 接管 SS2022 节点\n'
+            printf '0. 返回\n请选择：'
+            IFS= read -r ss2022_action || return 0
+            case "$ss2022_action" in
+                1) add_ss2022 || true ;;
+                0) return 0 ;;
+                *) warn '无效选择。' ;;
+            esac
+        fi
+    done
+}
+
 manage_all_protocols() {
     while :; do
       printf '\n========== 全协议终端管理（添加 / 删除 / 修改） ==========\n'
@@ -3771,7 +3909,7 @@ menu() {
         printf '\n节点辨识符：%s' "${NODE_LABEL:-未设置}"
         printf '\n端口：AnyTLS %s | WS TLS %s | VLESS Reality %s | NaiveProxy %s/TCP | AnyTLS Reality %s | XHTTP %s | Snell %s | SS2022 %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT" "$XHTTP_PORT" "$SNELL_PORT" "$SS2022_PORT"
         printf '\n---------------------------------------\n'
-        printf '1. 查看已安装协议节点链接\n'
+        printf '1. 查看节点链接（IPv4 / IPv6 紧凑分组）\n'
         printf '2. 修改 TLS 证书域名 / TLS SNI（AnyTLS + 直连 WS + NaiveProxy）\n'
         printf '3. 修改 Reality SNI（VLESS Reality + AnyTLS Reality；新安装默认 www.bing.com）\n'
         printf '4. 修改 VLESS WS TLS / Argo 客户端连接地址（优选 IP/域名）\n'
@@ -3822,7 +3960,7 @@ menu() {
             21) xray_service_status ;;
             22) [ "$ENABLE_XHTTP" = 1 ] && { if [ "$SERVICE_KIND" = systemd ]; then journalctl -u "$XRAY_SERVICE" -n 80 --no-pager || true; else tail -n 80 /var/log/messages 2>/dev/null | grep -i xray || true; fi; } || warn '当前未安装 XHTTP/Xray。' ;;
             23) manage_all_protocols ;;
-            24) manage_all_protocols ;;
+            24) manage_ss2022 ;;
             0) exit 0 ;;
             *) warn '无效选项。' ;;
         esac
@@ -3838,8 +3976,25 @@ install_manager_command() {
         sb-manager|sb-manager-debian-alpine.sh) ;;
         *) return 0 ;;
     esac
-    if [ "$0" != /usr/local/sbin/sb-manager ] && [ -f "$0" ]; then
-        install -m 0700 "$0" /usr/local/sbin/sb-manager
+    target=/usr/local/sbin/sb-manager
+    if [ "$0" != "$target" ] && [ -f "$0" ]; then
+        install -d -m 0755 /usr/local/sbin
+        if [ -e "$target" ] && ! grep -q 'sing-box single-VPS multi-protocol manager' "$target"; then
+            err "检测到 $target 已存在，但不是本项目管理器；为避免覆盖其他程序，已停止。"
+        fi
+        if [ -e "$target" ]; then
+            install -d -m 0700 /var/backups/sb-manager
+            cp -p "$target" "/var/backups/sb-manager/sb-manager.pre-script.$(date -u +%Y%m%dT%H%M%SZ).$$"
+        fi
+        target_tmp="$target.tmp.$$"
+        if ! install -m 0700 "$0" "$target_tmp"; then
+            rm -f "$target_tmp"
+            err '安装管理脚本失败，原脚本保持不变。'
+        fi
+        if ! mv -f "$target_tmp" "$target"; then
+            rm -f "$target_tmp"
+            err '替换管理脚本失败，备份文件已保留。'
+        fi
     fi
 }
 

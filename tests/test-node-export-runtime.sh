@@ -68,7 +68,7 @@ chmod +x "$TMP/run.sh"
 sh "$TMP/run.sh" "$TMP" > "$TMP/output.txt"
 NODES="$TMP/nodes.txt"
 grep -Fq 'ipv4-203.0.113.10-dual-ss2022' "$NODES"
-grep -Fq 'ipv6-2001:db8::10-dual-ss2022' "$NODES"
+grep -Fq 'ipv6-2001%3Adb8%3A%3A10-dual-ss2022' "$NODES"
 grep -Fq 'ipv4-203.0.113.10-dual-snell' "$NODES"
 grep -Fq 'ipv6-2001:db8::10-dual-snell' "$NODES"
 if grep -Fq '没有启用任何协议' "$NODES"; then echo 'FAIL: SS2022/Snell-only configuration was marked empty.' >&2; exit 1; fi

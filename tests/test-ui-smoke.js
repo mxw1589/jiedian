@@ -11,6 +11,7 @@ class FakeElement {
     this.tagName = tagName.toLowerCase(); this.children = []; this.listeners = {}; this.dataset = {};
     this.value = ''; this.checked = false; this.disabled = false; this.textContent = ''; this.className = '';
     this.classList = { toggle() {} };
+    this.replaceChildren = (...items) => { this.children = [...items]; };
     allElements.push(this);
   }
   set id(value) { this._id = value; if (value) byId.set(value, this); }
@@ -25,7 +26,7 @@ class FakeElement {
 }
 const staticTags = {
   xrayProtocols:'div', singboxProtocols:'div', autoProtocols:'div', uuid:'input', generateUuid:'button', reym:'input', cfip:'input', alns:'select',
-  hyjpt:'input', cdnym:'input', warp:'select', ippz:'select', oap:'select', name:'input', sub:'select', subid:'input',
+  hyjpt:'input', cdnym:'input', warp:'select', ippz:'select', oap:'select', name:'input', sub:'select', subid:'input', dynamicWarnings:'div',
   subpt:'input', argo:'select', agqc:'select', agn:'input', agk:'input', themeToggle:'button', status:'div', preview:'div',
   output:'textarea', copy:'button', download:'button', reset:'button', importText:'textarea', import:'button', clearImport:'button'
 };
@@ -74,8 +75,13 @@ byId.get('argo').value = 'vxpt'; byId.get('argo').dispatch('change');
 assert.equal(byId.get('proto-vxpt').checked, true, 'Argo selection auto-selects its main protocol');
 assert.match(byId.get('status').textContent, /固定隧道/);
 byId.get('agn').value = 'tunnel.example.com'; byId.get('agn').dispatch('input');
-byId.get('agk').value = 'eyJtest-token+/=='; byId.get('agk').dispatch('input');
+byId.get('agk').value = 'eyJ' + 'a'.repeat(60) + '=='; byId.get('agk').dispatch('input');
 assert.match(byId.get('output').value, /argo='vxpt'/);
+byId.get('proto-hypt').checked = true; byId.get('proto-hypt').dispatch('change');
+byId.get('hyjpt').value = '12000:12010'; byId.get('hyjpt').dispatch('input');
+byId.get('oap').value = 'y'; byId.get('oap').dispatch('change');
+assert.ok(byId.get('dynamicWarnings').children.some(x => /PREROUTING/.test(x.textContent)), 'HY2 NAT side-effect warning is shown');
+assert.ok(byId.get('dynamicWarnings').children.some(x => /filter/.test(x.textContent)), 'oap firewall warning is shown');
 byId.get('reset').click();
 assert.equal(byId.get('proto-vlpt').checked, false);
 assert.equal(byId.get('output').value, '');

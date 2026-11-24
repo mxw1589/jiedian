@@ -10,6 +10,8 @@ grep -Fq 'node_tag IPv4 "$ORIGIN_ADDR" ss2022' "$SCRIPT"
 grep -Fq 'node_tag IPv6 "$ORIGIN_IPV6" ss2022' "$SCRIPT"
 grep -Fq 'node_tag IPv4 "$ORIGIN_ADDR" snell' "$SCRIPT"
 grep -Fq 'node_tag IPv6 "$ORIGIN_IPV6" snell' "$SCRIPT"
-grep -Fq 'ENABLE_SNELL" = 0 ] && [ "$ENABLE_SS2022" = 0' "$SCRIPT"
+grep -Fq '（无 IPv4 分享链接）' "$SCRIPT"
+grep -Fq '（无 IPv6 分享链接）' "$SCRIPT"
+grep -Fq '（无域名 / Argo 节点）' "$SCRIPT"
 sh -n "$SCRIPT"
-echo 'PASS: SS2022 port ownership and dual-stack SS2022/Snell node export checks.'
+echo 'PASS: SS2022 port ownership and compact dual-stack node export checks.'

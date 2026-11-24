@@ -11,6 +11,7 @@ function emptyConfig() {
 function enable(cfg, key, port = '') { cfg.protocols[key] = { enabled: true, port }; }
 
 assert.equal(G.PROTOCOL_ORDER.length, 15, 'all 15 protocol switches must exist');
+assert.deepEqual(G.PROTOCOLS.map(x => x.key), ['vlpt','xhpt','vxpt','vwpt','xupt','xcpt','tupt','anpt','nvpt','arpt','sspt','snpt','hypt','vmpt','sopt']);
 assert.equal(G.WARP_OPTIONS.length, 16, 'default plus all 15 WARP combinations must exist');
 
 // Empty ports are intentionally emitted as KEY='' because the upstream script detects protocol selection by variable presence.
@@ -58,6 +59,9 @@ assert.equal(G.WARP_OPTIONS.length, 16, 'default plus all 15 WARP combinations m
   const cfg = emptyConfig(); enable(cfg, 'vwpt');
   cfg.argo = { protocol: 'vwpt', mode: '', domain: '', token: '' };
   assert.deepEqual(G.validateConfig(cfg), []);
+  const temporaryArgoCommand = G.buildCommand(cfg, 'curl');
+  assert.match(temporaryArgoCommand, /argo='vwpt' agqc=''/, 'default TCP mode must be passed explicitly');
+  assert.doesNotMatch(temporaryArgoCommand, /\bagn=|\bagk=/, 'temporary tunnel must not carry fixed tunnel credentials');
   cfg.argo.domain = 'tunnel.example.com';
   assert.match(G.validateConfig(cfg).join(' '), /必须同时填写/);
   cfg.argo.token = 'eyJabc+/==';
@@ -95,14 +99,14 @@ assert.equal(G.WARP_OPTIONS.length, 16, 'default plus all 15 WARP combinations m
 {
   const cfg = emptyConfig(); enable(cfg, 'vmpt'); cfg.options.cdnym = 'origin.example.com';
   cfg.options.name = '东京-02'; cfg.options.warp = 's4x6'; cfg.options.ippz = '6';
-  cfg.argo = { protocol: 'vmpt', mode: 'y', domain: 'argo.example.com', token: 'eyJabc+/==' };
+  cfg.argo = { protocol: 'vmpt', mode: 'y', domain: 'argo.example.com', token: 'eyJ' + 'b'.repeat(60) + '==' };
   const command = G.buildCommand(cfg, 'curl');
   const parsed = G.parseCommand(command);
   const restored = G.configFromVariables(parsed.variables);
   assert.equal(restored.protocols.vmpt.enabled, true);
   assert.equal(restored.options.name, '东京-02');
   assert.equal(restored.options.warp, 's4x6');
-  assert.equal(restored.argo.token, 'eyJabc+/==');
+  assert.equal(restored.argo.token, 'eyJ' + 'b'.repeat(60) + '==');
   assert.deepEqual(G.validateConfig(restored), []);
 }
 
@@ -116,7 +120,7 @@ assert.equal(G.WARP_OPTIONS.length, 16, 'default plus all 15 WARP combinations m
     hyjpt: '123:456 789', cdnym: 'origin.example.com', name: '全协议-01',
     oap: 'y', sub: 'y', subid: 'subscription_01', subpt: '23000'
   };
-  cfg.argo = { protocol: 'vxpt', mode: 'y', domain: 'tunnel.example.com', token: 'eyJfull-token+/==' };
+  cfg.argo = { protocol: 'vxpt', mode: 'y', domain: 'tunnel.example.com', token: 'eyJ' + 'c'.repeat(60) + '==' };
   assert.deepEqual(G.validateConfig(cfg), []);
   const command = G.buildCommand(cfg, 'curl');
   for (const key of G.PROTOCOL_ORDER) assert.match(command, new RegExp(`${key}='\\d+'`));
@@ -139,6 +143,39 @@ assert.equal(G.WARP_OPTIONS.length, 16, 'default plus all 15 WARP combinations m
   assert.match(G.buildCommand(cfg, 'curl', 'del'), /^bash <\(curl .* del$/);
   enable(cfg, 'snpt');
   assert.match(G.buildCommand(cfg, 'curl', 'rep'), /snpt='' .* rep$/);
+}
+
+
+// Path-safe subscription IDs and bounded Cloudflare Tunnel tokens.
+{
+  const cfg = emptyConfig(); enable(cfg, 'vmpt'); cfg.options.sub = 'y';
+  cfg.options.subid = '..';
+  assert.match(G.validateConfig(cfg).join(' '), /首尾必须是字母或数字/);
+  cfg.options.subid = 'safe-sub_01';
+  cfg.argo = { protocol: 'vmpt', mode: '', domain: 'tunnel.example.com', token: 'bad-token' };
+  assert.match(G.validateConfig(cfg).join(' '), /Token 格式不正确/);
+  cfg.argo.token = 'eyJd+/==';
+  assert.deepEqual(G.validateConfig(cfg), []);
+}
+
+// Risk notices reflect upstream side effects that cannot be made safe by form validation alone.
+{
+  const cfg = emptyConfig(); enable(cfg, 'hypt'); enable(cfg, 'tupt', '12005');
+  cfg.options.hyjpt = '12000:12010';
+  cfg.options.oap = 'y'; cfg.options.sub = 'y'; cfg.options.alns = 'y';
+  const warnings = G.getWarnings(cfg);
+  assert.deepEqual(warnings.map(x => x.id).sort(), ['alns','hyjpt','hyjpt-overlap','oap','sub']);
+  assert.match(warnings.find(x => x.id === 'hyjpt').message, /PREROUTING/);
+  assert.match(warnings.find(x => x.id === 'hyjpt-overlap').message, /TUPT/);
+  assert.match(warnings.find(x => x.id === 'oap').message, /filter/);
+  assert.match(warnings.find(x => x.id === 'sub').message, /HTTP/);
+}
+
+// The 15 WARP values must stay aligned with the upstream ArgoSBX generator.
+{
+  assert.deepEqual(G.WARP_OPTIONS.map(([value]) => value), [
+    '', 's', 's4', 's6', 'x', 'x4', 'x6', 's4x4', 's4x6', 's6x4', 's6x6', 'sx4', 'sx6', 's4x', 's6x', 'sx'
+  ]);
 }
 
 console.log('PASS: 15 protocols, WARP matrix, dependency rules, validation, Argo, subscriptions, quoting, import/export and shortcuts.');

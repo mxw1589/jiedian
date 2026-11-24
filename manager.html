@@ -17,7 +17,7 @@
   <div class="sub">Debian / Ubuntu / Alpine · 按需选择协议 · Argo 固定隧道 · VLESS XHTTP + ECH · Snell · Shadowsocks 2022</div>
   <div class="topnote">🔒 静态网页 · 参数仅在当前浏览器生成；不会上传到 GitHub Pages</div>
 </header>
-<div class="notice info">此页面保留原有自建 sing-box / Xray 管理器功能。若要使用 ArgoSBX V26.11.20 的 15 种协议、15 种 WARP 组合、订阅和 Argo 配置，请返回 <a href="index.html">ArgoSBX 完整命令生成器</a>。两套后端彼此独立，不要混用生成的命令。</div>
+<div class="notice info">此页面保留原有自建 sing-box / Xray 管理器功能。安装后在 VPS 菜单选择“查看已安装协议节点链接”，会紧凑分组输出 IPv4、IPv6 和域名 / Argo 节点；三个分组 TXT 仅含一行一个的分享 URI，Snell 另存为 IPv4 / IPv6 JSON。若要使用 ArgoSBX V26.11.20 的 15 种协议、15 种 WARP 组合、订阅和 Argo 配置，请返回 <a href="index.html">ArgoSBX 完整命令生成器</a>。两套后端彼此独立，不要混用生成的命令。</div>
 
 <div class="grid">
 <section class="panel">
@@ -45,7 +45,7 @@
     <div class="field"><label for="directWsHost">WS HTTP Host / TLS 域名</label><input id="directWsHost" placeholder="例如 node.example.com"></div>
   </div>
   <div class="field hidden" id="wsServerField"><label for="wsServer">客户端连接地址 / 优选 IP</label><input id="wsServer" placeholder="可留空，默认使用上面的域名"></div>
-  <div class="small">Argo 模式：客户端连接端口固定为 443，TLS SNI 和 WS Host 使用 Argo 公网主机名；VPS 本机 WS 只监听 127.0.0.1。可在连接地址中填写 Cloudflare 优选 IP/域名，但不能替换 SNI/Host。</div>
+  <div class="small">Argo 模式：客户端连接端口固定为 443，TLS SNI 和 WS Host 使用 Argo 公网主机名；VPS 本机 WS 只监听 127.0.0.1。可在连接地址中填写 Cloudflare 优选 IP/域名，但不能替换 SNI/Host。直连模式可填服务器 IP，TLS SNI / Host 仍使用上面的域名。</div>
 </section>
 
 <section class="panel">
@@ -93,7 +93,7 @@
     <div id="snellV6Fields" class="hidden">
       <div class="field"><label for="snellMode">v6 流量整形</label><select id="snellMode"><option value="default">default（推荐）</option><option value="unshaped">unshaped</option><option value="unsafe-raw">unsafe-raw</option></select></div>
     </div>
-    <div class="small">PSK 和 UserKey 会在服务器上随机生成，不需要在网页填写。安装后会输出 sing-box 客户端配置片段。</div>
+    <div class="small">PSK 和 UserKey 会在服务器上随机生成，不需要在网页填写。安装后会输出 IPv4 / IPv6 分开的 Snell 客户端 JSON。</div>
   </div>
   <div id="ss2022Fields" class="hidden">
     <div class="divider"></div>
@@ -117,6 +117,7 @@
     <button id="exportConfig" class="ghost" disabled>导出配置 JSON（不含 Token）</button>
   </div>
   <div class="notice">安全提醒：安装命令会包含 Base64 编码的 Token；Base64 不是加密。不要公开分享命令，不要把 Argo Token、DNS API Token、节点链接或证书私钥提交到 GitHub。</div>
+  <div class="notice">已有安装说明：若 VPS 已存在本管理器的 manager.json，后端会走保留现有配置的覆盖安装流程，不会用网页新填写的字段替换现有节点。请通过服务器上的 <code>/usr/local/sbin/sb-manager</code> 管理菜单修改已安装节点。</div>
 </section>
 
 <section class="panel bottom">
@@ -136,12 +137,26 @@
   <div class="small">以 root 登录 VPS 后执行。脚本会在终端询问需要安装的协议及其必需参数。</div>
   <pre id="directInstallText" class="preview">set -eu
 if [ "$(id -u)" -ne 0 ]; then echo '请先以 root 登录，或先执行 sudo -i。'; exit 1; fi
-if ! command -v curl >/dev/null 2>&1; then
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   if [ -f /etc/alpine-release ]; then apk add --no-cache curl
   elif [ -f /etc/debian_version ]; then apt-get update && apt-get install -y curl
   else echo '仅支持 Debian / Ubuntu 和 Alpine。'; exit 1; fi
 fi
-curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh' -o /tmp/sb-manager-debian-alpine.sh
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh' -o /tmp/sb-manager-debian-alpine.sh || rm -f /tmp/sb-manager-debian-alpine.sh
+fi
+if [ ! -s /tmp/sb-manager-debian-alpine.sh ] && command -v wget >/dev/null 2>&1; then
+  wget -qO /tmp/sb-manager-debian-alpine.sh 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh'
+fi
+[ -s /tmp/sb-manager-debian-alpine.sh ] || { echo '下载安装脚本失败，请检查网络。'; exit 1; }
+head -n 1 /tmp/sb-manager-debian-alpine.sh | grep -qx '#!/bin/sh'
+grep -q 'WEB_CONFIG_MODE=1' /tmp/sb-manager-debian-alpine.sh
+grep -q 'WEB_CONFIG_SCHEMA=8' /tmp/sb-manager-debian-alpine.sh || { echo '线上脚本版本与页面不兼容，请更新页面。'; exit 1; }
+grep -q 'v1.0.8; compact IPv4/IPv6 node lists and per-family client configs' /tmp/sb-manager-debian-alpine.sh || { echo '线上安装脚本不是本压缩包要求的 v1.0.8；请先将 ZIP 内 sb-manager-debian-alpine.sh 同步到 GitHub main，再重新执行。'; exit 1; }
+install -d -m 0755 /usr/local/sbin
+if [ -e /usr/local/sbin/sb-manager ] && ! grep -q 'sing-box single-VPS multi-protocol manager' /usr/local/sbin/sb-manager; then
+  echo '检测到同名程序但不是本项目管理器，为避免覆盖已停止。'; exit 1
+fi
 chmod 700 /tmp/sb-manager-debian-alpine.sh
 /tmp/sb-manager-debian-alpine.sh</pre>
   <div class="actions"><button id="copyDirectInstall" class="secondary">复制直接安装命令</button></div>
@@ -151,7 +166,7 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
   <div class="panelhead"><h2>卸载 sing-box 管理器</h2><span class="badge">root 权限</span></div>
   <pre id="uninstallText" class="preview">/usr/local/sbin/sb-manager uninstall</pre>
   <div class="actions"><button id="copyUninstall" class="secondary">复制卸载命令</button></div>
-  <div class="small">卸载会删除本脚本管理的 sing-box / Xray 配置、服务、ECH 密钥及 Cloudflare Tunnel 专用服务和 Token 文件。若 cloudflared 二进制由本脚本下载，也会删除；系统中原本存在的 cloudflared 二进制不会删除。不会删除 Cloudflare 控制台中的 Tunnel、DNS 记录或服务商端口映射。</div>
+  <div class="small">卸载会删除 /etc/sing-box、/etc/xray 及本脚本服务文件；如果这些目录里有其他程序或手工配置，请先备份。执行卸载命令时必须输入 YES 确认。若 cloudflared 二进制由本脚本下载，也会删除；系统中原本存在的 cloudflared 二进制不会删除。不会删除 Cloudflare 控制台中的 Tunnel、DNS 记录或服务商端口映射。</div>
 </section>
 <div class="footer">静态前端配置生成器。网页不会自动部署或连接 VPS；实际安装结果以服务器上的 sing-box / Xray 配置检查和服务状态为准。XHTTP + ECH 使用独立 Xray 服务；Snell 使用 sing-box 1.14.0+；SS2022 使用 sing-box 原生 Shadowsocks 入站。</div>
 </div>
@@ -208,7 +223,7 @@ function validate(c){
   if(p.ws_tls){
     if(mode==="argo"){
       if(!domainRe.test(c.argo_host))throw Error("请填写有效的 Argo 公网主机名，例如 ws.example.com。");
-      if(!c.argo_token||!/^eyJ\S+$/.test(c.argo_token))throw Error("请填写 Cloudflare Tunnel Token（通常以 eyJ 开头）。");
+      if(!c.argo_token||c.argo_token.length<40||c.argo_token.length>8192||!/^eyJ[A-Za-z0-9+/=_-]+$/.test(c.argo_token))throw Error("请填写完整的 Cloudflare Tunnel Token（eyJ 开头，40–8192 个有效字符）。");
     }else if(mode!=="direct")throw Error("请选择 WS 接入方式。");
     if(mode==="direct"&&!domainRe.test(c.ws_host))throw Error("直连 WS 的 HTTP Host 必须是有效域名。");
     if(c.ws_server&&!domainRe.test(c.ws_server)&&!isIPv4(c.ws_server)&&!isIPv6(c.ws_server))throw Error("客户端连接地址格式无效；请填写域名、IPv4 或 IPv6。");
@@ -242,12 +257,15 @@ function validate(c){
   }
   return c;
 }
-function oneCommandText(c){const encoded=b64(JSON.stringify(c));return `if sh -eu <<'SB_INSTALL'
+function oneCommandText(c){
+  const encoded=b64(JSON.stringify(c));
+  return `if sh -eu <<'SB_INSTALL'
 [ "$(id -u)" -eq 0 ] || { echo '请以 root 用户执行此安装命令。'; exit 1; }
 umask 077
 CFG="$(mktemp)"
 SH="$(mktemp)"
-trap 'rm -f "$CFG" "$SH"' EXIT
+TARGET_TMP=""
+trap 'rm -f "$CFG" "$SH"; [ -z "$TARGET_TMP" ] || rm -f "$TARGET_TMP"' EXIT
 printf '%s' '${encoded}' | base64 -d > "$CFG"
 chmod 600 "$CFG"
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
@@ -255,13 +273,30 @@ if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   elif [ -f /etc/debian_version ]; then apt-get update && apt-get install -y curl
   else echo '需要 curl 或 wget 才能下载安装脚本。'; exit 1; fi
 fi
-if command -v curl >/dev/null 2>&1; then curl -fsSL '${RAW_URL}' -o "$SH"
-else wget -qO "$SH" '${RAW_URL}'; fi
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL '${RAW_URL}' -o "$SH" || rm -f "$SH"
+fi
+if [ ! -s "$SH" ] && command -v wget >/dev/null 2>&1; then
+  wget -qO "$SH" '${RAW_URL}'
+fi
+[ -s "$SH" ] || { echo '下载安装脚本失败；请检查网络，或稍后重试。'; exit 1; }
 head -n 1 "$SH" | grep -qx '#!/bin/sh'
 grep -q 'WEB_CONFIG_MODE=1' "$SH"
 grep -q 'WEB_CONFIG_SCHEMA=8' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
-install -m 700 "$SH" /usr/local/sbin/sb-manager
-rm -f "$SH"
+grep -q 'v1.0.8; compact IPv4/IPv6 node lists and per-family client configs' "$SH" || { echo '线上安装脚本不是本压缩包要求的 v1.0.8；请先将 ZIP 内 sb-manager-debian-alpine.sh 同步到 GitHub main，再重新执行。'; exit 1; }
+install -d -m 0755 /usr/local/sbin
+if [ -e /usr/local/sbin/sb-manager ] && ! grep -q 'sing-box single-VPS multi-protocol manager' /usr/local/sbin/sb-manager; then
+  echo '检测到 /usr/local/sbin/sb-manager 已存在，但不是本项目脚本；为避免覆盖其他程序，已停止。' >&2
+  exit 1
+fi
+if [ -e /usr/local/sbin/sb-manager ]; then
+  install -d -m 0700 /var/backups/sb-manager
+  cp -p /usr/local/sbin/sb-manager "/var/backups/sb-manager/sb-manager.pre-web.$(date -u +%Y%m%dT%H%M%SZ).$$"
+fi
+TARGET_TMP="/usr/local/sbin/.sb-manager.$$"
+install -m 700 "$SH" "$TARGET_TMP"
+mv -f "$TARGET_TMP" /usr/local/sbin/sb-manager
+TARGET_TMP=""
 echo '========== 第一阶段：预装本次所选协议的核心和系统依赖 =========='
 /usr/local/sbin/sb-manager prepare-web-config-core "$CFG"
 echo '========== 第二阶段：安装证书、协议配置和节点服务 =========='
@@ -272,12 +307,13 @@ then
 else
   echo '安装未完成，请查看上方错误后重试。' >&2
   exit 1
-fi`;}
+fi`;
+}
 function setEnabled(id,on){$(id).disabled=!on;}
 function syncUI(){
   const p=selected(),ws=p.ws_tls,mode=v("wsMode"),cert=needsCert(p,mode),origin=needsOrigin(p,mode),reality=p.vless_reality||p.anytls_reality;
   setEnabled("wsMode",ws);$("argoFields").classList.toggle("hidden",!ws||mode!=="argo");$("directWsFields").classList.toggle("hidden",!ws||mode!=="direct");
-  setEnabled("argoHost",ws&&mode==="argo");setEnabled("argoToken",ws&&mode==="argo");setEnabled("directWsHost",ws&&mode==="direct");setEnabled("wsServer",ws);
+  setEnabled("argoHost",ws&&mode==="argo");setEnabled("argoToken",ws&&mode==="argo");setEnabled("directWsHost",ws&&mode==="direct");setEnabled("wsServer",ws);$("wsServerField").classList.toggle("hidden",!ws);
   $("originFields").classList.toggle("hidden",!origin);setEnabled("originIPv4",origin);setEnabled("originIPv6",origin);
   $("realityFields").classList.toggle("hidden",!reality);setEnabled("realitySni",reality);
   $("xhttpFields").classList.toggle("hidden",!p.xhttp);["xhttpEchPublicName","xhttpMode","xhttpPath"].forEach(id=>setEnabled(id,p.xhttp));
