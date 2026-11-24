@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#f3f6fb">
+<title>旧版自建 sing-box / Xray 管理器</title>
+<style>
+:root{color-scheme:light;--bg:#f3f6fb;--surface:#fff;--soft:#f8faff;--line:#dce4ef;--line2:#c8d5e5;--text:#17243a;--muted:#64748b;--blue:#2563eb;--blue2:#1d4ed8;--green:#15803d;--greenbg:#f0fdf4;--amber:#92400e;--amberbg:#fffbeb;--red:#b91c1c;--shadow:0 8px 26px rgba(30,55,90,.07)}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -28%,rgba(219,234,254,.9),transparent 48%),var(--bg);color:var(--text);font:14px/1.65 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1180px;margin:auto;padding:28px 22px 60px}header{padding:27px 20px;margin-bottom:18px;text-align:center;background:#ffffffdf;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow)}h1{font-size:clamp(24px,3vw,36px);line-height:1.25;margin:0 0 8px;color:#13233d}.sub,.small{color:var(--muted)}.sub{font-size:13px}.topnote{display:inline-block;margin-top:13px;padding:6px 12px;border:1px solid #bfdbfe;border-radius:99px;background:#eff6ff;color:#1e40af;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:17px;align-items:start}.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow);min-width:0}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:13px}.panel h2{font-size:17px;line-height:1.35;margin:0;color:#172b49}.panel h3{font-size:14px;margin:17px 0 8px;color:#33445d}.badge{font-size:11px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:3px 9px;white-space:nowrap;font-weight:650}.small{font-size:12px;line-height:1.7}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.protocol{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:11px;background:var(--soft);padding:9px;cursor:pointer;min-width:0}.protocol-main{display:flex;align-items:center;gap:8px;flex:1;min-width:0}.protocol-main input{width:17px;height:17px;flex:none}.protocol-main span{min-width:0}.protocol-port{width:88px;flex:none;border:1px solid var(--line2);border-radius:7px;padding:6px 7px;font:12px ui-monospace,monospace;color:var(--text);background:#fff}.protocol input.protocol-port{width:88px;height:auto;accent-color:auto}.protocol-port:disabled{background:#f1f5f9;color:#94a3b8}.protocol-port::placeholder{color:#94a3b8}.protocol input{width:17px;height:17px;accent-color:var(--blue)}.protocol b{font-size:13px}.protocol span{display:block;font-size:11px;color:var(--muted)}.field{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:10px;margin:10px 0}.field label{font-size:13px;font-weight:650;color:#33445d}.field input,.field select{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;color:var(--text);font:inherit;outline:none}.field input:focus,.field select:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 3px #3b82f61f}.field input:disabled,.field select:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder{color:#94a3b8}.divider{height:1px;background:var(--line);margin:16px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.port{border:1px solid var(--line);border-radius:10px;padding:9px;background:var(--soft)}.port label{display:block;font-size:11px;font-weight:650;color:#33445d;margin-bottom:5px}.port input{width:100%;border:1px solid var(--line2);border-radius:7px;padding:8px;color:var(--text);min-width:0}.notice{margin-top:11px;padding:10px 12px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:10px;font-size:12px;line-height:1.65}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px}button{border:1px solid var(--blue);background:linear-gradient(180deg,#3b82f6,#2563eb);color:white;border-radius:9px;padding:9px 14px;font:700 13px inherit;cursor:pointer;box-shadow:0 4px 10px #2563eb29}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;box-shadow:none}button.ghost{background:white;border-color:var(--line2);color:#33445d;box-shadow:none}button:disabled{opacity:.45;cursor:not-allowed}.command{width:100%;min-height:185px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:10px;padding:12px;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;}.preview{background:#f8fafc;color:#24344d;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:260px;overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}.bottom{margin-top:17px}.hidden{display:none!important}.status{font-size:12px;margin-top:7px;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.footer{text-align:center;color:#718096;font-size:12px;padding-top:22px}code{background:#eff6ff;color:#1e40af;padding:1px 4px;border-radius:4px}@media(max-width:850px){.grid{grid-template-columns:1fr}.wrap{padding:16px 12px 40px}}@media(max-width:560px){.wrap{padding:10px 9px 30px}header{padding:20px 13px}.panel{padding:14px}.protocols{grid-template-columns:1fr}.protocol-port{width:100px}.protocol input.protocol-port{width:100px;height:auto}.field{grid-template-columns:1fr;gap:4px}.portgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>⚙️ 旧版自建 sing-box / Xray 管理器</h1>
+  <div class="sub">Debian / Ubuntu / Alpine · 按需选择协议 · Argo 固定隧道 · VLESS XHTTP + ECH · Snell · Shadowsocks 2022</div>
+  <div class="topnote">🔒 静态网页 · 参数仅在当前浏览器生成；不会上传到 GitHub Pages</div>
+</header>
+<div class="notice info">此页面保留原有自建 sing-box / Xray 管理器功能。若要使用 ArgoSBX V26.11.20 的 15 种协议、15 种 WARP 组合、订阅和 Argo 配置，请返回 <a href="index.html">ArgoSBX 完整命令生成器</a>。两套后端彼此独立，不要混用生成的命令。</div>
+
+<div class="grid">
+<section class="panel">
+  <div class="panelhead"><h2>① 选择需要安装的协议</h2><span class="badge">可单选 / 多选</span></div>
+  <div class="protocols">
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pAnytls"><span><b>AnyTLS</b><span>需要源站 TLS 证书</span></span></label><input class="protocol-port" id="portAnytls" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="AnyTLS TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pWs" checked><span><b>VLESS + WebSocket</b><span>直连 TLS 或 Cloudflare Argo</span></span></label><input class="protocol-port" id="portWs" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="WS 本机 / TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pReality"><span><b>VLESS + Reality</b><span>不需要源站证书</span></span></label><input class="protocol-port" id="portReality" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="Reality TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pNaive"><span><b>NaiveProxy</b><span>需要源站 TLS 证书</span></span></label><input class="protocol-port" id="portNaive" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="NaiveProxy TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pAnyReality"><span><b>AnyTLS + Reality</b><span>不需要源站证书</span></span></label><input class="protocol-port" id="portAnyReality" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="AnyTLS Reality TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pXhttp"><span><b>VLESS + XHTTP + ECH</b><span>独立 Xray；TLS 证书 + DNS Only</span></span></label><input class="protocol-port" id="portXhttp" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="XHTTP TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pSnell"><span><b>Snell v5 / v6</b><span>sing-box 1.14.0+</span></span></label><input class="protocol-port" id="portSnell" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="Snell TCP 端口"></div>
+    <div class="protocol"><label class="protocol-main"><input type="checkbox" id="pSs2022"><span><b>Shadowsocks 2022</b><span>SS2022 · AES-GCM</span></span></label><input class="protocol-port" id="portSs2022" type="number" min="1024" max="65535" placeholder="端口自动" disabled title="SS2022 TCP 端口"></div>
+  </div>
+  <div id="selectionHint" class="notice ok">默认选择 VLESS + WebSocket，并使用 Argo Tunnel。你可以取消或增加其他协议。</div>
+  <div class="divider"></div>
+  <div class="panelhead"><h2>② WS 接入方式</h2><span class="badge">仅 WS 协议启用时需要</span></div>
+  <div class="field"><label for="wsMode">VLESS + WS 接入</label><select id="wsMode"><option value="argo">Cloudflare Tunnel（Argo，推荐 NAT VPS）</option><option value="direct">直连 TLS（需要可用公网端口）</option></select></div>
+  <div id="argoFields">
+    <div class="field"><label for="argoHost">Argo 公网主机名</label><input id="argoHost" placeholder="例如 ws.example.com" autocomplete="off"></div>
+    <div class="field"><label for="argoToken">Cloudflare Tunnel Token</label><input id="argoToken" type="password" placeholder="粘贴 Zero Trust Tunnel 的 eyJ... Token" autocomplete="off"></div>
+    <div class="small">先在 Cloudflare Zero Trust → Networks → Tunnels 创建/选择一个远程管理 Tunnel，并添加 Public Hostname。Token 用于 VPS 上 cloudflared 连接该 Tunnel。</div>
+  </div>
+  <div id="directWsFields" class="hidden">
+    <div class="field"><label for="directWsHost">WS HTTP Host / TLS 域名</label><input id="directWsHost" placeholder="例如 node.example.com"></div>
+  </div>
+  <div class="field hidden" id="wsServerField"><label for="wsServer">客户端连接地址 / 优选 IP</label><input id="wsServer" placeholder="可留空，默认使用上面的域名"></div>
+  <div class="small">Argo 模式：客户端连接端口固定为 443，TLS SNI 和 WS Host 使用 Argo 公网主机名；VPS 本机 WS 只监听 127.0.0.1。可在连接地址中填写 Cloudflare 优选 IP/域名，但不能替换 SNI/Host。</div>
+</section>
+
+<section class="panel">
+  <div class="panelhead"><h2>③ 按所选协议填写参数</h2><span class="badge">无关字段自动禁用</span></div>
+  <div class="field"><label for="nodeLabel">节点辨识符</label><input id="nodeLabel" placeholder="可留空，例如：新加坡 NAT01"></div>
+  <div id="originFields">
+    <div class="field"><label for="originIPv4">源站 IPv4（可选）</label><input id="originIPv4" placeholder="留空由 VPS 自动检测"></div>
+    <div class="field"><label for="originIPv6">源站 IPv6（可选）</label><input id="originIPv6" placeholder="留空由 VPS 自动检测"></div>
+    <div class="small">只有选择需要直连公网的协议时才启用。Argo-only 安装不需要填写源站公网 IP。</div>
+  </div>
+  <div id="realityFields" class="hidden">
+    <div class="field"><label for="realitySni">Reality SNI</label><input id="realitySni" value="www.bing.com"></div>
+  </div>
+  <div id="certFields" class="hidden">
+    <div class="divider"></div>
+    <h3>源站 TLS 证书（AnyTLS / Naive / 直连 WS / XHTTP + ECH 需要）</h3>
+    <div class="field"><label for="certMode">证书方式</label><select id="certMode"><option value="cloudflare">Cloudflare DNS-01</option><option value="http01">HTTP-01（需要公网 TCP 80）</option></select></div>
+    <div class="field"><label for="tlsDomain">TLS 证书域名</label><input id="tlsDomain" placeholder="例如 node.example.com"></div>
+    <div id="cfCertFields">
+      <div class="field"><label for="cfZone">Cloudflare 根域名</label><input id="cfZone" placeholder="例如 example.com"></div>
+      <div class="field"><label for="cfToken">Cloudflare DNS API Token</label><input id="cfToken" type="password" placeholder="Zone:DNS:Edit 权限" autocomplete="off"></div>
+      <div class="field"><label for="cfZoneId">Zone ID（可选）</label><input id="cfZoneId" placeholder="32 位十六进制"></div>
+      <div class="field"><label for="cfEmail">证书邮箱（可选）</label><input id="cfEmail" type="email" placeholder="可留空"></div>
+      <div class="small">这是 DNS-01 证书 API Token，与上方 Argo Tunnel Token 是两种不同凭据。只在需要源站证书时启用。</div>
+    </div>
+    <div id="httpCertHint" class="notice hidden">HTTP-01 要求证书域名解析到 VPS，且公网 TCP 80 可访问。NAT VPS 通常不适合使用此方式。</div>
+  </div>
+  <div id="xhttpFields" class="hidden">
+    <div class="divider"></div>
+    <h3>VLESS + XHTTP + ECH（独立 Xray-core）</h3>
+    <div class="field"><label for="xhttpEchPublicName">ECH Public Name</label><input id="xhttpEchPublicName" value="cloudflare-ech.com" placeholder="默认 cloudflare-ech.com"></div>
+    <div class="small">这是外层 ClientHello 暴露的公开名称，不是证书域名。服务器会生成 ECH Server Keys 和客户端 ECH Config List。</div>
+    <div class="field"><label for="xhttpMode">XHTTP 模式</label><select id="xhttpMode"><option value="auto">auto（推荐）</option><option value="packet-up">packet-up</option><option value="stream-up">stream-up</option><option value="stream-one">stream-one</option></select></div>
+    <div class="field"><label for="xhttpPath">XHTTP Path（可选）</label><input id="xhttpPath" placeholder="留空自动生成，例如 /xhttp-随机值"></div>
+    <div class="notice">ECH 客户端需要使用安装后输出的 ECH Config List。XHTTP + ECH 必须直连 VPS 的 Xray TLS 入站；DNS 记录设为 DNS Only（灰云），不要把此域名代理到普通 CDN。NAT VPS 需将公网 TCP 端口映射到 XHTTP 本机端口。</div>
+  </div>
+  <div id="snellFields" class="hidden">
+    <div class="divider"></div>
+    <h3>Snell 入站（sing-box 1.14.0+）</h3>
+    <div class="field"><label for="snellVersion">Snell 版本</label><select id="snellVersion"><option value="5">v5（兼容性优先）</option><option value="6">v6（需要客户端支持）</option></select></div>
+    <div id="snellV5Fields">
+      <div class="field"><label for="snellObfsMode">v5 HTTP 混淆</label><select id="snellObfsMode"><option value="http">http</option><option value="none">none</option></select></div>
+      <div class="field"><label for="snellObfsHost">v5 混淆 Host</label><input id="snellObfsHost" value="www.bing.com" placeholder="例如 www.bing.com"></div>
+    </div>
+    <div id="snellV6Fields" class="hidden">
+      <div class="field"><label for="snellMode">v6 流量整形</label><select id="snellMode"><option value="default">default（推荐）</option><option value="unshaped">unshaped</option><option value="unsafe-raw">unsafe-raw</option></select></div>
+    </div>
+    <div class="small">PSK 和 UserKey 会在服务器上随机生成，不需要在网页填写。安装后会输出 sing-box 客户端配置片段。</div>
+  </div>
+  <div id="ss2022Fields" class="hidden">
+    <div class="divider"></div>
+    <h3>Shadowsocks 2022 入站</h3>
+    <div class="field"><label for="ss2022Method">加密方式</label><select id="ss2022Method"><option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm（推荐）</option><option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option></select></div>
+    <div class="small">密码在 VPS 本机按所选方法生成并保存在权限为 0600 的 manager.json；安装完成后终端会显示连接参数。端口在上方 SS2022 旁边填写，留空自动分配。</div>
+  </div>
+  <div class="notice" id="portHint">端口直接填写在上方对应协议旁边；留空自动分配。Argo 模式的 WS 端口是 VPS 本机端口，客户端连接端口固定为 443。</div>
+</section>
+</div>
+
+<section class="panel bottom">
+  <div class="panelhead"><h2>④ 自动生成的一键安装命令</h2><span class="badge">随表单实时更新</span></div>
+  <div class="small">勾选协议并填写对应必需字段后，安装命令会自动生成，无需点击生成按钮。请以 root 登录目标 VPS，将命令复制到 SSH 终端执行。</div>
+  <div id="formStatus" class="status">正在等待配置。</div>
+  <div id="nodePreview" class="preview" style="margin:8px 0 10px">选择协议后显示节点类型预览。</div>
+  <textarea id="commandOutput" class="command" readonly placeholder="选择协议并填写必需字段后，安装命令会自动显示在这里。"></textarea>
+  <div class="actions">
+    <button id="copyOutput" class="secondary" disabled>复制自动生成的安装命令</button>
+    <button id="downloadOutput" class="ghost" disabled>下载命令 TXT</button>
+    <button id="exportConfig" class="ghost" disabled>导出配置 JSON（不含 Token）</button>
+  </div>
+  <div class="notice">安全提醒：安装命令会包含 Base64 编码的 Token；Base64 不是加密。不要公开分享命令，不要把 Argo Token、DNS API Token、节点链接或证书私钥提交到 GitHub。</div>
+</section>
+
+<section class="panel bottom">
+  <div class="panelhead"><h2>⑤ Cloudflare Tunnel（Argo）必须完成的路由设置</h2><span class="badge">Argo 模式</span></div>
+  <ol class="small">
+    <li>Cloudflare Zero Trust → Networks → Tunnels，创建或选择一个 remotely-managed Tunnel。</li>
+    <li>在 Tunnel → Public Hostnames / Routes 添加主机名，Service Type 选 HTTP，Service URL 填写安装后终端显示的 <code>http://127.0.0.1:本机WS端口</code>。</li>
+    <li>从 Tunnel 的 Add a replica 安装命令中复制 <code>eyJ...</code> Token，粘贴到上面的 Tunnel Token 输入框。</li>
+    <li>确认 Tunnel 状态为 Healthy。Cloudflare 会将 HTTPS/WS 流量经 Tunnel 转发到 VPS 的本机 HTTP WebSocket 入站。</li>
+  </ol>
+  <div class="notice ok">Argo 模式不需要 NAT 服务商提供公网入站端口，也不需要 VPS 为 WS 节点申请证书；Cloudflare 边缘负责客户端 TLS，cloudflared 通过出站连接回源。确保 VPS 可以访问 Cloudflare Tunnel 所需的出站网络（默认连接端口 7844）。</div>
+  <div class="small" style="margin-top:8px">官方文档：<a href="https://developers.cloudflare.com/tunnel/get-started/" target="_blank" rel="noopener">创建 Tunnel 与发布应用</a> · <a href="https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/" target="_blank" rel="noopener">Tunnel Token</a> · <a href="https://developers.cloudflare.com/tunnel/reference/run-parameters/" target="_blank" rel="noopener">Tunnel 运行参数</a> · <a href="https://developers.cloudflare.com/tunnel/concepts/routing/" target="_blank" rel="noopener">Tunnel 路由</a></div>
+</section>
+
+<section class="panel bottom">
+  <div class="panelhead"><h2>不通过 HTML 的 SSH 直接安装</h2><span class="badge">交互式选择协议</span></div>
+  <div class="small">以 root 登录 VPS 后执行。脚本会在终端询问需要安装的协议及其必需参数。</div>
+  <pre id="directInstallText" class="preview">set -eu
+if [ "$(id -u)" -ne 0 ]; then echo '请先以 root 登录，或先执行 sudo -i。'; exit 1; fi
+if ! command -v curl >/dev/null 2>&1; then
+  if [ -f /etc/alpine-release ]; then apk add --no-cache curl
+  elif [ -f /etc/debian_version ]; then apt-get update && apt-get install -y curl
+  else echo '仅支持 Debian / Ubuntu 和 Alpine。'; exit 1; fi
+fi
+curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh' -o /tmp/sb-manager-debian-alpine.sh
+chmod 700 /tmp/sb-manager-debian-alpine.sh
+/tmp/sb-manager-debian-alpine.sh</pre>
+  <div class="actions"><button id="copyDirectInstall" class="secondary">复制直接安装命令</button></div>
+</section>
+
+<section class="panel bottom">
+  <div class="panelhead"><h2>卸载 sing-box 管理器</h2><span class="badge">root 权限</span></div>
+  <pre id="uninstallText" class="preview">/usr/local/sbin/sb-manager uninstall</pre>
+  <div class="actions"><button id="copyUninstall" class="secondary">复制卸载命令</button></div>
+  <div class="small">卸载会删除本脚本管理的 sing-box / Xray 配置、服务、ECH 密钥及 Cloudflare Tunnel 专用服务和 Token 文件。若 cloudflared 二进制由本脚本下载，也会删除；系统中原本存在的 cloudflared 二进制不会删除。不会删除 Cloudflare 控制台中的 Tunnel、DNS 记录或服务商端口映射。</div>
+</section>
+<div class="footer">静态前端配置生成器。网页不会自动部署或连接 VPS；实际安装结果以服务器上的 sing-box / Xray 配置检查和服务状态为准。XHTTP + ECH 使用独立 Xray 服务；Snell 使用 sing-box 1.14.0+；SS2022 使用 sing-box 原生 Shadowsocks 入站。</div>
+</div>
+<script>
+"use strict";
+const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
+const $=id=>document.getElementById(id);
+const ids=["pAnytls","pWs","pReality","pNaive","pAnyReality","pXhttp","pSnell","pSs2022","ss2022Method","xhttpEchPublicName","xhttpMode","xhttpPath","snellVersion","snellObfsMode","snellObfsHost","snellMode","portXhttp","portSnell","portSs2022","wsMode","argoHost","argoToken","directWsHost","wsServer","nodeLabel","originIPv4","originIPv6","realitySni","certMode","tlsDomain","cfZone","cfToken","cfZoneId","cfEmail","portAnytls","portWs","portReality","portNaive","portAnyReality"];
+const v=id=>$(id).value.trim();
+function selected(){return {anytls:$("pAnytls").checked,ws_tls:$("pWs").checked,vless_reality:$("pReality").checked,naive:$("pNaive").checked,anytls_reality:$("pAnyReality").checked,xhttp:$("pXhttp").checked,snell:$("pSnell").checked,ss2022:$("pSs2022").checked};}
+function needsCert(p,mode){return p.anytls||p.naive||p.xhttp||(p.ws_tls&&mode==="direct");}
+function needsOrigin(p,mode){return p.anytls||p.vless_reality||p.naive||p.anytls_reality||p.snell||p.ss2022;}
+function b64(s){return btoa(unescape(encodeURIComponent(s)));}
+function cfgFromForm(){
+  const p=selected(),mode=v("wsMode"),certNeeded=needsCert(p,mode);
+  const certMode=certNeeded?v("certMode"):"none";
+  const tlsDomain=certNeeded?v("tlsDomain"):"";
+  const argoHost=p.ws_tls&&mode==="argo"?v("argoHost"):"";
+  const wsHost=p.ws_tls?(mode==="argo"?argoHost:(v("directWsHost")||tlsDomain)):"";
+  const wsServer=p.ws_tls?(v("wsServer")||(mode==="argo"?argoHost:(v("directWsHost")||tlsDomain))):"";
+  return {
+    schema:8,protocols:p,ws_mode:p.ws_tls?mode:"none",argo_host:argoHost,
+    argo_token:p.ws_tls&&mode==="argo"?v("argoToken"):"",
+    origin_ipv4:needsOrigin(p,mode)?v("originIPv4"):"",
+    origin_ipv6:needsOrigin(p,mode)?v("originIPv6"):"",
+    ws_server:wsServer,tls_domain:tlsDomain,ws_host:wsHost,
+    reality_sni:(p.vless_reality||p.anytls_reality)?(v("realitySni")||"www.bing.com"):"",
+    xhttp_ech_public_name:p.xhttp?(v("xhttpEchPublicName")||"cloudflare-ech.com"):"",
+    xhttp_mode:p.xhttp?v("xhttpMode"):"auto",
+    xhttp_path:p.xhttp?v("xhttpPath"):"",
+    snell_version:p.snell?Number(v("snellVersion")||5):5,
+    snell_obfs_mode:p.snell&&v("snellVersion")==="5"?v("snellObfsMode"):"http",
+    snell_obfs_host:p.snell&&v("snellVersion")==="5"?v("snellObfsHost"):"www.bing.com",
+    snell_mode:p.snell&&v("snellVersion")==="6"?v("snellMode"):"default",
+    ss2022_method:p.ss2022?v("ss2022Method"):"2022-blake3-aes-256-gcm",
+    node_label:v("nodeLabel"),
+    ports:{anytls:p.anytls?v("portAnytls"):"",ws_tls:p.ws_tls?v("portWs"):"",vless_reality:p.vless_reality?v("portReality"):"",naive:p.naive?v("portNaive"):"",anytls_reality:p.anytls_reality?v("portAnyReality"):"",xhttp:p.xhttp?v("portXhttp"):"",snell:p.snell?v("portSnell"):"",ss2022:p.ss2022?v("portSs2022"):""},
+    cert_mode:certMode,cf_zone_name:certNeeded&&certMode==="cloudflare"?v("cfZone"):"",
+    cf_zone_id:certNeeded&&certMode==="cloudflare"?v("cfZoneId"):"",
+    cf_email:certNeeded&&certMode==="cloudflare"?v("cfEmail"):"",
+    cf_token:certNeeded&&certMode==="cloudflare"?v("cfToken"):""
+  };
+}
+const domainRe=/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[A-Za-z]{2,63}$/;
+function isIPv4(s){const a=s.split(".");return a.length===4&&a.every(x=>/^\d{1,3}$/.test(x)&&+x<=255);}
+function isIPv6(s){try{return s.includes(":")&&new URL(`http://[${s}]/`).hostname.startsWith("[");}catch{return false;}}
+function validate(c){
+  const p=c.protocols,mode=c.ws_mode;
+  if(!Object.values(p).some(Boolean))throw Error("请至少勾选一种协议。");
+  if(c.node_label&&!/^[\p{L}\p{N}._-]{1,20}$/u.test(c.node_label))throw Error("节点辨识符最多 20 个字符，只允许中文、字母、数字、点、下划线和短横线。");
+  const activePorts=Object.entries(c.ports).filter(([k,x])=>p[k==="ws_tls"?"ws_tls":k]&&x);
+  for(const [k,x] of activePorts)if(!/^\d+$/.test(x)||+x<1024||+x>65535)throw Error("已启用协议的手动端口必须是 1024–65535 的整数。");
+  const portNums=activePorts.map(([,x])=>+x);if(new Set(portNums).size!==portNums.length)throw Error("已启用协议的端口不能重复。");
+  if(p.ws_tls){
+    if(mode==="argo"){
+      if(!domainRe.test(c.argo_host))throw Error("请填写有效的 Argo 公网主机名，例如 ws.example.com。");
+      if(!c.argo_token||!/^eyJ\S+$/.test(c.argo_token))throw Error("请填写 Cloudflare Tunnel Token（通常以 eyJ 开头）。");
+    }else if(mode!=="direct")throw Error("请选择 WS 接入方式。");
+    if(mode==="direct"&&!domainRe.test(c.ws_host))throw Error("直连 WS 的 HTTP Host 必须是有效域名。");
+    if(c.ws_server&&!domainRe.test(c.ws_server)&&!isIPv4(c.ws_server)&&!isIPv6(c.ws_server))throw Error("客户端连接地址格式无效；请填写域名、IPv4 或 IPv6。");
+  }
+  if(p.vless_reality||p.anytls_reality){if(!domainRe.test(c.reality_sni))throw Error("请填写有效的 Reality SNI 域名。");}
+  if(p.xhttp){
+    if(!domainRe.test(c.xhttp_ech_public_name))throw Error("ECH Public Name 必须是有效域名。");
+    if(!["auto","packet-up","stream-up","stream-one"].includes(c.xhttp_mode))throw Error("XHTTP 模式无效。");
+    if(c.xhttp_path&&!c.xhttp_path.startsWith("/"))throw Error("XHTTP Path 必须以 / 开头，或留空自动生成。");
+  }
+  if(p.ss2022&&! ["2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm"].includes(c.ss2022_method))throw Error("SS2022 加密方式无效。");
+  if(p.snell){
+    if(![5,6].includes(c.snell_version))throw Error("Snell 版本只能选择 5 或 6。");
+    if(c.snell_version===5&&!['http','none'].includes(c.snell_obfs_mode))throw Error("Snell v5 混淆模式无效。");
+    if(c.snell_version===6&&!['default','unshaped','unsafe-raw'].includes(c.snell_mode))throw Error("Snell v6 流量整形模式无效。");
+    if(c.snell_version===5&&c.snell_obfs_mode==='http'&&!domainRe.test(c.snell_obfs_host))throw Error("Snell v5 HTTP 混淆 Host 必须是有效域名。");
+  }
+  if(needsOrigin(p,mode)){
+    if(c.origin_ipv4&&!isIPv4(c.origin_ipv4)&&!domainRe.test(c.origin_ipv4))throw Error("源站 IPv4/域名格式不正确。");
+    if(c.origin_ipv6&&!isIPv6(c.origin_ipv6))throw Error("源站 IPv6 格式不正确。");
+  }
+  if(needsCert(p,mode)){
+    if(!domainRe.test(c.tls_domain))throw Error("所选协议需要有效的 TLS 证书域名。");
+    if(c.cert_mode==="cloudflare"){
+      if(!domainRe.test(c.cf_zone_name))throw Error("请填写有效的 Cloudflare 根域名。");
+      if(!c.cf_token)throw Error("请填写 Cloudflare DNS API Token。");
+      if(c.cf_zone_id&&!/^[a-fA-F0-9]{32}$/.test(c.cf_zone_id))throw Error("Zone ID 必须是 32 位十六进制，或留空。");
+      if(c.cf_email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.cf_email))throw Error("证书邮箱格式不正确，或将其留空。");
+      const d=c.tls_domain.toLowerCase(),z=c.cf_zone_name.toLowerCase();if(!(d===z||d.endsWith("."+z)))throw Error("TLS 证书域名必须属于所填 Cloudflare 根域名。");
+    }else if(c.cert_mode!=="http01")throw Error("请选择 TLS 证书方式。");
+  }
+  return c;
+}
+function oneCommandText(c){const encoded=b64(JSON.stringify(c));return `if sh -eu <<'SB_INSTALL'
+[ "$(id -u)" -eq 0 ] || { echo '请以 root 用户执行此安装命令。'; exit 1; }
+umask 077
+CFG="$(mktemp)"
+SH="$(mktemp)"
+trap 'rm -f "$CFG" "$SH"' EXIT
+printf '%s' '${encoded}' | base64 -d > "$CFG"
+chmod 600 "$CFG"
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+  if [ -f /etc/alpine-release ]; then apk add --no-cache curl
+  elif [ -f /etc/debian_version ]; then apt-get update && apt-get install -y curl
+  else echo '需要 curl 或 wget 才能下载安装脚本。'; exit 1; fi
+fi
+if command -v curl >/dev/null 2>&1; then curl -fsSL '${RAW_URL}' -o "$SH"
+else wget -qO "$SH" '${RAW_URL}'; fi
+head -n 1 "$SH" | grep -qx '#!/bin/sh'
+grep -q 'WEB_CONFIG_MODE=1' "$SH"
+grep -q 'WEB_CONFIG_SCHEMA=8' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
+install -m 700 "$SH" /usr/local/sbin/sb-manager
+rm -f "$SH"
+echo '========== 第一阶段：预装本次所选协议的核心和系统依赖 =========='
+/usr/local/sbin/sb-manager prepare-web-config-core "$CFG"
+echo '========== 第二阶段：安装证书、协议配置和节点服务 =========='
+SB_CORE_PREPARED=1 /usr/local/sbin/sb-manager install-web-config "$CFG"
+SB_INSTALL
+then
+  :
+else
+  echo '安装未完成，请查看上方错误后重试。' >&2
+  exit 1
+fi`;}
+function setEnabled(id,on){$(id).disabled=!on;}
+function syncUI(){
+  const p=selected(),ws=p.ws_tls,mode=v("wsMode"),cert=needsCert(p,mode),origin=needsOrigin(p,mode),reality=p.vless_reality||p.anytls_reality;
+  setEnabled("wsMode",ws);$("argoFields").classList.toggle("hidden",!ws||mode!=="argo");$("directWsFields").classList.toggle("hidden",!ws||mode!=="direct");
+  setEnabled("argoHost",ws&&mode==="argo");setEnabled("argoToken",ws&&mode==="argo");setEnabled("directWsHost",ws&&mode==="direct");setEnabled("wsServer",ws);
+  $("originFields").classList.toggle("hidden",!origin);setEnabled("originIPv4",origin);setEnabled("originIPv6",origin);
+  $("realityFields").classList.toggle("hidden",!reality);setEnabled("realitySni",reality);
+  $("xhttpFields").classList.toggle("hidden",!p.xhttp);["xhttpEchPublicName","xhttpMode","xhttpPath"].forEach(id=>setEnabled(id,p.xhttp));
+  $("snellFields").classList.toggle("hidden",!p.snell);setEnabled("snellVersion",p.snell);
+  const snellV5=p.snell&&v("snellVersion")==="5";$("snellV5Fields").classList.toggle("hidden",!snellV5);["snellObfsMode","snellObfsHost"].forEach(id=>setEnabled(id,snellV5));
+  const snellV6=p.snell&&v("snellVersion")==="6";$("snellV6Fields").classList.toggle("hidden",!snellV6);setEnabled("snellMode",snellV6);
+  $("certFields").classList.toggle("hidden",!cert);setEnabled("certMode",cert);setEnabled("tlsDomain",cert);
+  const cf=cert&&v("certMode")==="cloudflare";$("cfCertFields").classList.toggle("hidden",!cf);["cfZone","cfToken","cfZoneId","cfEmail"].forEach(id=>setEnabled(id,cf));
+  $("httpCertHint").classList.toggle("hidden",!cert||v("certMode")!=="http01");
+  const portMap=[["portAnytls",p.anytls],["portWs",ws],["portReality",p.vless_reality],["portNaive",p.naive],["portAnyReality",p.anytls_reality],["portXhttp",p.xhttp],["portSnell",p.snell],["portSs2022",p.ss2022]];portMap.forEach(([id,on])=>setEnabled(id,on));
+  $("ss2022Fields").classList.toggle("hidden",!p.ss2022);setEnabled("ss2022Method",p.ss2022);
+  $("selectionHint").textContent=Object.values(p).some(Boolean)?`已选择 ${Object.values(p).filter(Boolean).length} 种协议。未选择协议的参数输入框会禁用，不会写入安装配置。`:"请至少选择一种协议。";
+}
+function render(){
+  syncUI();
+  const status=$("formStatus"),out=$("commandOutput"),copy=$("copyOutput"),down=$("downloadOutput"),exp=$("exportConfig");
+  try{const c=validate(cfgFromForm());out.value="# 配置变化时自动更新；请以 root 登录目标 VPS 执行。\n# 命令含敏感 Token，请勿公开分享。\n\n"+oneCommandText(c);status.className="status ok";status.textContent="配置完整，安装命令已自动生成。";[copy,down,exp].forEach(b=>b.disabled=false);updatePreview(c);}
+  catch(e){out.value="";status.className="status error";status.textContent=e.message;[copy,down,exp].forEach(b=>b.disabled=true);updatePreview(null);}
+}
+function updatePreview(c){const p=selected(),rows=[];if(!Object.values(p).some(Boolean)){ $("nodePreview")&&($("nodePreview").textContent="尚未选择协议。");return;}if(p.anytls)rows.push("AnyTLS");if(p.ws_tls)rows.push(v("wsMode")==="argo"?`VLESS WS TLS → ${v("argoHost")||"Argo 主机名待填写"}:443`:`VLESS WS TLS → ${v("directWsHost")||v("tlsDomain")||"TLS 域名待填写"}`);if(p.vless_reality)rows.push("VLESS Reality");if(p.naive)rows.push("NaiveProxy");if(p.anytls_reality)rows.push("AnyTLS + Reality");if(p.xhttp)rows.push(`VLESS XHTTP + ECH → ${v("tlsDomain")||"TLS 域名待填写"} (${v("xhttpMode")||"auto"})`);if(p.snell)rows.push(`Snell v${v("snellVersion")||"5"}`);if(p.ss2022)rows.push(`Shadowsocks 2022 (${v("ss2022Method")})`);const el=$("nodePreview");if(el)el.textContent=rows.join("\n");}
+async function copyText(t){try{await navigator.clipboard.writeText(t);alert("已复制到剪贴板。");}catch{const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();const ok=document.execCommand("copy");a.remove();alert(ok?"已复制。":"复制失败，请手动复制。");}}
+function download(name,text,type="text/plain;charset=utf-8"){const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
+ids.forEach(id=>{$(id).addEventListener("input",render);$(id).addEventListener("change",render);});
+$("copyOutput").addEventListener("click",()=>copyText($("commandOutput").value));
+$("downloadOutput").addEventListener("click",()=>download("sing-box-install-command.txt",$("commandOutput").value));
+$("exportConfig").addEventListener("click",()=>{try{const c=validate(cfgFromForm());c.cf_token="";c.argo_token="";download("sing-box-config-no-token.json",JSON.stringify(c,null,2),"application/json");}catch(e){alert(e.message);}});
+$("copyDirectInstall").addEventListener("click",()=>copyText($("directInstallText").textContent));
+$("copyUninstall").addEventListener("click",()=>copyText($("uninstallText").textContent.trim()));
+render();
+</script>
+</body>
+</html>

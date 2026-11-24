@@ -5,7 +5,7 @@
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=8; selective protocol installation, Argo Tunnel, VLESS XHTTP+ECH, Snell and SS2022
-# v1.0.6; generated one-command installer preinstalls protocol-specific cores before protocol setup
+# v1.0.7; SS2022 port ownership and dual-stack node export fixes
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
 set -eu
 
@@ -71,6 +71,7 @@ PREVIOUS_NAIVE_PORT=""
 PREVIOUS_ANYREALITY_PORT=""
 PREVIOUS_XHTTP_PORT=""
 PREVIOUS_SNELL_PORT=""
+PREVIOUS_SS2022_PORT=""
 NEED_CERT=0
 NEED_ORIGIN=1
 BBR_SYSCTL_FILE=/etc/sysctl.d/99-sb-manager-bbr.conf
@@ -551,7 +552,7 @@ assign_ports() {
                 *)
                     if ! manual_port_available "$item_port" \
                         "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" \
-                        "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" "$PREVIOUS_XHTTP_PORT" "$PREVIOUS_SNELL_PORT" "$SS2022_PORT"; then
+                        "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" "$PREVIOUS_XHTTP_PORT" "$PREVIOUS_SNELL_PORT" "$PREVIOUS_SS2022_PORT"; then
                         warn "$protocol_name 指定 TCP 端口 $item_port 已被其他程序占用；将自动随机分配。"
                         item_port=""
                         PORT_FALLBACK_USED=1
@@ -1932,22 +1933,32 @@ show_nodes() {
             printf '提示：VLESS 分享链接本身不包含 ECH Config；需要导入上述 JSON，或在客户端手动填写 ECH Config List。\n\n'
         fi
         if [ "$ENABLE_SS2022" = 1 ]; then
-            ss_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
-            ss_tag="${ss_server}"; [ -z "$NODE_LABEL" ] || ss_tag="${ss_tag}-${NODE_LABEL}"
-            ss_host_uri=$(uri_host "$ss_server")
-            ss_tag_uri=$(jq -nr --arg tag "${ss_tag}-ss2022" '$tag | @uri')
             ss_userinfo=$(printf '%s' "$SS2022_METHOD:$SS2022_PASSWORD" | base64 | tr -d '\r\n')
-            SS2022_LINK="ss://${ss_userinfo}@${ss_host_uri}:${SS2022_PORT}#${ss_tag_uri}"
-            printf '[%s-ss2022] Shadowsocks 2022 | 地址：%s | TCP：%s | method：%s\n密码：%s\n%s\n\n' "$ss_tag" "$ss_server" "$SS2022_PORT" "$SS2022_METHOD" "$SS2022_PASSWORD" "$SS2022_LINK"
+            if [ -n "$ORIGIN_ADDR" ]; then
+                ss_tag=$(node_tag IPv4 "$ORIGIN_ADDR" ss2022); ss_tag_uri=$(jq -nr --arg tag "$ss_tag" '$tag | @uri')
+                ss_host_uri=$(uri_host "$ORIGIN_ADDR")
+                SS2022_LINK="ss://${ss_userinfo}@${ss_host_uri}:${SS2022_PORT}#${ss_tag_uri}"
+                printf '[%s] Shadowsocks 2022 | 地址：%s | TCP：%s | method：%s\n密码：%s\n%s\n\n' "$ss_tag" "$ORIGIN_ADDR" "$SS2022_PORT" "$SS2022_METHOD" "$SS2022_PASSWORD" "$SS2022_LINK"
+            fi
+            if [ -n "$ORIGIN_IPV6" ]; then
+                ss_tag=$(node_tag IPv6 "$ORIGIN_IPV6" ss2022); ss_tag_uri=$(jq -nr --arg tag "$ss_tag" '$tag | @uri')
+                ss_host_uri=$(uri_host "$ORIGIN_IPV6")
+                SS2022_LINK="ss://${ss_userinfo}@${ss_host_uri}:${SS2022_PORT}#${ss_tag_uri}"
+                printf '[%s] Shadowsocks 2022 | 地址：[%s] | TCP：%s | method：%s\n密码：%s\n%s\n\n' "$ss_tag" "$ORIGIN_IPV6" "$SS2022_PORT" "$SS2022_METHOD" "$SS2022_PASSWORD" "$SS2022_LINK"
+            fi
         fi
         if [ "$ENABLE_SNELL" = 1 ]; then
-            snell_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
-            snell_tag="${snell_server}"
-            [ -z "$NODE_LABEL" ] || snell_tag="${snell_tag}-${NODE_LABEL}"
-            printf '[%s-snell] Snell v%s | 地址：%s | TCP：%s\n' "$snell_tag" "$SNELL_VERSION" "$snell_server" "$SNELL_PORT"
+            if [ -n "$ORIGIN_ADDR" ]; then
+                snell_tag=$(node_tag IPv4 "$ORIGIN_ADDR" snell)
+                printf '[%s] Snell v%s | 地址：%s | TCP：%s\n' "$snell_tag" "$SNELL_VERSION" "$ORIGIN_ADDR" "$SNELL_PORT"
+            fi
+            if [ -n "$ORIGIN_IPV6" ]; then
+                snell_tag=$(node_tag IPv6 "$ORIGIN_IPV6" snell)
+                printf '[%s] Snell v%s | 地址：[%s] | TCP：%s\n' "$snell_tag" "$SNELL_VERSION" "$ORIGIN_IPV6" "$SNELL_PORT"
+            fi
             printf 'PSK：%s\nUserKey：%s\n' "$SNELL_PSK" "$SNELL_USERKEY"
             if [ "$SNELL_VERSION" = 5 ]; then printf 'HTTP 混淆：%s | Host：%s\n' "$SNELL_OBFS_MODE" "$SNELL_OBFS_HOST"; else printf 'Traffic shaping：%s\n' "$SNELL_MODE"; fi
-            printf 'sing-box 客户端配置片段：%s\n\n' "$SNELL_CLIENT_CONFIG_FILE"
+            printf 'sing-box 客户端配置片段（默认使用优先源站地址）：%s\n\n' "$SNELL_CLIENT_CONFIG_FILE"
         fi
         if [ -n "$ORIGIN_IPV6" ]; then
             origin6_uri=$(uri_host "$ORIGIN_IPV6")
@@ -1972,7 +1983,7 @@ show_nodes() {
                 printf '[%s] NaiveProxy | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$NAIVE_PORT" "$NAIVE6_LINK"
             fi
         fi
-        if [ "$ENABLE_WS_TLS" = 0 ] && [ "$ENABLE_ANYTLS" = 0 ] && [ "$ENABLE_VLESS_REALITY" = 0 ] && [ "$ENABLE_NAIVE" = 0 ] && [ "$ENABLE_ANYTLS_REALITY" = 0 ] && [ "$ENABLE_XHTTP" = 0 ] && [ "$ENABLE_SNELL" = 0 ]; then
+        if [ "$ENABLE_WS_TLS" = 0 ] && [ "$ENABLE_ANYTLS" = 0 ] && [ "$ENABLE_VLESS_REALITY" = 0 ] && [ "$ENABLE_NAIVE" = 0 ] && [ "$ENABLE_ANYTLS_REALITY" = 0 ] && [ "$ENABLE_XHTTP" = 0 ] && [ "$ENABLE_SNELL" = 0 ] && [ "$ENABLE_SS2022" = 0 ]; then
             printf '没有启用任何协议。\n'
         fi
     } > "$nodes_tmp"
@@ -2287,7 +2298,7 @@ install_from_config() {
     else
         msg '核心已由网页一键命令预装并通过版本检查，跳过重复安装。'
     fi
-    PREVIOUS_ANYTLS_PORT=""; PREVIOUS_WS_PORT=""; PREVIOUS_REALITY_PORT=""; PREVIOUS_NAIVE_PORT=""; PREVIOUS_ANYREALITY_PORT=""; PREVIOUS_XHTTP_PORT=""; PREVIOUS_SNELL_PORT=""
+    PREVIOUS_ANYTLS_PORT=""; PREVIOUS_WS_PORT=""; PREVIOUS_REALITY_PORT=""; PREVIOUS_NAIVE_PORT=""; PREVIOUS_ANYREALITY_PORT=""; PREVIOUS_XHTTP_PORT=""; PREVIOUS_SNELL_PORT=""; PREVIOUS_SS2022_PORT=""
     assign_ports
 
     if [ -n "$NODE_LABEL" ]; then
@@ -3112,8 +3123,9 @@ change_ports() {
     PREVIOUS_REALITY_PORT=$old_reality
     PREVIOUS_NAIVE_PORT=$old_naive
     PREVIOUS_ANYREALITY_PORT=$old_anyreality
-    PREVIOUS_XHTTP_PORT=$XHTTP_PORT
-    PREVIOUS_SNELL_PORT=$SNELL_PORT
+    PREVIOUS_XHTTP_PORT=$old_xhttp
+    PREVIOUS_SNELL_PORT=$old_snell
+    PREVIOUS_SS2022_PORT=$old_ss2022
     ask_ports
     assign_ports
     if ! build_config; then
