@@ -1,1 +1,0 @@
-ArgoSBX project bundle 1.2.2\nManager shell script 1.0.9\n

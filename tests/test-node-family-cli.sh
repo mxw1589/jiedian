@@ -7,5 +7,5 @@ grep -Fq '46|64)' "$SCRIPT"
 grep -Fq 'cat "$APP_DIR/nodes-dualstack.txt"' "$SCRIPT"
 grep -Fq 'cat "$APP_DIR/nodes-ipv4.txt"' "$SCRIPT"
 grep -Fq 'cat "$APP_DIR/nodes-ipv6.txt"' "$SCRIPT"
-grep -Fq 'sb-manager nodes' "$ROOT/manager.html"
+grep -Fq 'sb-manager nodes' "$ROOT/index.html"
 echo 'PASS: CLI supports family-specific and merged dual-stack node display.'

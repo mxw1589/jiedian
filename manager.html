@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#f3f6fb">
-<title>旧版自建 sing-box / Xray 管理器</title>
+<title>Jiedian 双栈节点 SSH 命令生成器</title>
 <style>
 :root{color-scheme:light;--bg:#f3f6fb;--surface:#fff;--soft:#f8faff;--line:#dce4ef;--line2:#c8d5e5;--text:#17243a;--muted:#64748b;--blue:#2563eb;--blue2:#1d4ed8;--green:#15803d;--greenbg:#f0fdf4;--amber:#92400e;--amberbg:#fffbeb;--red:#b91c1c;--shadow:0 8px 26px rgba(30,55,90,.07)}
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -28%,rgba(219,234,254,.9),transparent 48%),var(--bg);color:var(--text);font:14px/1.65 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1180px;margin:auto;padding:28px 22px 60px}header{padding:27px 20px;margin-bottom:18px;text-align:center;background:#ffffffdf;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow)}h1{font-size:clamp(24px,3vw,36px);line-height:1.25;margin:0 0 8px;color:#13233d}.sub,.small{color:var(--muted)}.sub{font-size:13px}.topnote{display:inline-block;margin-top:13px;padding:6px 12px;border:1px solid #bfdbfe;border-radius:99px;background:#eff6ff;color:#1e40af;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:17px;align-items:start}.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow);min-width:0}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:13px}.panel h2{font-size:17px;line-height:1.35;margin:0;color:#172b49}.panel h3{font-size:14px;margin:17px 0 8px;color:#33445d}.badge{font-size:11px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:3px 9px;white-space:nowrap;font-weight:650}.small{font-size:12px;line-height:1.7}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.protocol{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:11px;background:var(--soft);padding:9px;cursor:pointer;min-width:0}.protocol-main{display:flex;align-items:center;gap:8px;flex:1;min-width:0}.protocol-main input{width:17px;height:17px;flex:none}.protocol-main span{min-width:0}.protocol-port{width:88px;flex:none;border:1px solid var(--line2);border-radius:7px;padding:6px 7px;font:12px ui-monospace,monospace;color:var(--text);background:#fff}.protocol input.protocol-port{width:88px;height:auto;accent-color:auto}.protocol-port:disabled{background:#f1f5f9;color:#94a3b8}.protocol-port::placeholder{color:#94a3b8}.protocol input{width:17px;height:17px;accent-color:var(--blue)}.protocol b{font-size:13px}.protocol span{display:block;font-size:11px;color:var(--muted)}.field{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:10px;margin:10px 0}.field label{font-size:13px;font-weight:650;color:#33445d}.field input,.field select{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;color:var(--text);font:inherit;outline:none}.field input:focus,.field select:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 3px #3b82f61f}.field input:disabled,.field select:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder{color:#94a3b8}.divider{height:1px;background:var(--line);margin:16px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.port{border:1px solid var(--line);border-radius:10px;padding:9px;background:var(--soft)}.port label{display:block;font-size:11px;font-weight:650;color:#33445d;margin-bottom:5px}.port input{width:100%;border:1px solid var(--line2);border-radius:7px;padding:8px;color:var(--text);min-width:0}.notice{margin-top:11px;padding:10px 12px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:10px;font-size:12px;line-height:1.65}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px}button{border:1px solid var(--blue);background:linear-gradient(180deg,#3b82f6,#2563eb);color:white;border-radius:9px;padding:9px 14px;font:700 13px inherit;cursor:pointer;box-shadow:0 4px 10px #2563eb29}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;box-shadow:none}button.ghost{background:white;border-color:var(--line2);color:#33445d;box-shadow:none}button:disabled{opacity:.45;cursor:not-allowed}.command{width:100%;min-height:185px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:10px;padding:12px;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;}.preview{background:#f8fafc;color:#24344d;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:260px;overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}.bottom{margin-top:17px}.hidden{display:none!important}.status{font-size:12px;margin-top:7px;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.footer{text-align:center;color:#718096;font-size:12px;padding-top:22px}code{background:#eff6ff;color:#1e40af;padding:1px 4px;border-radius:4px}@media(max-width:850px){.grid{grid-template-columns:1fr}.wrap{padding:16px 12px 40px}}@media(max-width:560px){.wrap{padding:10px 9px 30px}header{padding:20px 13px}.panel{padding:14px}.protocols{grid-template-columns:1fr}.protocol-port{width:100px}.protocol input.protocol-port{width:100px;height:auto}.field{grid-template-columns:1fr;gap:4px}.portgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -13,11 +13,11 @@
 <body>
 <div class="wrap">
 <header>
-  <h1>⚙️ 旧版自建 sing-box / Xray 管理器</h1>
-  <div class="sub">Debian / Ubuntu / Alpine · 按需选择协议 · Argo 固定隧道 · VLESS XHTTP + ECH · Snell · Shadowsocks 2022</div>
+  <h1>⚙️ Jiedian 双栈节点 SSH 命令生成器</h1>
+  <div class="sub">Debian / Ubuntu / Alpine · 使用你自己的 GitHub Shell 脚本 · IPv4 / IPv6 / 双栈节点输出</div>
   <div class="topnote">🔒 静态网页 · 参数仅在当前浏览器生成；不会上传到 GitHub Pages</div>
 </header>
-<div class="notice info">此页面保留原有自建 sing-box / Xray 管理器功能。安装后在 VPS 菜单选择“查看已安装协议节点链接”，会同时生成 IPv4 + IPv6 合并导入列表 nodes-dualstack.txt（每个地址族各一条独立节点，IPv4 在前、IPv6 在后），并保留 IPv4、IPv6 和域名 / Argo 分组文件；TXT 每行一个分享 URI，Snell 另存为 IPv4 / IPv6 JSON。若要使用 ArgoSBX V26.11.20 的 15 种协议、15 种 WARP 组合、订阅和 Argo 配置，请返回 <a href="index.html">ArgoSBX 完整命令生成器</a>。两套后端彼此独立，不要混用生成的命令。</div>
+<div class="notice info">本页是主入口。第⑤项自动生成的 SSH 命令会下载并执行你自己的 GitHub 脚本：<a href="https://github.com/mxw1589/jiedian/blob/main/sb-manager-debian-alpine.sh" target="_blank" rel="noopener">mxw1589/jiedian / sb-manager-debian-alpine.sh</a>。为确保下载的是 Shell 原文，命令实际使用对应的 raw.githubusercontent.com 地址。IPv4、IPv6 或双栈选择会写入配置并在安装完成后调用同一管理器输出节点；不会调用 yonggekkk/argosbx.sh，也不会把 ippz=46 传给不支持它的上游脚本。</div>
 
 <div class="grid">
 <section class="panel">
@@ -51,8 +51,6 @@
 <section class="panel">
   <div class="panelhead"><h2>③ 按所选协议填写参数</h2><span class="badge">无关字段自动禁用</span></div>
   <div class="field"><label for="nodeLabel">节点辨识符</label><input id="nodeLabel" placeholder="可留空，例如：新加坡 NAT01"></div>
-  <div class="field"><label for="nodeFamily">节点输出地址族</label><select id="nodeFamily"><option value="46" selected>IPv4 + IPv6（双栈合并，推荐）</option><option value="4">仅 IPv4</option><option value="6">仅 IPv6</option></select></div>
-  <div class="small">此选项控制网页生成的安装命令最后显示哪组节点。双栈会将 IPv4 与 IPv6 节点合并到同一列表；服务器仍会同时保留独立的 IPv4、IPv6 和双栈文件。</div>
   <div id="originFields">
     <div class="field"><label for="originIPv4">源站 IPv4（可选）</label><input id="originIPv4" placeholder="留空由 VPS 自动检测"></div>
     <div class="field"><label for="originIPv6">源站 IPv6（可选）</label><input id="originIPv6" placeholder="留空由 VPS 自动检测"></div>
@@ -108,8 +106,14 @@
 </div>
 
 <section class="panel bottom">
-  <div class="panelhead"><h2>④ 自动生成的一键安装命令</h2><span class="badge">随表单实时更新</span></div>
-  <div class="small">勾选协议并填写对应必需字段后，安装命令会自动生成，无需点击生成按钮。请以 root 登录目标 VPS，将命令复制到 SSH 终端执行。</div>
+  <div class="panelhead"><h2>④ 节点输出地址族</h2><span class="badge">命令自动携带选择</span></div>
+  <div class="field"><label for="nodeFamily">生成节点类型</label><select id="nodeFamily"><option value="46" selected>IPv4 + IPv6（双栈合并，推荐）</option><option value="4">仅 IPv4</option><option value="6">仅 IPv6</option></select></div>
+  <div class="small">选择“双栈”后，安装命令最后执行 <code>/usr/local/sbin/sb-manager nodes '46'</code>，把 IPv4 与 IPv6 分享 URI 放在同一列表中；两种地址仍是两个独立节点。服务器同时保留 nodes-ipv4.txt、nodes-ipv6.txt 和 nodes-dualstack.txt。</div>
+</section>
+
+<section class="panel bottom">
+  <div class="panelhead"><h2>⑤ 自动生成 SSH 命令</h2><span class="badge">随表单实时更新</span></div>
+  <div class="small">勾选协议、填写必需字段并选择节点地址族后，SSH 命令会自动生成。请以 root 登录目标 VPS，将完整命令复制到终端执行。命令下载并运行的脚本来源：<a href="https://github.com/mxw1589/jiedian/blob/main/sb-manager-debian-alpine.sh" target="_blank" rel="noopener">GitHub 文件页面</a>。</div>
   <div id="formStatus" class="status">正在等待配置。</div>
   <div id="nodePreview" class="preview" style="margin:8px 0 10px">选择协议后显示节点类型预览。</div>
   <textarea id="commandOutput" class="command" readonly placeholder="选择协议并填写必需字段后，安装命令会自动显示在这里。"></textarea>
@@ -123,7 +127,7 @@
 </section>
 
 <section class="panel bottom">
-  <div class="panelhead"><h2>⑤ Cloudflare Tunnel（Argo）必须完成的路由设置</h2><span class="badge">Argo 模式</span></div>
+  <div class="panelhead"><h2>⑥ Cloudflare Tunnel（Argo）必须完成的路由设置</h2><span class="badge">Argo 模式</span></div>
   <ol class="small">
     <li>Cloudflare Zero Trust → Networks → Tunnels，创建或选择一个 remotely-managed Tunnel。</li>
     <li>在 Tunnel → Public Hostnames / Routes 添加主机名，Service Type 选 HTTP，Service URL 填写安装后终端显示的 <code>http://127.0.0.1:本机WS端口</code>。</li>
@@ -135,7 +139,7 @@
 </section>
 
 <section class="panel bottom">
-  <div class="panelhead"><h2>不通过 HTML 的 SSH 直接安装</h2><span class="badge">交互式选择协议</span></div>
+  <div class="panelhead"><h2>⑦ 不通过网页的 SSH 直接安装</h2><span class="badge">交互式选择协议</span></div>
   <div class="small">以 root 登录 VPS 后执行。脚本会在终端询问需要安装的协议及其必需参数。</div>
   <pre id="directInstallText" class="preview">set -eu
 if [ "$(id -u)" -ne 0 ]; then echo '请先以 root 登录，或先执行 sudo -i。'; exit 1; fi
@@ -165,7 +169,7 @@ chmod 700 /tmp/sb-manager-debian-alpine.sh
 </section>
 
 <section class="panel bottom">
-  <div class="panelhead"><h2>卸载 sing-box 管理器</h2><span class="badge">root 权限</span></div>
+  <div class="panelhead"><h2>⑧ 卸载 sing-box 管理器</h2><span class="badge">root 权限</span></div>
   <pre id="uninstallText" class="preview">/usr/local/sbin/sb-manager uninstall</pre>
   <div class="actions"><button id="copyUninstall" class="secondary">复制卸载命令</button></div>
   <div class="small">卸载会删除 /etc/sing-box、/etc/xray 及本脚本服务文件；如果这些目录里有其他程序或手工配置，请先备份。执行卸载命令时必须输入 YES 确认。若 cloudflared 二进制由本脚本下载，也会删除；系统中原本存在的 cloudflared 二进制不会删除。不会删除 Cloudflare 控制台中的 Tunnel、DNS 记录或服务商端口映射。</div>

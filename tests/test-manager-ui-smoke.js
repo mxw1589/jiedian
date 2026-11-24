@@ -4,8 +4,11 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 
-const html = fs.readFileSync(require.resolve('../manager.html'), 'utf8');
+const html = fs.readFileSync(require.resolve('../index.html'), 'utf8');
 assert.match(html, /wget -qO/ , 'direct installer should fall back to wget');
+assert.match(html, /<h2>⑤ 自动生成 SSH 命令<\/h2>/, 'main page must label the SSH generator as section ⑤');
+assert.match(html, /github\.com\/mxw1589\/jiedian\/blob\/main\/sb-manager-debian-alpine\.sh/, 'main page must link to the exact user-provided GitHub script page');
+assert.doesNotMatch(html, /raw\.githubusercontent\.com\/yonggekkk\/argosbx\/main\/argosbx\.sh/, 'main page must not call the unrelated upstream ArgoSBX script');
 assert.match(html, /raw\.githubusercontent\.com\/mxw1589\/jiedian\/main\/sb-manager-debian-alpine\.sh/, "installer must download the user repository script");
 assert.match(html, /WEB_CONFIG_SCHEMA=8/, 'direct installer should check server script schema');
 assert.match(html, /id="nodeFamily"/, 'manager page should expose an address-family selector');
@@ -106,6 +109,8 @@ byId.get('argoToken').dispatch('input');
 byId.get('wsServer').value = '203.0.113.8';
 byId.get('wsServer').dispatch('input');
 assert.match(byId.get('commandOutput').value, /install-web-config/);
+assert.match(byId.get('commandOutput').value, /raw\.githubusercontent\.com\/mxw1589\/jiedian\/main\/sb-manager-debian-alpine\.sh/, 'generated SSH command must download the repository script raw content');
+assert.doesNotMatch(byId.get('commandOutput').value, /yonggekkk\/argosbx\/argosbx\.sh/, 'generated SSH command must not call the old upstream generator');
 assert.match(byId.get('commandOutput').value, /v1\.0\.9; selectable IPv4, IPv6 or dual-stack node display from web-generated commands/, 'installer must reject stale remote manager scripts');
 const encoded = byId.get('commandOutput').value.match(/printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d/);
 assert.ok(encoded, 'installer command carries an encoded JSON configuration');
@@ -123,4 +128,4 @@ assert.match(byId.get('commandOutput').value, /sb-manager nodes '6'/, 'IPv6 sele
 const shellSyntax = spawnSync('sh', ['-n'], { input: byId.get('commandOutput').value, encoding: 'utf8' });
 assert.equal(shellSyntax.status, 0, shellSyntax.stderr || 'generated shell installer must parse');
 
-console.log('PASS: legacy manager UI toggles the WS address override and generates a valid installer command.');
+console.log('PASS: main index UI toggles protocol fields and generates SSH install commands from the user repository with IPv4, IPv6 and dual-stack selection.');
