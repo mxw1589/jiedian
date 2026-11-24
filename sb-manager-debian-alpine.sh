@@ -1,10 +1,11 @@
 #!/bin/sh
 # sing-box single-VPS multi-protocol manager for Debian + Alpine
+# PROJECT_VERSION=1.4.0
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
-# WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
+# WEB_CONFIG_SCHEMA=8; WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
 # WEB_WS_PREFERENCES=1
 # WEB_PORT_REUSE=1
 # Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
@@ -38,7 +39,7 @@ KEY_FILE="$CERT_DIR/privkey.pem"
 CF_TOKEN_FILE="$APP_DIR/cloudflare.token"
 CF_ZONE_ID_FILE="$APP_DIR/cloudflare-zone-id"
 CF_ZONE_NAME=""
-NODE_LABEL=""
+NODE_PREFIX=""
 NAIVE_PORT=""
 NAIVE_USERNAME=""
 NAIVE_PASSWORD=""
@@ -1437,13 +1438,13 @@ save_state() {
       --arg key_file "$KEY_FILE" \
       --arg cert_mode "$CERT_MODE" \
       --arg cf_zone_name "$CF_ZONE_NAME" \
-      --arg node_label "$NODE_LABEL" \
+      --arg node_prefix "$NODE_PREFIX" \
       --arg enable_anytls "$ENABLE_ANYTLS" \
       --arg enable_ws_tls "$ENABLE_WS_TLS" \
       --arg enable_vless_reality "$ENABLE_VLESS_REALITY" \
       --arg enable_naive "$ENABLE_NAIVE" \
       --arg enable_anytls_reality "$ENABLE_ANYTLS_REALITY" \
-      "$PORT_HISTORY_FILTER"'{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,enabled_ws_argo:($enable_ws_argo=="1"),enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_password:$ss2022_password,argo_port:(if $enable_ws_argo=="1" then ($argo_port|tonumber) else null end),argo_server:$argo_server,argo_uuid:$argo_uuid,argo_path:$argo_path,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_label:$node_label} | .port_history = ($saved_ports + active_ports)' > "$tmp"; then
+      "$PORT_HISTORY_FILTER"'{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,enabled_ws_argo:($enable_ws_argo=="1"),enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_password:$ss2022_password,argo_port:(if $enable_ws_argo=="1" then ($argo_port|tonumber) else null end),argo_server:$argo_server,argo_uuid:$argo_uuid,argo_path:$argo_path,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_prefix:$node_prefix} | .port_history = ($saved_ports + active_ports)' > "$tmp"; then
         rm -f "$tmp"
         warn '无法生成 manager.json；原有管理状态未更改。'
         return 1
@@ -1509,7 +1510,7 @@ load_state() {
     KEY_FILE=$(jq -r '.key_file // ""' "$STATE_FILE")
     CERT_MODE=$(jq -r '.cert_mode // "none"' "$STATE_FILE")
     CF_ZONE_NAME=$(jq -r '.cf_zone_name // ""' "$STATE_FILE")
-    NODE_LABEL=$(jq -r '.node_label // ""' "$STATE_FILE")
+    NODE_PREFIX=$(jq -r '.node_prefix // .node_label // ""' "$STATE_FILE")
     if [ "$ENABLE_WS_TLS" = 1 ] && jq -e 'has("enabled_ws_argo") | not' "$STATE_FILE" >/dev/null &&
         [ "$(jq -r '.ws_mode // "direct"' "$STATE_FILE")" = argo ]; then
         legacy_ws_server=$(jq -r '.ws_server // ""' "$STATE_FILE")
@@ -1647,8 +1648,11 @@ node_tag() {
     if [ "$family_lc" = ipv4 ]; then
         case "$address" in *[!0-9.]*) family_lc=domain ;; esac
     fi
-    tag="${family_lc}-${address}"
-    [ -z "$NODE_LABEL" ] || tag="${tag}-${NODE_LABEL}"
+    if [ -n "$NODE_PREFIX" ]; then
+        tag="${NODE_PREFIX}-${family_lc}-${address}"
+    else
+        tag="${family_lc}-${address}"
+    fi
     printf '%s-%s' "$tag" "$protocol"
 }
 
@@ -1661,23 +1665,23 @@ node_tag_single() {
     node_tag "$family_lc" "$2" "$1"
 }
 
-change_node_label() {
-    printf '\n当前节点辨识符：%s\n' "${NODE_LABEL:-（未设置）}"
-    msg '该辨识符会添加到地址之后、协议名称之前；每条启用的 WS 线路各生成一个节点。'
-    msg '示例：填写 KC 后，节点名称变为 ipv4-23.147.232.192-KC-anytls、ipv6-2602:...-KC-anytls、ipv4-23.147.232.192-KC-vless+ws+tls。'
+change_node_prefix() {
+    printf '\n当前节点前缀：%s\n' "${NODE_PREFIX:-（未设置）}"
+    msg '节点前缀会放在地址族和连接地址之前；每条启用的协议线路都会使用相同前缀。'
+    msg '示例：填写 KC 后，节点名称变为 KC-ipv4-23.147.232.192-anytls、KC-ipv6-2602:...-anytls。'
     msg '支持中文、英文字母和数字，可使用点、下划线、短横线；最多 20 个 Unicode 字符。'
     msg '示例：香港、东京、日本01、KC、LAX-01。留空可清除辨识符。'
-    ask_value '新的节点辨识符（留空清除）' ''
+    ask_value '新的节点前缀（留空清除）' ''
     new_label=$REPLY
     if [ -n "$new_label" ]; then
-        label_length=$(jq -nr --arg node_label "$new_label" '$node_label | length')
-        [ "$label_length" -le 20 ] || { warn '辨识符最多 20 个字符（中文按一个字符计算）。'; return 0; }
-        jq -ne --arg node_label "$new_label" '$node_label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
-            { warn '格式无效。支持中文、英文字母、数字、点、下划线和短横线；不支持空格及特殊符号。'; return 0; }
+        label_length=$(jq -nr --arg node_prefix "$new_label" '$node_prefix | length')
+        [ "$label_length" -le 20 ] || { warn '节点前缀最多 20 个字符（中文按一个字符计算）。'; return 0; }
+        jq -ne --arg node_prefix "$new_label" '$node_prefix | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 ||
+            { warn '节点前缀格式无效。支持中文、英文字母、数字、点、下划线和短横线；不支持空格及特殊符号。'; return 0; }
     fi
-    NODE_LABEL=$new_label
+    NODE_PREFIX=$new_label
     save_state
-    msg "节点辨识符已保存：${NODE_LABEL:-（未设置）}"
+    msg "节点前缀已保存：${NODE_PREFIX:-（未设置）}"
     show_nodes
 }
 
@@ -1725,16 +1729,17 @@ write_naive_client_json() {
 show_ss2022_node() {
     ss_tag=$(node_tag "$1" "$2" ss2022)
     ss_tag_uri=$(jq -nr --arg value "$ss_tag" '$value | @uri')
-    ss_key_uri=$(jq -nr --arg value "$SS2022_PASSWORD" '$value | @uri')
-    printf '[%s] Shadowsocks 2022 | TCP/UDP：%s\nss://%s:%s@%s:%s#%s\n\n' \
-        "$ss_tag" "$SS2022_PORT" "$SS2022_METHOD" "$ss_key_uri" "$(uri_host "$2")" "$SS2022_PORT" "$ss_tag_uri"
+    ss_auth=$(printf '%s:%s' "$SS2022_METHOD" "$SS2022_PASSWORD" | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+    [ -n "$ss_auth" ] || { warn 'Shadowsocks 2022 URI 用户信息编码失败。'; return 1; }
+    printf '[%s] Shadowsocks 2022 | TCP/UDP：%s\nss://%s@%s:%s#%s\n\n' \
+        "$ss_tag" "$SS2022_PORT" "$ss_auth" "$(uri_host "$2")" "$SS2022_PORT" "$ss_tag_uri"
 }
 
 show_nodes() {
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
     nodes_tmp="$APP_DIR/nodes.txt.tmp.$$"
     {
-        printf 'sing-box 节点信息（仅显示已安装协议）\n辨识符：%s\n\n' "${NODE_LABEL:-未设置}"
+        printf 'sing-box 节点信息（仅显示已安装协议）\n节点前缀：%s\n\n' "${NODE_PREFIX:-未设置}"
 
         if [ -n "$ORIGIN_ADDR" ]; then
             origin_uri=$(uri_host "$ORIGIN_ADDR")
@@ -2404,8 +2409,8 @@ install_wizard() {
         ask_value 'Reality SNI / 握手目标域名' 'www.bing.com'
         REALITY_SNI=$(trim_value "$REPLY")
     else REALITY_SNI=""; fi
-    ask_value '节点辨识符（支持中文；可留空）' ''
-    NODE_LABEL=$(trim_value "$REPLY")
+    ask_value '节点前缀（支持中文；可留空）' ''
+    NODE_PREFIX=$(trim_value "$REPLY")
     ask_ports
     install_from_config
 }
@@ -2588,10 +2593,10 @@ install_from_config() {
     PREVIOUS_REALITY_PORT=${PREVIOUS_REALITY_PORT:-}; PREVIOUS_NAIVE_PORT=${PREVIOUS_NAIVE_PORT:-}; PREVIOUS_ANYREALITY_PORT=${PREVIOUS_ANYREALITY_PORT:-}
     assign_ports
 
-    if [ -n "$NODE_LABEL" ]; then
-        label_length=$(jq -nr --arg node_label "$NODE_LABEL" '$node_label | length')
-        [ "$label_length" -le 20 ] || err '节点辨识符最多 20 个字符。'
-        jq -ne --arg node_label "$NODE_LABEL" '$node_label | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 || err '节点辨识符仅支持中文、英文字母、数字、点、下划线和短横线。'
+    if [ -n "$NODE_PREFIX" ]; then
+        label_length=$(jq -nr --arg node_prefix "$NODE_PREFIX" '$node_prefix | length')
+        [ "$label_length" -le 20 ] || err '节点前缀最多 20 个字符。'
+        jq -ne --arg node_prefix "$NODE_PREFIX" '$node_prefix | test("^[\\p{L}\\p{N}._-]+$")' >/dev/null 2>&1 || err '节点前缀仅支持中文、英文字母、数字、点、下划线和短横线。'
     fi
 
     generate_install_credentials
@@ -2826,12 +2831,12 @@ install_web_config() {
     fi
     jq -e '
       def text: type == "string" and (explode | all(. != 0 and . != 10 and . != 13));
-      type == "object" and (.schema == 5 or .schema == 6 or .schema == 7) and
+      type == "object" and (.schema == 5 or .schema == 6 or .schema == 7 or .schema == 8) and
       (.protocols | type == "object") and
-      (if .schema == 7 then
+      (if (.schema == 7 or .schema == 8) then
         .protocols | [.anytls,.ws_tls,.ws_argo,.vless_reality,.naive,.anytls_reality,.ss2022] | all(type == "boolean")
        else true end) and
-      ([.origin_ipv4,.origin_ipv6,.ws_server,.argo_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
+      ([.origin_ipv4,.origin_ipv6,.ws_server,.argo_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.node_prefix,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
         | all(. == null or text)) and
       (.ports | type == "object")
     ' "$web_cfg" >/dev/null 2>&1 || err '网页配置 JSON 格式不正确或版本不匹配，请刷新最新版 HTML 后重新生成命令。'
@@ -2841,7 +2846,7 @@ install_web_config() {
     if [ -e "$STATE_FILE" ]; then
         if ! manager_state_is_valid; then backup_existing_install; err '现有 manager.json 无效；已备份原目录，停止覆盖。'; fi
         load_state
-        if [ "$web_schema" != 7 ]; then
+        if [ "$web_schema" != 7 ] && [ "$web_schema" != 8 ]; then
             legacy_web_selection_matches || err '旧版网页命令的协议勾选与现有节点不同，未修改 VPS 配置。请刷新配置页，重新勾选需要保留的协议并复制新版命令。'
             warn '旧版网页命令只执行覆盖升级，不会同步协议勾选；请刷新页面重新生成命令。'
             overlay_install
@@ -2865,7 +2870,7 @@ install_web_config() {
     ORIGIN_ADDR=$(web_string origin_ipv4); ORIGIN_IPV6=$(web_string origin_ipv6)
     WS_SERVER=$(web_ws_setting ws_server "${web_previous_ws_server:-}")
     TLS_DOMAIN=$(web_string tls_domain); WS_HOST=$(web_ws_setting ws_host "${web_previous_ws_host:-}")
-    REALITY_SNI=$(web_string reality_sni); NODE_LABEL=$(web_string node_label)
+    REALITY_SNI=$(web_string reality_sni); NODE_PREFIX=$(jq -r '.node_prefix // .node_label // ""' "$web_cfg")
     ANYTLS_PORT=$(web_port anytls "${PREVIOUS_ANYTLS_PORT:-}")
     WS_PORT=$(web_port ws_tls "${PREVIOUS_WS_PORT:-}")
     ARGO_PORT=$(web_port ws_argo "${PREVIOUS_ARGO_PORT:-}")
@@ -4020,7 +4025,7 @@ menu() {
         fi
         [ "$ENABLE_SS2022" = 0 ] || printf '\nShadowsocks 2022：%s/tcp + udp' "$SS2022_PORT"
         printf '\nReality SNI（VLESS Reality + AnyTLS Reality；默认 www.bing.com）：%s' "$REALITY_SNI" 
-        printf '\n节点辨识符：%s' "${NODE_LABEL:-未设置}"
+        printf '\n节点前缀：%s' "${NODE_PREFIX:-未设置}"
         printf '\n端口：AnyTLS %s | WS TLS %s | VLESS Reality %s | NaiveProxy %s/TCP | AnyTLS Reality %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
         printf '\n---------------------------------------\n'
         printf '1. 查看已安装协议节点链接\n'
@@ -4035,7 +4040,7 @@ menu() {
         printf '10. 查看最近日志\n'
         printf '11. 卸载 sing-box 和本脚本配置\n'
         printf '12. 查看 TCP BBR 加速状态\n'
-        printf '13. 自定义节点辨识符\n'
+        printf '13. 自定义节点前缀\n'
         printf '14. 诊断 NaiveProxy（本机监听 / TLS 证书 / HTTP2）\n'
         printf '15. 批量修改已安装协议端口（留空随机）\n'
         printf '16. 查看 Cloudflare Tunnel 状态（Argo 模式）\n'
@@ -4060,7 +4065,7 @@ menu() {
             10) show_logs ;;
             11) if confirm_uninstall; then uninstall_manager; exit 0; fi ;;
             12) show_bbr_status ;;
-            13) change_node_label ;;
+            13) change_node_prefix ;;
             14) [ "$ENABLE_NAIVE" = 1 ] && diagnose_naive || warn '当前未安装 NaiveProxy。' ;;
             16) [ "$ENABLE_WS_ARGO" = 1 ] && cloudflared_status || warn '当前未启用 Argo Tunnel。' ;;
             17) change_argo_binding ;;
