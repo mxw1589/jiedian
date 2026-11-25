@@ -1,30 +1,50 @@
-# Jiedian sing-box 管理器修正版 1.4.0
+# Jiedian 管理器 HTTP-01 证书修复版 1.4.1
 
-本包基于本次用户上传的 `index.html` 和 `sb-manager-debian-alpine.sh` 修改。
+本包基于此前 1.4.0 网页/管理器版本，修复用户 VPS 日志中出现的 HTTP-01 证书续期误报。
 
-## 本次修改
-- 网页移除 Cloudflare DNS 根域名、DNS API Token、Zone ID、证书邮箱输入项。
-- 网页需要证书的协议统一使用 Let's Encrypt HTTP-01。证书域名仍需填写；域名须解析到 VPS，公网 TCP 80 必须可访问。
-- Argo Tunnel Token 保留，因为它是 Tunnel 连接器凭据，与 DNS API Token 不同。
-- “节点辨识符”改为“节点前缀”，节点命名调整为 `前缀-地址族-地址-协议`。
-- Shell 管理器读取新 `node_prefix`，同时兼容旧状态中的 `node_label`。
-- 升级网页配置 Schema 到 8，安装命令校验 Schema 8。
-- 修正 Shadowsocks 2022 的分享链接：采用 SIP002 的 Base64URL `method:password@host:port` 格式，并正确为 IPv6 加方括号。
+## 本次修复
 
-## 重要限制：Snell
-本次上传的 Shell 文件中没有 Snell 实现：没有 Snell 入站、Snell 服务端二进制安装、服务管理或 Surge Snell 客户端配置导出。现有的 Shadowsocks 2022 不是 Snell，二者不能互换。本包不会伪造 Snell 链接，也不宣称 Snell 已修复/可用。真正加入 Snell 需要额外集成独立 Snell server 进程及其服务管理；它不是 sing-box 当前配置中的一个 inbound。
+acme.sh 对已经签发、但尚未到续期时间的证书会输出类似：
 
-## 安装前
-1. 将包内 `sb-manager-debian-alpine.sh` 同步到你的 GitHub 仓库 `mxw1589/jiedian` 的 `main` 分支。
-2. 部署 `index.html` 到网页托管位置。
-3. 网页生成的 SSH 命令会下载 `https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh`。
-4. HTTP-01 证书签发需要公网 TCP 80 可达；NAT VPS 必须正确映射 TCP 80，否则需先准备已有证书或选择不需要 TLS 证书的协议。
+```text
+Domains not changed.
+Skipping. Next renewal time is: ...
+```
+
+旧版 `issue_http_cert()` 把 `--issue` 的任何非零退出码都当成失败，因此把“无需续期”错误地报告为“HTTP-01 证书申请失败”。
+
+新版处理方式：
+
+- 退出码 `0`：签发/更新成功，继续安装证书。
+- 退出码 `2`：仅在 ACME 内部 ECC 证书与私钥都存在，并通过域名、有效期、PEM 和公私钥匹配检查后，才复用证书。
+- 其他退出码：视为真正失败，不会跳过校验。
+- 不再在调用 ACME 前一律拒绝 TCP 80 被占用的情况。若证书无需续期，则根本不需要 HTTP-01 challenge；若确实需要续期，ACME 会在 standalone challenge 阶段返回真实错误。
+- ACME issue 操作增加 300 秒超时。
+- 安装到 sing-box 证书目录后，再次检查证书域名、有效期及证书/私钥匹配，并设置权限。
+
+## 文件
+
+- `index.html`：1.4.0 网页版本，保留原有字段/命令生成逻辑。
+- `sb-manager-debian-alpine.sh`：1.4.1 修复版服务器管理脚本。
+- `tests/`：语法、网页/节点回归及 HTTP-01 行为测试。
 
 ## 测试
-在 Linux / macOS / WSL 安装 Python 3、POSIX sh、Node.js（可选）后执行：
+
+在 Linux、macOS 或 WSL 中安装 POSIX sh、Python 3、OpenSSL、Node.js（Node 可选）后运行：
 
 ```sh
 ./tests/run-tests.sh
 ```
 
-测试仅覆盖本地语法、网页 DOM 引用、配置 Schema、节点命名和 Shadowsocks 2022 链接格式。没有在真实 VPS 上安装服务、申请证书或进行客户端连通性测试。
+HTTP-01 行为测试会在临时目录中生成自签名测试证书，并用 mock acme.sh 模拟退出码；不会连接 Let's Encrypt，也不会修改真实 `/root/.acme.sh` 或 VPS 配置。
+
+## 部署
+
+1. 先备份 VPS 当前的 `/usr/local/sbin/sb-manager`、`/etc/sing-box/` 和 `/root/.acme.sh/`。
+2. 将包内 `sb-manager-debian-alpine.sh` 同步到 GitHub 仓库 `mxw1589/jiedian` 的 `main` 分支。
+3. 部署包内 `index.html`（如网页当前已是 1.4.0，可保持不变）。
+4. 再用网页生成 SSH 命令运行安装/更新。
+
+注意：真实续期仍要求域名解析正确、TCP 80 可达和 ACME 验证成功。此修复解决的是“证书未到续期时间却被误判失败”，不会绕过真实的 HTTP-01 验证。
+
+本包不代表已在用户 VPS 上实机运行或完成客户端连接测试。

@@ -1202,10 +1202,11 @@ issue_cloudflare_cert() {
 }
 issue_http_cert() {
     domain=$1
-    if port_listening 80; then
-        warn 'HTTP-01 自动验证需要 TCP 80 端口空闲。请暂时停止占用 80 端口的服务，或改用 Cloudflare DNS-01 / 手动证书。'
-        return 1
-    fi
+    valid_cert_domain "$domain" || { warn 'HTTP-01 证书域名格式无效；请输入你管理的 DNS 域名。'; return 1; }
+    # Do not reject a busy TCP/80 listener before asking acme.sh: when the
+    # existing certificate is not due for renewal, acme.sh skips the challenge
+    # entirely and the valid certificate can still be reused. If renewal is due,
+    # acme.sh itself reports the standalone HTTP-01 bind/validation failure.
     if ! command -v socat >/dev/null 2>&1; then
         if [ "$OS_FAMILY" = alpine ]; then
             apk add --no-cache socat || return 1
@@ -1213,16 +1214,62 @@ issue_http_cert() {
             DEBIAN_FRONTEND=noninteractive apt-get install -y socat || return 1
         fi
     fi
-    install_acme ''
-    msg "通过 Let's Encrypt HTTP-01 为 $domain 申请/更新证书（不需要 Cloudflare Token）……"
-    /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null || return 1
-    /root/.acme.sh/acme.sh --issue --standalone -d "$domain" --keylength ec-256 || return 1
-    /root/.acme.sh/acme.sh --install-cert -d "$domain" --ecc \
-        --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$RELOAD_HOOK" || return 1
-    chown root:sing-box "$CERT_FILE" "$KEY_FILE"
-    chmod 0644 "$CERT_FILE"
-    chmod 0640 "$KEY_FILE"
-    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$domain" || return 1
+    install_acme '' || { warn 'acme.sh 安装或检查失败。'; return 1; }
+    acme_home=${ACME_HOME:-/root/.acme.sh}
+    acme_bin="$acme_home/acme.sh"
+    [ -x "$acme_bin" ] || { warn "找不到可执行的 acme.sh：$acme_bin"; return 1; }
+
+    msg "通过 Let's Encrypt HTTP-01 为 $domain 申请/检查证书（不需要 Cloudflare Token）……"
+    "$acme_bin" --set-default-ca --server letsencrypt >/dev/null || {
+        warn "无法将 Let's Encrypt 设置为默认 CA。"; return 1;
+    }
+
+    # acme.sh returns 2 when a valid certificate exists but is not yet due for renewal.
+    # Treat that as a reusable certificate only after validating both the cert and key.
+    acme_internal_dir="$acme_home/${domain}_ecc"
+    acme_internal_cert="$acme_internal_dir/fullchain.cer"
+    acme_internal_key="$acme_internal_dir/${domain}.key"
+    acme_issue_status=0
+    run_with_timeout 300 "$acme_bin" --issue --standalone -d "$domain" --keylength ec-256 ||
+        acme_issue_status=$?
+
+    case "$acme_issue_status" in
+        0)
+            msg 'acme.sh 已成功签发或更新 HTTP-01 证书。'
+            ;;
+        2)
+            if [ ! -s "$acme_internal_cert" ] || [ ! -s "$acme_internal_key" ]; then
+                warn 'acme.sh 表示证书无需续期，但找不到完整的现有 ECC 证书/私钥文件。'
+                warn "请检查 $acme_internal_dir；不要删除该目录。"
+                return 1
+            fi
+            if ! check_cert_pair "$acme_internal_cert" "$acme_internal_key" "$domain"; then
+                warn 'acme.sh 跳过续期，但现有证书或私钥无效、过期或与域名不匹配；拒绝继续。'
+                return 1
+            fi
+            msg 'acme.sh 检测到证书尚未到续期时间；现有证书和私钥有效，将复用现有证书。'
+            ;;
+        *)
+            warn "acme.sh HTTP-01 证书处理失败，退出码：$acme_issue_status。"
+            warn '请检查域名 A/AAAA 解析、公网 TCP 80、防火墙及 acme.sh 日志。'
+            return 1
+            ;;
+    esac
+
+    if ! "$acme_bin" --install-cert -d "$domain" --ecc \
+          --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$RELOAD_HOOK"; then
+        warn 'acme.sh 无法将 HTTP-01 证书安装到 sing-box 证书目录。'
+        return 1
+    fi
+    if ! chown root:sing-box "$CERT_FILE" "$KEY_FILE" ||
+       ! chmod 0644 "$CERT_FILE" || ! chmod 0640 "$KEY_FILE"; then
+        warn '无法设置 sing-box 证书/私钥文件权限。'
+        return 1
+    fi
+    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$domain" || {
+        warn '安装后的 HTTP-01 证书校验失败。'; return 1;
+    }
+    msg 'HTTP-01 证书已安装并通过域名、有效期及证书/私钥匹配检查。'
 }
 
 check_cert_pair() {
