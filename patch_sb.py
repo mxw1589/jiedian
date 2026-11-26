@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+# Safe, targeted repair for the upstream Sing-box-yg v26.4.11 script.
+from pathlib import Path
+import datetime
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+TARGET = Path("/usr/bin/sb")
+VERSION_FILE = Path("/etc/s-box/v")
+EXPECTED_VERSION = "v26.4.11"
+
+STTY_OLD = r"stty erase $'\b' 2>/dev/null || stty erase '^H' 2>/dev/null"
+STTY_NEW = r"""if [[ -t 0 && -t 1 ]]; then
+    stty erase $'\b' 2>/dev/null || stty erase '^H' 2>/dev/null
+fi"""
+
+DEPS_OLD = """touch sbyg_update
+fi
+if [[ $vi = openvz ]]; then"""
+
+DEPS_NEW = """touch sbyg_update
+fi
+
+# BEGIN SING-BOX-YG RUNTIME DEPENDENCY SELF-HEAL
+# Do not rely solely on the first-run sbyg_update marker: packages can be
+# removed later, so verify critical commands on every invocation.
+_sbyg_missing=0
+for _sbyg_cmd in jq curl wget openssl socat busybox iptables tar expect xxd python3 qrencode git ip ss ping crontab; do
+    if ! command -v "$_sbyg_cmd" >/dev/null 2>&1; then
+        _sbyg_missing=1
+        break
+    fi
+done
+if [[ "$_sbyg_missing" = "1" ]]; then
+    green "检测到运行依赖缺失，正在自动补齐……"
+    if command -v apt-get >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -y
+        apt-get install -y jq cron socat busybox iptables-persistent coreutils util-linux curl openssl iptables tar expect wget xxd python3 qrencode git iproute2 iputils-ping virt-what
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache bash jq openssl procps busybox-extras iproute2 iputils coreutils expect git socat iptables grep tar tzdata util-linux curl wget python3 qrencode
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y jq cronie socat busybox iptables-services coreutils util-linux curl openssl iptables tar expect wget xxd python3 qrencode git iproute iputils virt-what
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y jq cronie socat busybox iptables-services coreutils util-linux curl openssl iptables tar expect wget xxd python3 qrencode git iproute iputils virt-what
+    else
+        red "无法识别包管理器；请手动安装 jq、curl、wget 等运行依赖。"
+        exit 1
+    fi
+fi
+for _sbyg_cmd in jq curl wget; do
+    if ! command -v "$_sbyg_cmd" >/dev/null 2>&1; then
+        red "关键依赖 $_sbyg_cmd 仍未安装；停止运行，避免配置读取失败。"
+        exit 1
+    fi
+done
+unset _sbyg_missing _sbyg_cmd
+# END SING-BOX-YG RUNTIME DEPENDENCY SELF-HEAL
+
+if [[ $vi = openvz ]]; then"""
+
+ARGO_OLD = """cfargo_ym(){
+tls=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled')
+if [[ "$tls" = "false" ]]; then"""
+
+ARGO_NEW = """cfargo_ym(){
+# Fail clearly if jq/config is unavailable. Never interpret an empty result as TLS enabled.
+if ! command -v jq >/dev/null 2>&1; then
+red "缺少 jq，无法读取 VMess TLS 状态；请先安装 jq"
+return 1
+fi
+if [[ ! -s /etc/s-box/sb.json ]]; then
+red "配置文件 /etc/s-box/sb.json 不存在或为空，无法判断 VMess TLS 状态"
+return 1
+fi
+tls=$(jq -r '.inbounds[1].tls.enabled // empty' /etc/s-box/sb.json 2>/dev/null || true)
+if [[ "$tls" != "true" && "$tls" != "false" ]]; then
+red "无法准确读取 VMess TLS 状态；未执行 Argo 修改，请先检查 sb.json"
+return 1
+fi
+if [[ "$tls" = "false" ]]; then"""
+
+MARKER = "# BEGIN SING-BOX-YG RUNTIME DEPENDENCY SELF-HEAL"
+
+def patch_text(source: str):
+    if MARKER in source:
+        required = [
+            "if [[ -t 0 && -t 1 ]]; then",
+            "Never interpret an empty result as TLS enabled.",
+            "jq -r '.inbounds[1].tls.enabled // empty'",
+        ]
+        if not all(item in source for item in required):
+            raise RuntimeError("检测到不完整的旧补丁；为避免重复或错误修改，已停止。")
+        return source, False
+
+    if source.count(STTY_OLD) != 1:
+        raise RuntimeError("stty 原始代码未能唯一匹配；文件可能不是官方 v26.4.11 原版。")
+    if source.count(DEPS_OLD) != 1:
+        raise RuntimeError("首次依赖安装区未能唯一匹配；文件可能已被修改或版本不同。")
+    if source.count(ARGO_OLD) != 1:
+        raise RuntimeError("Argo TLS 判断区未能唯一匹配；文件可能已被修改或版本不同。")
+
+    result = source.replace(STTY_OLD, STTY_NEW, 1)
+    result = result.replace(DEPS_OLD, DEPS_NEW, 1)
+    result = result.replace(ARGO_OLD, ARGO_NEW, 1)
+    return result, True
+
+def main():
+    if os.geteuid() != 0:
+        print("[错误] 请使用 root 运行。", file=sys.stderr)
+        return 1
+    if not TARGET.is_file():
+        print(f"[错误] 找不到 {TARGET}；未修改任何文件。", file=sys.stderr)
+        return 1
+
+    if VERSION_FILE.is_file():
+        installed_version = VERSION_FILE.read_text(errors="replace").strip()
+        if installed_version and installed_version != EXPECTED_VERSION:
+            print(
+                f"[错误] /etc/s-box/v 显示 {installed_version}，"
+                f"本补丁仅针对 {EXPECTED_VERSION}；未修改任何文件。",
+                file=sys.stderr,
+            )
+            return 1
+
+    original = TARGET.read_text(encoding="utf-8", errors="strict")
+    try:
+        updated, changed = patch_text(original)
+    except Exception as exc:
+        print(f"[错误] {exc}", file=sys.stderr)
+        return 1
+
+    if not changed:
+        check = subprocess.run(["bash", "-n", str(TARGET)])
+        if check.returncode:
+            print("[错误] 文件已带补丁标记，但 bash -n 未通过。", file=sys.stderr)
+            return 1
+        print("[正常] /usr/bin/sb 已应用本修复，无需重复修改。")
+        return 0
+
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_dir = Path("/var/backups/sing-box-yg")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / f"sb.v26.4.11.before-repair.{stamp}.bak"
+    shutil.copy2(TARGET, backup)
+
+    mode = TARGET.stat().st_mode
+    fd, temp_name = tempfile.mkstemp(prefix=".sb.repair.", dir=str(TARGET.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(updated)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_name, mode)
+        os.replace(temp_name, TARGET)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+    check = subprocess.run(["bash", "-n", str(TARGET)])
+    if check.returncode:
+        shutil.copy2(backup, TARGET)
+        print("[错误] bash -n 检查失败，已从备份恢复原脚本。", file=sys.stderr)
+        return 1
+
+    print("[成功] Sing-box-yg v26.4.11 补丁已应用。")
+    print(f"[备份] {backup}")
+    print("[检查] bash -n 通过。")
+    print("[保护] 未修改 /etc/s-box/sb.json、UUID、端口、证书或节点数据。")
+    print("[说明] VMess TLS=true 时，原脚本仍按设计禁用 Argo；本补丁只修复误判。")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
