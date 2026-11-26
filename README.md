@@ -1,16 +1,16 @@
-# Jiedian 管理器 HTTP-01 稳定增强版 1.4.3
+# Jiedian 管理器 HTTP-01 稳定增强版 1.4.4
 
-本包基于 1.4.2 稳定性增强版继续修复，保留网页配置 Schema 8、原有协议数据和旧版状态兼容。1.4.3 重点加强并发执行保护、ACME 凭据回滚、Cron 所有权、OpenRC 运行态识别，以及网页安装器的脚本完整性校验。
+本包基于 1.4.3 稳定性增强版继续修复，保留网页配置 Schema 8、原有协议数据和旧版状态兼容。1.4.4 重点解决 GitHub 不可访问时 ACME 客户端无法安装的问题，同时保留既有证书、凭据和管理器回滚保护。
 
-## 1.4.3 本次优化
+## 1.4.4 本次优化
 
-- **管理器并发锁**：安装、菜单修改、节点导出和卸载等管理器入口统一取得运行锁；检测到其他实例正在执行时停止第二个写入者，避免并发覆盖配置。异常退出后可识别并回收失效 PID 锁。
-- **OpenRC 运行态识别**：除了检查 `rc-service` / `rc-update` 命令，还要求存在 OpenRC 运行目录；避免只安装了工具但实际由其他 init 系统管理时误判。
-- **Cron 所有权标记**：新建的 ACME 续期任务使用独立 BEGIN/END 标记区块；卸载只删除本管理器标记区块，不删除其他 Cron 任务。
-- **旧版 Cron 保护**：1.4.2 及更早版本创建的未标记 ACME Cron 行无法可靠判断所有者，因此卸载时保留并提示，不冒险删除用户任务。
-- **首次 DNS-01 失败回滚**：如果本次运行首次创建 ACME 域名配置，签发或后续安装失败时删除新建的域名配置，避免遗留本次传入的 DNS API Token；原本已有配置则恢复备份。
-- **网页安装脚本完整性**：生成的安装命令固定要求 1.4.3 版本及本包 Shell 文件 SHA-256 一致，并执行 `sh -n` 语法检查。
-- **原管理器保护**：下载脚本先在临时文件中检查，再复制到 `/usr/local/sbin` 同目录暂存并原子替换；安装失败或被中断时尽量恢复原管理器，恢复失败时保留备份文件。
+- **ACME 多源安装**：优先下载 acme.sh 官方 GitHub 源码；主入口失败时尝试 `codeload.github.com` 官方源码分发入口。
+- **Debian / Ubuntu 软件源回退**：官方源码入口均不可用时，检查当前 APT 软件源是否提供 `acme.sh`，若可用则通过 `apt-get install acme.sh` 安装。
+- **Alpine 软件源回退**：官方源码入口均不可用时，尝试通过 Alpine APK 软件源安装 `acme.sh`。
+- **统一安装目录**：无论使用源码还是系统包，最终都通过 acme.sh 自带安装器安装到 `/root/.acme.sh/`，并使用 `--nocron`，由管理器原有的 Cron 所有权逻辑统一创建续期任务。
+- **包内容检查**：系统包安装后检查 `/usr/share/acme.sh/acme.sh` 和 `dnsapi/` 文件树；不完整时拒绝继续，避免出现只能签 HTTP-01 却无法使用 DNS API 的半安装状态。
+- **失败清理**：临时下载目录始终在尝试系统包回退前清理；若所有安装源均失败，明确提示检查 GitHub 443 出站连接和 APT/APK 软件源。
+- **完整性校验同步**：网页安装器版本号、Shell SHA-256、测试断言和校验清单同步更新。
 
 ## 保留的既有功能
 
@@ -28,8 +28,13 @@
 ./tests/run-tests.sh
 ```
 
-测试覆盖：
+新增 ACME 安装回退测试覆盖：
+- GitHub 主源码入口不可用时自动尝试官方 codeload 入口。
+- Debian / Ubuntu APT 软件源回退及 `--home /root/.acme.sh --nocron` 参数传递。
+- Alpine APK 软件源回退。
+- 系统包目录缺少 acme.sh 主程序或 DNS API 目录时拒绝使用。
 
+既有测试继续覆盖：
 - POSIX sh、dash、BusyBox ash 语法检查。
 - 网页内联 JavaScript 语法、HTML ID / DOM 引用、Schema 8 和版本标记。
 - IPv4 / IPv6 节点输出及 Shadowsocks 2022 SIP002 分享链接。
@@ -42,6 +47,19 @@
 - 并发锁、失效锁回收和 systemd / OpenRC 运行态识别。
 - 网页安装器 SHA-256 / 版本校验、Shell 语法检查、原子替换和失败恢复路径。
 
+## 当前 VPS 的手动恢复方式（仅在仍使用旧版脚本时需要）
+
+如果 Debian 13 的旧版安装刚刚因 GitHub 443 不可达而中止，可先运行：
+
+```sh
+apt-get update
+apt-get install -y acme.sh
+cd /usr/share/acme.sh
+HOME=/root sh ./acme.sh --install --home /root/.acme.sh --nocron
+```
+
+然后重新运行管理器安装命令。新版会检测 `/root/.acme.sh/acme.sh`，不会重复下载源码。Debian 软件包的文件树位于 `/usr/share/acme.sh/`；安装命令必须从该目录运行，避免发行版打包脚本的相对路径问题。
+
 ## 部署
 
 1. 先备份 VPS 当前的 `/usr/local/sbin/sb-manager`、`/etc/sing-box/` 和 `/root/.acme.sh/`。
@@ -53,10 +71,10 @@
 
 ## 验证边界
 
-本包自动化测试在当前构建环境通过，但**不代表已在你的 VPS 上实机运行**。没有连接 Let's Encrypt、没有执行真实公网 HTTP-01 验证，也没有在独立 Debian / Ubuntu / Alpine VPS 镜像上执行包管理器安装和完整服务生命周期测试。真实环境仍需确认域名解析、TCP 80、防火墙 / NAT 映射、Cloudflare Tunnel 健康状态及客户端连通性。
+本包自动化测试覆盖模拟的 GitHub 下载失败和 APT/APK 软件包回退，但**不代表已在你的 VPS 上实机运行**。没有连接 Let's Encrypt、没有执行真实公网 HTTP-01 验证，也没有在独立 Debian / Ubuntu / Alpine VPS 镜像上执行包管理器安装和完整服务生命周期测试。真实环境仍需确认域名解析、TCP 80、防火墙 / NAT 映射、Cloudflare Tunnel 健康状态及客户端连通性。
 
 ## Shell 脚本 SHA-256
 
 ```text
-0a10941a4bcb41171f119e20f9dc353b0f426cbdb7835d49a1f2645d7eea482e
+7f2ff4fdaee0375f32ba268c0f18361a3a27aa307354edab9b839f78a72af676
 ```

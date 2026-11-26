@@ -14,7 +14,7 @@ expected = re.search(r'const EXPECTED_SHA256="([0-9a-f]{64})";', html)
 assert expected, "expected SHA-256 pin missing or malformed"
 actual = hashlib.sha256(shell).hexdigest()
 assert expected.group(1) == actual, f"HTML SHA-256 pin mismatch: expected {expected.group(1)}, actual {actual}"
-assert 'const EXPECTED_VERSION="1.4.3";' in html
+assert 'const EXPECTED_VERSION="1.4.4";' in html
 assert "grep -qx '# PROJECT_VERSION=${EXPECTED_VERSION}' \"$SH\"" in html
 assert 'sh -n "$SH"' in html
 assert 'sha256sum "$SH"' in html and 'busybox sha256sum "$SH"' in html
@@ -34,7 +34,7 @@ const start=html.indexOf("function oneCommandText(c){");
 const end=html.indexOf("\\nfunction setEnabled",start);
 const snippet=html.slice(start,end);
 const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
-const EXPECTED_VERSION="1.4.3";
+const EXPECTED_VERSION="1.4.4";
 const EXPECTED_SHA256="CHECKSUM";
 const protocolLabels={anytls:"AnyTLS",ws_tls:"直连 WS TLS",ws_argo:"Argo WS TLS",ss2022:"Shadowsocks 2022",vless_reality:"VLESS + Reality",naive:"NaiveProxy",anytls_reality:"AnyTLS + Reality"};
 const selectedNames=p=>Object.entries(protocolLabels).filter(([key])=>p[key]).map(([,label])=>label).join("、");

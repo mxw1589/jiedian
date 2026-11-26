@@ -1,6 +1,6 @@
 #!/bin/sh
 # sing-box single-VPS multi-protocol manager for Debian + Alpine
-# PROJECT_VERSION=1.4.3
+# PROJECT_VERSION=1.4.4
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # CLI port conflicts may fall back; web Schema 7/8 conflicts fail closed; Cloudflare DNS-01 or HTTP-01
@@ -9,7 +9,7 @@
 # WEB_WS_PREFERENCES=1
 # WEB_PORT_REUSE=1
 # WEB_CERT_ROLLBACK=1; WEB_SERVICE_MANAGER_DETECT=1; WEB_SECURE_TMPFILES=1
-# WEB_INSTALL_INTEGRITY=1; WEB_CRON_OWNERSHIP=1; WEB_ACME_CREDENTIAL_ROLLBACK=1; WEB_MANAGER_LOCK=1; WEB_OPENRC_RUNTIME_CHECK=1
+# WEB_INSTALL_INTEGRITY=1; WEB_CRON_OWNERSHIP=1; WEB_ACME_CREDENTIAL_ROLLBACK=1; WEB_MANAGER_LOCK=1; WEB_OPENRC_RUNTIME_CHECK=1; WEB_ACME_BOOTSTRAP_FALLBACK=1
 # Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
 # Manager menu 19: remove one protocol; menu 20: protocol-scoped SNI/IP/Cloudflare/port/credential editor
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
@@ -1149,25 +1149,122 @@ start_cron() {
     ensure_acme_cron
 }
 
+acme_install_from_source_dir() {
+    acme_bootstrap_source_dir=$1
+    acme_bootstrap_email=$2
+    [ -s "$acme_bootstrap_source_dir/acme.sh" ] || return 1
+    [ -d "$acme_bootstrap_source_dir/dnsapi" ] || return 1
+
+    install -d -m 0700 /root/.acme.sh || return 1
+    set -- --install --home /root/.acme.sh --nocron
+    if [ -n "$acme_bootstrap_email" ]; then
+        set -- "$@" --accountemail "$acme_bootstrap_email"
+    fi
+    (
+        cd "$acme_bootstrap_source_dir" || exit 1
+        HOME=/root sh ./acme.sh "$@"
+    ) || return 1
+
+    [ -s /root/.acme.sh/acme.sh ] || return 1
+    chmod 0700 /root/.acme.sh/acme.sh || return 1
+    return 0
+}
+
+acme_download_official_source() {
+    acme_bootstrap_tmp=$1
+    acme_bootstrap_archive="$acme_bootstrap_tmp/acme.tar.gz"
+    ACME_SOURCE_DIR=""
+
+    for acme_bootstrap_url in \
+        'https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz' \
+        'https://codeload.github.com/acmesh-official/acme.sh/tar.gz/refs/heads/master'; do
+        rm -f "$acme_bootstrap_archive"
+        msg "尝试官方源码入口：$acme_bootstrap_url"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --retry 1 --connect-timeout 8 --max-time 120 \
+                "$acme_bootstrap_url" -o "$acme_bootstrap_archive" || continue
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q -T 120 -O "$acme_bootstrap_archive" \
+                "$acme_bootstrap_url" || continue
+        else
+            warn '系统既没有 curl 也没有 wget，无法下载 acme.sh。'
+            return 1
+        fi
+
+        [ -s "$acme_bootstrap_archive" ] || continue
+        tar -tzf "$acme_bootstrap_archive" >/dev/null 2>&1 || {
+            warn 'acme.sh 下载内容不是有效的 gzip tar 包；尝试下一个来源。'
+            continue
+        }
+        tar -xzf "$acme_bootstrap_archive" -C "$acme_bootstrap_tmp" || continue
+        if [ -s "$acme_bootstrap_tmp/acme.sh-master/acme.sh" ] &&
+           [ -d "$acme_bootstrap_tmp/acme.sh-master/dnsapi" ]; then
+            ACME_SOURCE_DIR="$acme_bootstrap_tmp/acme.sh-master"
+            return 0
+        fi
+        warn '源码包结构不符合预期；尝试下一个来源。'
+    done
+    return 1
+}
+
+acme_install_from_system_package() {
+    acme_bootstrap_email=$1
+    acme_bootstrap_pkg_dir=/usr/share/acme.sh
+
+    if [ "$OS_FAMILY" = alpine ]; then
+        command -v apk >/dev/null 2>&1 || return 1
+        if ! apk info -e acme.sh >/dev/null 2>&1; then
+            msg 'GitHub 源码不可用，尝试 Alpine 官方 APK 软件源安装 acme.sh……'
+            apk add --no-cache acme.sh || return 1
+        fi
+    elif [ "$OS_FAMILY" = debian ]; then
+        command -v apt-get >/dev/null 2>&1 || return 1
+        command -v apt-cache >/dev/null 2>&1 || return 1
+        if ! apt-cache show acme.sh >/dev/null 2>&1; then
+            warn '当前 APT 软件源没有可用的 acme.sh 软件包。'
+            return 1
+        fi
+        msg 'GitHub 源码不可用，尝试 Debian/Ubuntu 官方 APT 软件源安装 acme.sh……'
+        DEBIAN_FRONTEND=noninteractive apt-get install -y acme.sh || return 1
+    else
+        return 1
+    fi
+
+    if [ ! -s "$acme_bootstrap_pkg_dir/acme.sh" ] ||
+       [ ! -d "$acme_bootstrap_pkg_dir/dnsapi" ]; then
+        warn "系统软件包已处理，但没有找到完整的 acme.sh 文件树：$acme_bootstrap_pkg_dir"
+        return 1
+    fi
+    acme_install_from_source_dir "$acme_bootstrap_pkg_dir" "$acme_bootstrap_email" || return 1
+    msg '已通过系统官方软件源完成 acme.sh 安装。'
+    return 0
+}
+
 install_acme() {
     if [ ! -x /root/.acme.sh/acme.sh ]; then
         msg '安装 acme.sh（用于自动申请和续期证书）……'
-        acme_tmp=$(mktemp -d /tmp/sb-acme.XXXXXX) || err '无法创建 acme.sh 临时目录。'
-        if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 180 https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz -o "$acme_tmp/acme.tar.gz" ||
-           ! tar -xzf "$acme_tmp/acme.tar.gz" -C "$acme_tmp"; then
-            rm -rf "$acme_tmp"
-            err '无法下载或解压 acme.sh 官方源码。'
-        fi
         acme_email=$1
-        set -- --install --home /root/.acme.sh --nocron
-        if [ -n "$acme_email" ]; then set -- "$@" --accountemail "$acme_email"; fi
-        if ! ( cd "$acme_tmp/acme.sh-master" && HOME=/root sh ./acme.sh "$@" ); then
-            rm -rf "$acme_tmp"
-            err 'acme.sh 安装失败。'
+        acme_tmp=$(mktemp -d /tmp/sb-acme.XXXXXX) || err '无法创建 acme.sh 临时目录。'
+        acme_bootstrap_installed=0
+
+        if acme_download_official_source "$acme_tmp"; then
+            if acme_install_from_source_dir "$ACME_SOURCE_DIR" "$acme_email"; then
+                acme_bootstrap_installed=1
+                msg '已通过 acme.sh 官方源码完成安装。'
+            else
+                warn '官方源码已下载，但 acme.sh 安装步骤失败；将尝试系统软件源。'
+            fi
+        else
+            warn '无法连接可用的 GitHub 官方源码入口；将尝试系统软件源。'
         fi
         rm -rf "$acme_tmp"
+
+        if [ "$acme_bootstrap_installed" -ne 1 ]; then
+            acme_install_from_system_package "$acme_email" ||
+                err 'acme.sh 安装失败：官方源码下载不可用，且当前 Debian/Alpine 软件源无法提供可用的软件包。请检查 GitHub 443 出站连接及 APT/APK 软件源。'
+        fi
     fi
-    [ -x /root/.acme.sh/acme.sh ] || err 'acme.sh 安装失败。'
+    [ -x /root/.acme.sh/acme.sh ] || err 'acme.sh 安装失败：目标程序不存在或不可执行。'
     start_cron
 }
 
