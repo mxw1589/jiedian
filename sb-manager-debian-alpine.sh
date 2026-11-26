@@ -1,6 +1,6 @@
 #!/bin/sh
 # sing-box single-VPS multi-protocol manager for Debian + Alpine
-# PROJECT_VERSION=1.4.5
+# PROJECT_VERSION=1.4.6
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # CLI port conflicts may fall back; web Schema 7/8 conflicts fail closed; Cloudflare DNS-01 or HTTP-01
@@ -9,7 +9,7 @@
 # WEB_WS_PREFERENCES=1
 # WEB_PORT_REUSE=1
 # WEB_CERT_ROLLBACK=1; WEB_SERVICE_MANAGER_DETECT=1; WEB_SECURE_TMPFILES=1
-# WEB_INSTALL_INTEGRITY=1; WEB_CRON_OWNERSHIP=1; WEB_ACME_CREDENTIAL_ROLLBACK=1; WEB_MANAGER_LOCK=1; WEB_OPENRC_RUNTIME_CHECK=1; WEB_ACME_BOOTSTRAP_FALLBACK=1; WEB_INSTALL_DIAGNOSTICS=1
+# WEB_INSTALL_INTEGRITY=1; WEB_CRON_OWNERSHIP=1; WEB_ACME_CREDENTIAL_ROLLBACK=1; WEB_MANAGER_LOCK=1; WEB_OPENRC_RUNTIME_CHECK=1; WEB_ACME_BOOTSTRAP_FALLBACK=1; WEB_INSTALL_DIAGNOSTICS=1; WEB_NAT64_DIAGNOSTICS=1; WEB_HTTP01_521_DIAGNOSTICS=1
 # Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
 # Manager menu 19: remove one protocol; menu 20: protocol-scoped SNI/IP/Cloudflare/port/credential editor
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
@@ -1138,7 +1138,7 @@ start_cron() {
             rc-service crond start >/dev/null 2>&1 || true
         fi
     else
-        DEBIAN_FRONTEND=noninteractive apt-get install -y cron
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cron
         if [ "$SERVICE_KIND" = systemd ]; then
             systemctl enable --now cron >/dev/null 2>&1 || warn 'cron 服务未能自动启动；请检查系统服务状态。'
         elif [ "$SERVICE_KIND" = openrc ]; then
@@ -1225,7 +1225,7 @@ acme_install_from_system_package() {
             return 1
         fi
         msg 'GitHub 源码不可用，尝试 Debian/Ubuntu 官方 APT 软件源安装 acme.sh……'
-        DEBIAN_FRONTEND=noninteractive apt-get install -y acme.sh || return 1
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends acme.sh || return 1
     else
         return 1
     fi
@@ -1433,6 +1433,36 @@ issue_cloudflare_cert() {
     if [ -n "$acme_conf_backup" ]; then rm -f "$acme_conf_backup"; fi
     msg '已保存该证书的 Cloudflare DNS-01 续期凭据。'
 }
+http01_failure_hint() {
+    http01_log_file=$1
+    [ -r "$http01_log_file" ] || return 0
+    if grep -Eiq 'Invalid status.*521|Invalid response.*: *521|HTTP[^0-9]*521' "$http01_log_file"; then
+        warn '检测到 Cloudflare HTTP 521：Cloudflare 边缘节点无法连接到源站。'
+        warn '请检查 Cloudflare DNS 记录的 AAAA 是否指向当前 VPS IPv6，以及源站 TCP 80 是否监听并允许公网/Cloudflare 入站。'
+        warn '同时检查 VPS 防火墙、安全组和服务商 IPv6 入站规则；HTTP-01 只能使用公网 TCP 80。'
+        warn 'NAT64 出站成功不代表公网 IPv4 入站可用，也不能修复 Cloudflare 521。'
+        warn '可临时将该域名记录切换为 DNS only（灰云），让 AAAA 直接指向 VPS IPv6 后重试；也可改用 Cloudflare DNS-01。'
+    elif grep -Eiq 'Invalid status.*522|Invalid response.*: *522|HTTP[^0-9]*522' "$http01_log_file"; then
+        warn '检测到 Cloudflare HTTP 522：Cloudflare 连接源站超时；请检查 IPv6 路由、TCP 80 入站和防火墙规则。'
+    fi
+}
+
+run_http01_issue_logged() {
+    http01_output_log=$1
+    http01_status_file=$2
+    shift 2
+    rm -f "$http01_status_file"
+    (
+        set +e
+        "$@"
+        http01_command_status=$?
+        printf '%s\n' "$http01_command_status" > "$http01_status_file"
+        exit 0
+    ) 2>&1 | tee "$http01_output_log"
+    [ -s "$http01_status_file" ] || return 1
+    return 0
+}
+
 issue_http_cert() {
     domain=$1
     valid_cert_domain "$domain" || { warn 'HTTP-01 证书域名格式无效；请输入你管理的 DNS 域名。'; return 1; }
@@ -1444,7 +1474,7 @@ issue_http_cert() {
         if [ "$OS_FAMILY" = alpine ]; then
             apk add --no-cache socat || return 1
         else
-            DEBIAN_FRONTEND=noninteractive apt-get install -y socat || return 1
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends socat || return 1
         fi
     fi
     install_acme '' || { warn 'acme.sh 安装或检查失败。'; return 1; }
@@ -1463,8 +1493,23 @@ issue_http_cert() {
     acme_internal_cert="$acme_internal_dir/fullchain.cer"
     acme_internal_key="$acme_internal_dir/${domain}.key"
     acme_issue_status=0
-    run_with_timeout 300 "$acme_bin" --issue --standalone -d "$domain" --keylength ec-256 ||
-        acme_issue_status=$?
+    acme_issue_log=$(umask 077; mktemp /tmp/sb-manager-http01.XXXXXX) || {
+        warn '无法创建 HTTP-01 诊断日志。'; return 1;
+    }
+    acme_issue_status_file="${acme_issue_log}.status"
+    if ! run_http01_issue_logged "$acme_issue_log" "$acme_issue_status_file" \
+        run_with_timeout 300 "$acme_bin" --issue --standalone -d "$domain" --keylength ec-256; then
+        warn '无法记录 HTTP-01 ACME 执行状态；请检查系统 tee、临时目录和权限。'
+        rm -f "$acme_issue_status_file"
+        warn "诊断输出保留在：$acme_issue_log"
+        return 1
+    fi
+    acme_issue_status=$(cat "$acme_issue_status_file" 2>/dev/null || printf 1)
+    rm -f "$acme_issue_status_file"
+    case "$acme_issue_status" in
+        0|2) rm -f "$acme_issue_log" ;;
+        *) http01_failure_hint "$acme_issue_log"; warn "HTTP-01 诊断日志保留在：$acme_issue_log" ;;
+    esac
 
     case "$acme_issue_status" in
         0)
@@ -2793,6 +2838,24 @@ detect_public_ip() {
         awk '/^ip=/ { sub(/^ip=/,""); sub(/\r$/,""); print; exit }'
 }
 
+detect_nat64_public_ipv4() {
+    # Force IPv6 to an IPv4-only hostname. A returned IPv4 literal means
+    # DNS64 synthesis + NAT64 translation worked for this outbound request.
+    # This is an egress diagnostic only and must never be used as an inbound
+    # source/listener address.
+    for nat64_test_url in \
+        'https://ipv4.icanhazip.com/' \
+        'https://v4.ident.me/'; do
+        nat64_test_ip=$(curl -6 -fsS --connect-timeout 5 --max-time 10 "$nat64_test_url" 2>/dev/null |
+            tr -d ' \r\n\t') || nat64_test_ip=""
+        if valid_ipv4_address "$nat64_test_ip"; then
+            printf '%s\n' "$nat64_test_ip"
+            return 0
+        fi
+    done
+    return 1
+}
+
 resolve_install_addresses() {
     if [ "$NEED_ORIGIN" = 1 ] && [ -z "$ORIGIN_ADDR" ] && [ -z "$ORIGIN_IPV6" ]; then
         ORIGIN_ADDR=$(detect_public_ip 4)
@@ -2837,6 +2900,15 @@ resolve_install_addresses() {
         esac
     fi
     msg "源站地址：IPv4=${ORIGIN_ADDR:-不需要/未检测到}，IPv6=${ORIGIN_IPV6:-未设置}"
+    if [ -z "$ORIGIN_ADDR" ] && ipv6_kernel_enabled; then
+        nat64_egress_ipv4=$(detect_nat64_public_ipv4 2>/dev/null || true)
+        if valid_ipv4_address "$nat64_egress_ipv4"; then
+            msg "NAT64 出站测试：成功，检测到 IPv4 出口地址：$nat64_egress_ipv4"
+            msg '注意：该 IPv4 是 NAT64 共享出站出口，不是 VPS 公网 IPv4 入站地址，不能填写为源站 IPv4。'
+        else
+            msg 'NAT64 出站测试：未检测到可用 IPv4 出口；这不影响已检测到的原生 IPv6 网络。'
+        fi
+    fi
 }
 
 generate_install_credentials() {

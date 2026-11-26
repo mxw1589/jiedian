@@ -11,6 +11,8 @@ def extract(name, next_name):
     end = SOURCE.index(f"\n}}\n\n{next_name}()", start) + 2
     return SOURCE[start:end]
 
+HINT = extract("http01_failure_hint", "run_http01_issue_logged")
+LOGGED = extract("run_http01_issue_logged", "issue_http_cert")
 ISSUE = extract("issue_http_cert", "check_cert_pair")
 CHECK = extract("check_cert_pair", "install_acme_cert_pair")
 INSTALL_CERT = extract("install_acme_cert_pair", "install_manual_cert")
@@ -97,6 +99,8 @@ port_listening() {{ [ "${{MOCK_PORT80_BUSY:-0}}" = 1 ]; }}
 install_acme() {{ return 0; }}
 run_with_timeout() {{ shift; "$@"; }}
 chown() {{ return 0; }}
+{HINT}
+{LOGGED}
 {ISSUE}
 {CHECK}
 {INSTALL_CERT}

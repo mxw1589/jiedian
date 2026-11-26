@@ -26,11 +26,11 @@ assert ids_arr
 for ref in re.findall(r'"([^"]+)"', ids_arr.group(1)):
     assert ref in ids, f"event binding references missing DOM id: {ref}"
 
-assert 'v1.4.5' in html and 'PROJECT_VERSION=1.4.5' in shell
+assert 'v1.4.6' in html and 'PROJECT_VERSION=1.4.6' in shell
 assert 'schema:8' in html
 assert 'WEB_CERT_ROLLBACK=1' in shell and 'WEB_SERVICE_MANAGER_DETECT=1' in shell and 'WEB_SECURE_TMPFILES=1' in shell
 assert "require_marker 'WEB_CERT_ROLLBACK=1'" in html
-assert 'EXPECTED_VERSION=\"1.4.5\"' in html
+assert 'EXPECTED_VERSION=\"1.4.6\"' in html
 assert 'EXPECTED_SHA256=\"' in html
 assert 'sh -n \"$SH\"' in html and 'sha256sum \"$SH\"' in html
 assert 'MANAGER_BACKUP=\"$MANAGER_DIR/.sb-manager.backup.$$\"' in html
@@ -52,7 +52,7 @@ assert 'install_acme_cert_pair' in shell
 assert 'detect_service_manager' in shell and 'systemd_run_dir=/run/systemd/system' in shell and 'openrc_run_dir=/run/openrc' in shell
 assert 'STATE=${SB_MANAGER_STATE_FILE:-/etc/sing-box/manager.json}' in shell
 assert 'cert_pub=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null)' in shell
-assert 'PROJECT_VERSION=1.4.5' in shell
+assert 'PROJECT_VERSION=1.4.6' in shell
 assert 'Object.prototype.hasOwnProperty.call(historyFields,id)' in html
 assert 'setTimeout(()=>URL.revokeObjectURL(url),1000)' in html
 assert 'WEB_INSTALL_INTEGRITY=1' in shell and 'WEB_CRON_OWNERSHIP=1' in shell

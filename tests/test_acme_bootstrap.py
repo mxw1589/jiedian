@@ -22,7 +22,7 @@ INSTALL_PACKAGE = function("acme_install_from_system_package")
 
 assert "https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz" in DOWNLOAD
 assert "https://codeload.github.com/acmesh-official/acme.sh/tar.gz/refs/heads/master" in DOWNLOAD
-assert "apt-get install -y acme.sh" in INSTALL_PACKAGE
+assert "apt-get install -y --no-install-recommends acme.sh" in INSTALL_PACKAGE
 assert "apk add --no-cache acme.sh" in INSTALL_PACKAGE
 assert "/usr/share/acme.sh" in INSTALL_PACKAGE
 assert "--home /root/.acme.sh --nocron" in INSTALL_DIR
@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix="jiedian-acme-bootstrap-") as td:
     subprocess.run(["/bin/sh", str(harness)], env=env, check=True)
     apt_text = apt_log.read_text(encoding="utf-8")
     args_text = args_file.read_text(encoding="utf-8")
-    assert "install\n-y\nacme.sh" in apt_text
+    assert "install\n-y\n--no-install-recommends\nacme.sh" in apt_text
     assert "--home" in args_text and str(home) in args_text
     assert "--nocron" in args_text and "--accountemail" in args_text
     assert "tester@example.com" in args_text

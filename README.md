@@ -1,6 +1,15 @@
-# Jiedian 管理器 HTTP-01 稳定增强版 1.4.5
+# Jiedian 管理器 HTTP-01 稳定增强版 1.4.6
 
-本包基于 1.4.3 稳定性增强版继续修复，保留网页配置 Schema 8、原有协议数据和旧版状态兼容。1.4.5 在 1.4.4 的 ACME 多源安装基础上，增加安装预检诊断；1.4.4 的 ACME 备用安装机制继续保留。重点解决 GitHub 不可访问时 ACME 客户端无法安装的问题，同时保留既有证书、凭据和管理器回滚保护。
+本包基于 1.4.3 稳定性增强版继续修复，保留网页配置 Schema 8、原有协议数据和旧版状态兼容。1.4.6 在 1.4.5 的安装预检诊断和 1.4.4 的 ACME 多源安装基础上，增加 NAT64 出站诊断、Cloudflare HTTP-01 521 专项提示，并减少 Debian 安装 Cron 时不必要的邮件服务依赖。重点解决 GitHub 不可访问时 ACME 客户端无法安装的问题，同时保留既有证书、凭据和管理器回滚保护。
+
+## 1.4.6 本次优化
+
+- **NAT64 出站检测**：IPv6-only / 无原生 IPv4 源站地址时，使用 IPv6 强制访问 IPv4-only 检测站点；若返回 IPv4 地址，明确报告 NAT64 出站成功。
+- **避免地址误用**：NAT64 共享出口 IPv4 只作为出站诊断结果，绝不写入 `ORIGIN_ADDR`、监听地址或节点源站地址。
+- **Cloudflare 521 专项诊断**：保留 ACME 实时输出；失败时记录受限权限的诊断日志，识别 521 / 522 并提示 AAAA、源站 IPv6、TCP 80、防火墙和 Cloudflare 代理检查方向。
+- **区分入站与出站**：明确提示 NAT64 出站成功不代表公网 IPv4 入站可达，也不能修复 HTTP-01 521。
+- **最小化 Debian 依赖**：Cron、socat、acme.sh 使用 `--no-install-recommends`，避免安装 Cron 时顺带拉入 Exim4 / mailx 等非必要邮件服务；Cron 仍由管理器显式安装和管理。
+- **部署完整性**：网页版本号、必需功能标记、Shell SHA-256 和回归测试同步更新。
 
 ## 1.4.5 本次优化
 
@@ -13,7 +22,7 @@
 ## 1.4.4 本次优化
 
 - **ACME 多源安装**：优先下载 acme.sh 官方 GitHub 源码；主入口失败时尝试 `codeload.github.com` 官方源码分发入口。
-- **Debian / Ubuntu 软件源回退**：官方源码入口均不可用时，检查当前 APT 软件源是否提供 `acme.sh`，若可用则通过 `apt-get install acme.sh` 安装。
+- **Debian / Ubuntu 软件源回退**：官方源码入口均不可用时，检查当前 APT 软件源是否提供 `acme.sh`，若可用则通过 `apt-get install --no-install-recommends acme.sh` 安装。
 - **Alpine 软件源回退**：官方源码入口均不可用时，尝试通过 Alpine APK 软件源安装 `acme.sh`。
 - **统一安装目录**：无论使用源码还是系统包，最终都通过 acme.sh 自带安装器安装到 `/root/.acme.sh/`，并使用 `--nocron`，由管理器原有的 Cron 所有权逻辑统一创建续期任务。
 - **包内容检查**：系统包安装后检查 `/usr/share/acme.sh/acme.sh` 和 `dnsapi/` 文件树；不完整时拒绝继续，避免出现只能签 HTTP-01 却无法使用 DNS API 的半安装状态。
@@ -42,6 +51,8 @@
 - Alpine APK 软件源回退。
 - 系统包目录缺少 acme.sh 主程序或 DNS API 目录时拒绝使用。
 
+新增 1.4.6 测试覆盖 NAT64 IPv4-only 出站探测、NAT64 出口地址不被误当作源站 IPv4、Cloudflare 521 / 522 错误提示，以及 ACME 输出实时转发和原始退出码保留。
+
 既有测试继续覆盖：
 - POSIX sh、dash、BusyBox ash 语法检查。
 - 网页内联 JavaScript 语法、HTML ID / DOM 引用、Schema 8 和版本标记。
@@ -57,17 +68,17 @@
 
 ## 当前 VPS 日志诊断与部署检查
 
-你提供的 Debian 13 日志中，首次失败仍显示旧版 1.4.3 的单一 GitHub 下载逻辑；后续命令只显示通用失败信息。1.4.5 已将网页预检改为逐项报错。
+你提供的 Debian 13 日志确认 GitHub 与 codeload 均不可达，但 Debian APT 已成功安装 acme.sh；之后的 HTTP-01 验证收到 Cloudflare 521。1.4.6 增加 NAT64 出站检测和 521 专项诊断。
 
 上传到 GitHub 后，可先在 VPS 执行以下只读检查，确认远端 Shell 已更新：
 
 ```sh
-curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh?v=1.4.5' -o /tmp/sb-manager-check.sh
+curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh?v=1.4.6' -o /tmp/sb-manager-check.sh
 grep '^# PROJECT_VERSION=' /tmp/sb-manager-check.sh
 sha256sum /tmp/sb-manager-check.sh
 ```
 
-预期版本为 `1.4.5`，预期 SHA-256 为本 README 最下方的 Shell 校验值。若不匹配，不要继续执行网页安装命令；先确认 GitHub `main` 上的 Shell 文件上传完成，再刷新网页。
+预期版本为 `1.4.6`，预期 SHA-256 为本 README 最下方的 Shell 校验值。若不匹配，不要继续执行网页安装命令；先确认 GitHub `main` 上的 Shell 文件上传完成，再刷新网页。
 
 **部署顺序：** 先上传 `sb-manager-debian-alpine.sh`，再上传 `index.html`。网页安装命令会打印具体的下载、版本、功能标记、Shell 语法或 SHA-256 失败原因。
 
@@ -78,7 +89,7 @@ systemctl status sing-box --no-pager
 sing-box check -c /etc/sing-box/config.json
 ```
 
-如果希望先独立安装 Debian 官方 acme.sh 包，可使用 1.4.4 README 中的手动恢复命令；完成后再运行已通过版本与 SHA-256 检查的管理器安装命令。
+如果希望先独立安装 Debian 官方 acme.sh 包，可使用上方手动恢复命令；完成后再运行已通过版本与 SHA-256 检查的管理器安装命令。
 
 ## 当前 VPS 的手动恢复方式（仅在仍使用旧版脚本时需要）
 
@@ -86,7 +97,7 @@ sing-box check -c /etc/sing-box/config.json
 
 ```sh
 apt-get update
-apt-get install -y acme.sh
+apt-get install -y --no-install-recommends acme.sh
 cd /usr/share/acme.sh
 HOME=/root sh ./acme.sh --install --home /root/.acme.sh --nocron
 ```
@@ -104,10 +115,27 @@ HOME=/root sh ./acme.sh --install --home /root/.acme.sh --nocron
 
 ## 验证边界
 
-本包自动化测试覆盖模拟的 GitHub 下载失败和 APT/APK 软件包回退，但**不代表已在你的 VPS 上实机运行**。没有连接 Let's Encrypt、没有执行真实公网 HTTP-01 验证，也没有在独立 Debian / Ubuntu / Alpine VPS 镜像上执行包管理器安装和完整服务生命周期测试。真实环境仍需确认域名解析、TCP 80、防火墙 / NAT 映射、Cloudflare Tunnel 健康状态及客户端连通性。
+本包自动化测试覆盖模拟的 GitHub 下载失败和 APT/APK 软件包回退、NAT64 出站检测及 Cloudflare 521 错误分支，但**不代表已在你的 VPS 上实机运行**。没有连接 Let's Encrypt、没有执行真实公网 HTTP-01 验证，也没有在独立 Debian / Ubuntu / Alpine VPS 镜像上执行包管理器安装和完整服务生命周期测试。真实环境仍需确认域名解析、TCP 80、防火墙 / NAT 映射、Cloudflare Tunnel 健康状态及客户端连通性。
 
 ## Shell 脚本 SHA-256
 
 ```text
-0a7fef2fa62fc0df07076e61e660f959dcdb46904d807883330eb3871463212c
+f45608c438fbdc0315b9de0b0ea5f6aa28633f265831cfef59645338b3fd3a96
 ```
+
+
+## HTTP-01 521 的处理边界
+
+如果 ACME 输出 `Invalid response ...: 521`，说明 Let's Encrypt 请求到达了 Cloudflare 边缘，但 Cloudflare 无法连接源站。该状态不是 NAT64 出站失败的证据。检查 DNS 记录的 AAAA 是否指向当前 VPS IPv6、TCP 80 是否公网可达，以及 VPS / 服务商防火墙是否允许入站。可在验证期间将记录临时切换为 DNS only（灰云），让 AAAA 直接指向 VPS IPv6；或者使用 Cloudflare DNS-01。项目不会擅自修改 Cloudflare DNS 代理状态。
+
+如果 NAT64 检测显示 IPv4 出口地址，这只证明该 VPS 能通过 IPv6/DNS64/NAT64 主动访问 IPv4-only 服务，不代表存在可被外部访问的公网 IPv4。
+
+手动复测可运行：
+
+```sh
+curl -6 -fsS --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com/
+```
+
+若输出有效 IPv4 地址，则该次 IPv6 → DNS64/NAT64 → IPv4-only 服务的出站链路成功；若失败，不能据此断言公网 IPv6 不通，只能说明该 NAT64 探测路径没有成功。
+
+失败的 HTTP-01 诊断日志保留在 `/tmp/sb-manager-http01.*`，权限受当前 root umask 保护；证书成功或有效证书复用时自动删除日志。
