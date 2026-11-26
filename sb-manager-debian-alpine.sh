@@ -1,6 +1,6 @@
 #!/bin/sh
 # sing-box single-VPS multi-protocol manager for Debian + Alpine
-# PROJECT_VERSION=1.4.4
+# PROJECT_VERSION=1.4.5
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # CLI port conflicts may fall back; web Schema 7/8 conflicts fail closed; Cloudflare DNS-01 or HTTP-01
@@ -9,7 +9,7 @@
 # WEB_WS_PREFERENCES=1
 # WEB_PORT_REUSE=1
 # WEB_CERT_ROLLBACK=1; WEB_SERVICE_MANAGER_DETECT=1; WEB_SECURE_TMPFILES=1
-# WEB_INSTALL_INTEGRITY=1; WEB_CRON_OWNERSHIP=1; WEB_ACME_CREDENTIAL_ROLLBACK=1; WEB_MANAGER_LOCK=1; WEB_OPENRC_RUNTIME_CHECK=1; WEB_ACME_BOOTSTRAP_FALLBACK=1
+# WEB_INSTALL_INTEGRITY=1; WEB_CRON_OWNERSHIP=1; WEB_ACME_CREDENTIAL_ROLLBACK=1; WEB_MANAGER_LOCK=1; WEB_OPENRC_RUNTIME_CHECK=1; WEB_ACME_BOOTSTRAP_FALLBACK=1; WEB_INSTALL_DIAGNOSTICS=1
 # Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
 # Manager menu 19: remove one protocol; menu 20: protocol-scoped SNI/IP/Cloudflare/port/credential editor
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded

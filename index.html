@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#f3f6fb">
-<title>sing-box Linux 安装与管理面板 v1.4.4</title>
+<title>sing-box Linux 安装与管理面板 v1.4.5</title>
 <style>
 :root{color-scheme:light;--bg:#f3f6fb;--surface:#fff;--soft:#f8faff;--line:#dce4ef;--line2:#c8d5e5;--text:#17243a;--muted:#64748b;--blue:#2563eb;--green:#15803d;--greenbg:#f0fdf4;--amber:#92400e;--amberbg:#fffbeb;--red:#b91c1c}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.55 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1160px;margin:auto;padding:16px 16px 30px}header{padding:15px 18px;margin-bottom:12px;background:#fff;border:1px solid var(--line);border-radius:14px}h1{font-size:23px;line-height:1.25;margin:0 0 5px}.sub,.small,.hint{color:var(--muted)}.sub{font-size:12px}.legend{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:9px;font-size:11px;color:var(--muted)}.mark{display:inline-block;border-radius:5px;padding:1px 6px;font-size:10px;font-style:normal;font-weight:700;vertical-align:middle;margin-left:4px}.req{color:#b91c1c;background:#fef2f2;border:1px solid #fecaca}.opt{color:#475569;background:#f1f5f9;border:1px solid #e2e8f0}.def{color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe}.layout{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}.panel{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:15px}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}.panel h2{font-size:15px;line-height:1.3;margin:0}.panel h3{font-size:12px;margin:10px 0 7px;color:#33445d}.badge{font-size:10px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:2px 7px;white-space:nowrap;font-weight:650}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.protocol{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:9px;background:var(--soft);padding:8px;cursor:pointer;min-width:0}.protocol input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--blue)}.protocol b{font-size:12px}.protocol small{display:block;font-size:10px;color:var(--muted);line-height:1.35}.subpanel{margin-top:11px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#fbfdff}.subhead{font-size:12px;font-weight:750;margin-bottom:7px;color:#263b59}.field{display:grid;grid-template-columns:175px minmax(0,1fr);align-items:center;gap:8px;margin:7px 0}.field label{font-size:11px;font-weight:650;color:#33445d}.field input,.field select{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:7px;padding:7px 9px;color:var(--text);font-family:inherit;font-size:12px;line-height:1.3;outline:none}.field input:focus,.field select:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 2px #3b82f61f}.field input:disabled,.field select:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder{color:#94a3b8}.hint{grid-column:2;font-size:10px;line-height:1.35;margin-top:-4px}.divider{height:1px;background:var(--line);margin:10px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.port{border:1px solid var(--line);border-radius:8px;padding:7px;background:var(--soft);min-width:0}.port label{display:block;font-size:10px;font-weight:650;color:#33445d;margin-bottom:4px}.port input{width:100%;border:1px solid var(--line2);border-radius:6px;padding:6px;color:var(--text);font-family:inherit;font-size:12px;min-width:0}.notice{margin-top:9px;padding:8px 10px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:8px;font-size:11px;line-height:1.5}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.hidden{display:none!important}.advanced{margin-top:7px;border-top:1px dashed var(--line2);padding-top:7px}.advanced summary,details summary{cursor:pointer;color:#1d4ed8;font-size:11px;font-weight:650}.actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}button{border:1px solid var(--blue);background:#2563eb;color:white;border-radius:7px;padding:7px 11px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}button.ghost{background:white;border-color:var(--line2);color:#33445d}button:disabled{opacity:.45;cursor:not-allowed}.commands{margin-top:12px}.commandgrid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(260px,.65fr);gap:10px}.commandcard{min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}.commandhead{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;font-size:12px;font-weight:750}.commandhead span{font-size:10px;font-weight:500;color:var(--muted)}.command{display:block;width:100%;min-height:138px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:7px;padding:9px;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto}.command.short{min-height:72px}.status{font-size:11px;margin:5px 0;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.help{margin-top:10px}.help details{border:1px solid var(--line);border-radius:9px;background:#fff;padding:9px 11px}.help ol{margin:7px 0 0 18px;padding:0}.footer{text-align:center;color:#718096;font-size:10px;padding-top:15px}.footnote{font-size:10px;color:var(--muted);margin-top:7px;line-height:1.45}
@@ -168,9 +168,9 @@
 </div>
 <script>
 "use strict";
-const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
-const EXPECTED_VERSION="1.4.4";
-const EXPECTED_SHA256="7f2ff4fdaee0375f32ba268c0f18361a3a27aa307354edab9b839f78a72af676";
+const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh?v=1.4.5";
+const EXPECTED_VERSION="1.4.5";
+const EXPECTED_SHA256="0a7fef2fa62fc0df07076e61e660f959dcdb46904d807883330eb3871463212c";
 const UNINSTALL_COMMAND="/usr/local/sbin/sb-manager uninstall";
 const $=id=>document.getElementById(id);
 const ids=["pAnytls","pWs","pArgo","pSS2022","pReality","pNaive","pAnyReality","argoServer","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","shareWsAddress","nodePrefix","originIPv4","originIPv6","realitySni","tlsDomain","portAnytls","portWs","portArgo","portSS2022","portReality","portNaive","portAnyReality"];
@@ -310,23 +310,49 @@ if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   elif [ -f /etc/debian_version ]; then apt-get update && apt-get install -y curl
   else echo '需要 curl 或 wget 才能下载安装脚本。'; exit 1; fi
 fi
-if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 180 '${RAW_URL}' -o "$SH"
-else wget -q -T 180 -O "$SH" '${RAW_URL}'; fi
-head -n 1 "$SH" | grep -qx '#!/bin/sh'
-grep -qx '# PROJECT_VERSION=${EXPECTED_VERSION}' "$SH"
-grep -q 'WEB_CONFIG_MODE=1' "$SH"
-grep -q 'WEB_CONFIG_SCHEMA=8' "$SH"
-grep -q 'WEB_WS_PREFERENCES=1' "$SH"
-grep -q 'WEB_PORT_REUSE=1' "$SH"
-grep -q 'WEB_CERT_ROLLBACK=1' "$SH"
-grep -q 'WEB_SERVICE_MANAGER_DETECT=1' "$SH"
-grep -q 'WEB_SECURE_TMPFILES=1' "$SH"
-grep -q 'WEB_INSTALL_INTEGRITY=1' "$SH"
-grep -q 'WEB_CRON_OWNERSHIP=1' "$SH"
-grep -q 'WEB_ACME_CREDENTIAL_ROLLBACK=1' "$SH"
-grep -q 'WEB_MANAGER_LOCK=1' "$SH"
-grep -q 'WEB_OPENRC_RUNTIME_CHECK=1' "$SH"
-sh -n "$SH"
+fail_preflight() {
+  echo "[安装预检失败] $1" >&2
+  exit 1
+}
+require_marker() {
+  marker=$1
+  if ! grep -Fq -- "$marker" "$SH"; then
+    fail_preflight "远端 Shell 缺少必要功能标记：$marker。请将同版本 sb-manager-debian-alpine.sh 上传到 GitHub main。"
+  fi
+}
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL --connect-timeout 10 --max-time 180 '${RAW_URL}' -o "$SH" ||
+    fail_preflight "无法从 GitHub raw 下载管理脚本：${RAW_URL}"
+else
+  wget -q -T 180 -O "$SH" '${RAW_URL}' ||
+    fail_preflight "无法从 GitHub raw 下载管理脚本：${RAW_URL}"
+fi
+[ -s "$SH" ] || fail_preflight '下载的管理脚本为空。请检查 GitHub 文件路径和网络连接。'
+if ! head -n 1 "$SH" | grep -qx '#!/bin/sh'; then
+  fail_preflight '下载内容不是 POSIX Shell 脚本；可能拿到了 GitHub 错误页面或 HTML。'
+fi
+ACTUAL_VERSION=$(sed -n 's/^# PROJECT_VERSION=//p' "$SH" | head -n 1)
+if [ "$ACTUAL_VERSION" != '${EXPECTED_VERSION}' ]; then
+  if [ -n "$ACTUAL_VERSION" ]; then ACTUAL_VERSION_DISPLAY=$ACTUAL_VERSION; else ACTUAL_VERSION_DISPLAY=未知版本; fi
+  fail_preflight "版本不匹配：当前网页要求 ${EXPECTED_VERSION}，GitHub 返回 $ACTUAL_VERSION_DISPLAY。请先上传 1.4.5 的 sb-manager-debian-alpine.sh，再刷新网页。"
+fi
+require_marker 'WEB_CONFIG_MODE=1'
+require_marker 'WEB_CONFIG_SCHEMA=8'
+require_marker 'WEB_WS_PREFERENCES=1'
+require_marker 'WEB_PORT_REUSE=1'
+require_marker 'WEB_CERT_ROLLBACK=1'
+require_marker 'WEB_SERVICE_MANAGER_DETECT=1'
+require_marker 'WEB_SECURE_TMPFILES=1'
+require_marker 'WEB_INSTALL_INTEGRITY=1'
+require_marker 'WEB_CRON_OWNERSHIP=1'
+require_marker 'WEB_ACME_CREDENTIAL_ROLLBACK=1'
+require_marker 'WEB_MANAGER_LOCK=1'
+require_marker 'WEB_OPENRC_RUNTIME_CHECK=1'
+require_marker 'WEB_ACME_BOOTSTRAP_FALLBACK=1'
+require_marker 'WEB_INSTALL_DIAGNOSTICS=1'
+if ! sh -n "$SH"; then
+  fail_preflight 'Shell 语法检查失败；下载文件可能不完整或版本不正确。'
+fi
 if command -v sha256sum >/dev/null 2>&1; then
   ACTUAL_SHA256=$(sha256sum "$SH" | awk '{print $1}')
 elif command -v busybox >/dev/null 2>&1; then
@@ -335,7 +361,15 @@ else
   echo '系统缺少 SHA-256 校验工具；为避免安装未经校验的脚本，已停止。' >&2
   exit 1
 fi
-[ "$ACTUAL_SHA256" = '${EXPECTED_SHA256}' ] || { echo '安装脚本 SHA-256 校验失败；文件可能不完整或与当前网页版本不匹配。' >&2; exit 1; }
+if [ "$ACTUAL_SHA256" != '${EXPECTED_SHA256}' ]; then
+  echo "[安装预检失败] SHA-256 不匹配。" >&2
+  echo "网页期望：$EXPECTED_SHA256" >&2
+  echo "实际下载：$ACTUAL_SHA256" >&2
+  echo "请确认 GitHub main 上的 Shell 文件与当前网页来自同一个 1.4.5 ZIP。" >&2
+  exit 1
+fi
+echo "[安装预检通过] 版本 ${EXPECTED_VERSION}、功能标记、Shell 语法及 SHA-256 全部匹配。"
+
 install -d -m 0755 "$MANAGER_DIR"
 if [ -f "$MANAGER_PATH" ]; then
   cp -p "$MANAGER_PATH" "$MANAGER_BACKUP"

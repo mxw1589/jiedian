@@ -1,6 +1,14 @@
-# Jiedian 管理器 HTTP-01 稳定增强版 1.4.4
+# Jiedian 管理器 HTTP-01 稳定增强版 1.4.5
 
-本包基于 1.4.3 稳定性增强版继续修复，保留网页配置 Schema 8、原有协议数据和旧版状态兼容。1.4.4 重点解决 GitHub 不可访问时 ACME 客户端无法安装的问题，同时保留既有证书、凭据和管理器回滚保护。
+本包基于 1.4.3 稳定性增强版继续修复，保留网页配置 Schema 8、原有协议数据和旧版状态兼容。1.4.5 在 1.4.4 的 ACME 多源安装基础上，增加安装预检诊断；1.4.4 的 ACME 备用安装机制继续保留。重点解决 GitHub 不可访问时 ACME 客户端无法安装的问题，同时保留既有证书、凭据和管理器回滚保护。
+
+## 1.4.5 本次优化
+
+- **明确的预检诊断**：GitHub 下载失败、空文件、错误 HTML、Shell 版本不匹配、缺少功能标记、Shell 语法错误和 SHA-256 不匹配均显示独立错误原因。
+- **版本回显**：报告网页期望版本与 GitHub 实际返回版本，避免静默 `grep` 退出。
+- **校验值回显**：SHA-256 不匹配时同时显示网页期望值和实际下载值。
+- **缓存规避**：Shell 下载 URL 增加版本查询参数，降低网页更新后命中旧缓存的概率。
+- **一致性要求**：Shell 增加 `WEB_INSTALL_DIAGNOSTICS=1` 标记；网页必须确认该标记后才允许替换管理器。
 
 ## 1.4.4 本次优化
 
@@ -45,7 +53,32 @@
 - 首次 DNS-01 失败时的 ACME 配置回滚。
 - Cron 管理区块幂等写入、卸载仅删除本项目区块、旧版未标记任务保护。
 - 并发锁、失效锁回收和 systemd / OpenRC 运行态识别。
-- 网页安装器 SHA-256 / 版本校验、Shell 语法检查、原子替换和失败恢复路径。
+- 网页安装器 SHA-256 / 版本校验、逐项预检错误诊断、Shell 语法检查、原子替换和失败恢复路径。
+
+## 当前 VPS 日志诊断与部署检查
+
+你提供的 Debian 13 日志中，首次失败仍显示旧版 1.4.3 的单一 GitHub 下载逻辑；后续命令只显示通用失败信息。1.4.5 已将网页预检改为逐项报错。
+
+上传到 GitHub 后，可先在 VPS 执行以下只读检查，确认远端 Shell 已更新：
+
+```sh
+curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh?v=1.4.5' -o /tmp/sb-manager-check.sh
+grep '^# PROJECT_VERSION=' /tmp/sb-manager-check.sh
+sha256sum /tmp/sb-manager-check.sh
+```
+
+预期版本为 `1.4.5`，预期 SHA-256 为本 README 最下方的 Shell 校验值。若不匹配，不要继续执行网页安装命令；先确认 GitHub `main` 上的 Shell 文件上传完成，再刷新网页。
+
+**部署顺序：** 先上传 `sb-manager-debian-alpine.sh`，再上传 `index.html`。网页安装命令会打印具体的下载、版本、功能标记、Shell 语法或 SHA-256 失败原因。
+
+首次日志已经显示 sing-box 1.14.4、socat 和 BBR 配置步骤完成，但管理器安装在 ACME 阶段退出。管理器回滚只恢复管理器脚本，不会自动卸载已安装的系统软件包或撤销所有 sysctl / systemd 更改。重新执行前建议检查：
+
+```sh
+systemctl status sing-box --no-pager
+sing-box check -c /etc/sing-box/config.json
+```
+
+如果希望先独立安装 Debian 官方 acme.sh 包，可使用 1.4.4 README 中的手动恢复命令；完成后再运行已通过版本与 SHA-256 检查的管理器安装命令。
 
 ## 当前 VPS 的手动恢复方式（仅在仍使用旧版脚本时需要）
 
@@ -76,5 +109,5 @@ HOME=/root sh ./acme.sh --install --home /root/.acme.sh --nocron
 ## Shell 脚本 SHA-256
 
 ```text
-7f2ff4fdaee0375f32ba268c0f18361a3a27aa307354edab9b839f78a72af676
+0a7fef2fa62fc0df07076e61e660f959dcdb46904d807883330eb3871463212c
 ```
