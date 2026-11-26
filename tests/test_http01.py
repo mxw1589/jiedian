@@ -12,7 +12,8 @@ def extract(name, next_name):
     return SOURCE[start:end]
 
 ISSUE = extract("issue_http_cert", "check_cert_pair")
-CHECK = extract("check_cert_pair", "install_manual_cert")
+CHECK = extract("check_cert_pair", "install_acme_cert_pair")
+INSTALL_CERT = extract("install_acme_cert_pair", "install_manual_cert")
 
 def make_cert(base: Path, domain: str, stem: str):
     key = base / f"{stem}.key"
@@ -24,7 +25,8 @@ def make_cert(base: Path, domain: str, stem: str):
     ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return cert, key
 
-def run_case(status: int, cert_domain: str = "cert.example.test", include_key=True, port80_busy=False):
+def run_case(status: int, cert_domain: str = "cert.example.test", include_key=True,
+             port80_busy=False, mismatch_key=False, install_fail=False, existing_pair=False):
     with tempfile.TemporaryDirectory(prefix="jiedian-http01-") as td:
         base = Path(td)
         acme_home = base / "acme"
@@ -33,7 +35,11 @@ def run_case(status: int, cert_domain: str = "cert.example.test", include_key=Tr
         source_cert, source_key = make_cert(base, cert_domain, "fixture")
         (domain_dir / "fullchain.cer").write_bytes(source_cert.read_bytes())
         if include_key:
-            (domain_dir / "cert.example.test.key").write_bytes(source_key.read_bytes())
+            if mismatch_key:
+                _, wrong_key = make_cert(base, "other.example.test", "wrong-key")
+                (domain_dir / "cert.example.test.key").write_bytes(wrong_key.read_bytes())
+            else:
+                (domain_dir / "cert.example.test.key").write_bytes(source_key.read_bytes())
 
         fakebin = base / "bin"
         fakebin.mkdir()
@@ -57,6 +63,7 @@ case "$1" in
     [ -n "$key" ] && [ -n "$cert" ] || exit 9
     mkdir -p "$(dirname "$key")" "$(dirname "$cert")"
     cp "$MOCK_SOURCE_KEY" "$key" || exit 8
+    [ "${MOCK_INSTALL_FAIL:-0}" = 1 ] && exit 7
     cp "$MOCK_SOURCE_CERT" "$cert" || exit 8
     echo installed >> "$MOCK_INSTALL_LOG"
     exit 0
@@ -67,12 +74,19 @@ exit 10
         acme.chmod(0o755)
         out = base / "out"
         out.mkdir()
+        old_cert = old_key = None
+        if existing_pair:
+            old_cert_path, old_key_path = make_cert(base, "cert.example.test", "previous")
+            old_cert, old_key = old_cert_path.read_bytes(), old_key_path.read_bytes()
+            (out / "fullchain.pem").write_bytes(old_cert)
+            (out / "privkey.pem").write_bytes(old_key)
         install_log = base / "install.log"
         harness = base / "harness.sh"
         harness.write_text(f'''#!/bin/sh
 set -eu
 ACME_HOME={str(acme_home)!r}
 OS_FAMILY=debian
+CERT_DIR={str(out)!r}
 CERT_FILE={str(out / 'fullchain.pem')!r}
 KEY_FILE={str(out / 'privkey.pem')!r}
 RELOAD_HOOK=/bin/true
@@ -85,6 +99,7 @@ run_with_timeout() {{ shift; "$@"; }}
 chown() {{ return 0; }}
 {ISSUE}
 {CHECK}
+{INSTALL_CERT}
 if issue_http_cert cert.example.test; then exit 0; else exit 1; fi
 ''')
         env = os.environ.copy()
@@ -95,42 +110,57 @@ if issue_http_cert cert.example.test; then exit 0; else exit 1; fi
             "MOCK_SOURCE_CERT": str(source_cert),
             "MOCK_SOURCE_KEY": str(source_key),
             "MOCK_INSTALL_LOG": str(install_log),
+            "MOCK_INSTALL_FAIL": "1" if install_fail else "0",
         })
         proc = subprocess.run(["sh", str(harness)], env=env, text=True, capture_output=True)
         outputs_exist = (out / "fullchain.pem").is_file() and (out / "privkey.pem").is_file()
         installed = install_log.exists()
-        return proc, outputs_exist, installed
+        restored = None
+        if existing_pair:
+            restored = ((out / "fullchain.pem").read_bytes() == old_cert and
+                        (out / "privkey.pem").read_bytes() == old_key)
+        return proc, outputs_exist, installed, restored
 
 # acme.sh code 2 means renewal was skipped: validate and reuse the stored ECC cert.
-p, outputs_exist, installed = run_case(2)
+p, outputs_exist, installed, _ = run_case(2)
 assert p.returncode == 0, p.stdout + p.stderr
 assert outputs_exist
 assert "复用现有证书" in p.stdout and installed
 print("PASS: HTTP-01 acme.sh exit 2 reuses a valid, matching certificate/key")
 
 # Fresh issuance (exit 0) still installs and validates the cert.
-p, outputs_exist, installed = run_case(0)
+p, outputs_exist, installed, _ = run_case(0)
 assert p.returncode == 0, p.stdout + p.stderr
 assert outputs_exist and installed
 print("PASS: HTTP-01 acme.sh exit 0 installs a newly issued certificate")
 
 # A real ACME error must fail closed and must not install a certificate.
-p, outputs_exist, installed = run_case(1)
+p, outputs_exist, installed, _ = run_case(1)
 assert p.returncode != 0 and not installed
 print("PASS: HTTP-01 ACME errors fail without installing a certificate")
 
 # Exit 2 without the stored private key must not be treated as success.
-p, outputs_exist, installed = run_case(2, include_key=False)
+p, outputs_exist, installed, _ = run_case(2, include_key=False)
 assert p.returncode != 0 and not installed
 print("PASS: HTTP-01 exit 2 without the private key is rejected")
 
 # Exit 2 with a cert for another hostname must not be reused.
-p, outputs_exist, installed = run_case(2, cert_domain="wrong.example.test")
+p, outputs_exist, installed, _ = run_case(2, cert_domain="wrong.example.test")
 assert p.returncode != 0 and not installed
 print("PASS: HTTP-01 exit 2 with a hostname-mismatched cert is rejected")
 
 # A busy TCP/80 listener must not block reuse when ACME says renewal is not due.
-p, outputs_exist, installed = run_case(2, port80_busy=True)
+p, outputs_exist, installed, _ = run_case(2, port80_busy=True)
 assert p.returncode == 0, p.stdout + p.stderr
 assert outputs_exist and installed
 print("PASS: valid non-due certificate is reused even when TCP/80 is already occupied")
+
+# A certificate and unrelated private key must never be reused.
+p, outputs_exist, installed, _ = run_case(2, mismatch_key=True)
+assert p.returncode != 0 and not installed
+print("PASS: HTTP-01 rejects a certificate/private-key mismatch")
+
+# A partial ACME install must restore the previous live certificate and private key.
+p, outputs_exist, installed, restored = run_case(0, install_fail=True, existing_pair=True)
+assert p.returncode != 0 and outputs_exist and not installed and restored, p.stdout + p.stderr
+print("PASS: failed/partial ACME certificate install rolls back the previous pair")

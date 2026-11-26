@@ -1,50 +1,62 @@
-# Jiedian 管理器 HTTP-01 证书修复版 1.4.1
+# Jiedian 管理器 HTTP-01 稳定增强版 1.4.3
 
-本包基于此前 1.4.0 网页/管理器版本，修复用户 VPS 日志中出现的 HTTP-01 证书续期误报。
+本包基于 1.4.2 稳定性增强版继续修复，保留网页配置 Schema 8、原有协议数据和旧版状态兼容。1.4.3 重点加强并发执行保护、ACME 凭据回滚、Cron 所有权、OpenRC 运行态识别，以及网页安装器的脚本完整性校验。
 
-## 本次修复
+## 1.4.3 本次优化
 
-acme.sh 对已经签发、但尚未到续期时间的证书会输出类似：
+- **管理器并发锁**：安装、菜单修改、节点导出和卸载等管理器入口统一取得运行锁；检测到其他实例正在执行时停止第二个写入者，避免并发覆盖配置。异常退出后可识别并回收失效 PID 锁。
+- **OpenRC 运行态识别**：除了检查 `rc-service` / `rc-update` 命令，还要求存在 OpenRC 运行目录；避免只安装了工具但实际由其他 init 系统管理时误判。
+- **Cron 所有权标记**：新建的 ACME 续期任务使用独立 BEGIN/END 标记区块；卸载只删除本管理器标记区块，不删除其他 Cron 任务。
+- **旧版 Cron 保护**：1.4.2 及更早版本创建的未标记 ACME Cron 行无法可靠判断所有者，因此卸载时保留并提示，不冒险删除用户任务。
+- **首次 DNS-01 失败回滚**：如果本次运行首次创建 ACME 域名配置，签发或后续安装失败时删除新建的域名配置，避免遗留本次传入的 DNS API Token；原本已有配置则恢复备份。
+- **网页安装脚本完整性**：生成的安装命令固定要求 1.4.3 版本及本包 Shell 文件 SHA-256 一致，并执行 `sh -n` 语法检查。
+- **原管理器保护**：下载脚本先在临时文件中检查，再复制到 `/usr/local/sbin` 同目录暂存并原子替换；安装失败或被中断时尽量恢复原管理器，恢复失败时保留备份文件。
 
-```text
-Domains not changed.
-Skipping. Next renewal time is: ...
-```
+## 保留的既有功能
 
-旧版 `issue_http_cert()` 把 `--issue` 的任何非零退出码都当成失败，因此把“无需续期”错误地报告为“HTTP-01 证书申请失败”。
-
-新版处理方式：
-
-- 退出码 `0`：签发/更新成功，继续安装证书。
-- 退出码 `2`：仅在 ACME 内部 ECC 证书与私钥都存在，并通过域名、有效期、PEM 和公私钥匹配检查后，才复用证书。
-- 其他退出码：视为真正失败，不会跳过校验。
-- 不再在调用 ACME 前一律拒绝 TCP 80 被占用的情况。若证书无需续期，则根本不需要 HTTP-01 challenge；若确实需要续期，ACME 会在 standalone challenge 阶段返回真实错误。
-- ACME issue 操作增加 300 秒超时。
-- 安装到 sing-box 证书目录后，再次检查证书域名、有效期及证书/私钥匹配，并设置权限。
-
-## 文件
-
-- `index.html`：1.4.0 网页版本，保留原有字段/命令生成逻辑。
-- `sb-manager-debian-alpine.sh`：1.4.1 修复版服务器管理脚本。
-- `tests/`：语法、网页/节点回归及 HTTP-01 行为测试。
+- AnyTLS、AnyTLS + Reality、VLESS + WS + TLS（直连 / Argo）、VLESS + Reality、NaiveProxy、Shadowsocks 2022。
+- Debian / Ubuntu 与 Alpine；POSIX `sh`、dash、BusyBox ash。
+- HTTP-01 / Cloudflare DNS-01 / 手动证书处理、证书与私钥匹配校验、证书安装回滚。
+- Schema 8 端口重复 / 占用检查、手动端口预留、旧版状态迁移和端口历史复用。
+- systemd / OpenRC 服务管理、Cloudflare Tunnel、BBR 配置、节点链接与客户端配置导出。
 
 ## 测试
 
-在 Linux、macOS 或 WSL 中安装 POSIX sh、Python 3、OpenSSL、Node.js（Node 可选）后运行：
+在 Linux、macOS 或 WSL 中，安装 POSIX `sh`、Python 3、OpenSSL；Node.js 可选。运行：
 
 ```sh
 ./tests/run-tests.sh
 ```
 
-HTTP-01 行为测试会在临时目录中生成自签名测试证书，并用 mock acme.sh 模拟退出码；不会连接 Let's Encrypt，也不会修改真实 `/root/.acme.sh` 或 VPS 配置。
+测试覆盖：
+
+- POSIX sh、dash、BusyBox ash 语法检查。
+- 网页内联 JavaScript 语法、HTML ID / DOM 引用、Schema 8 和版本标记。
+- IPv4 / IPv6 节点输出及 Shadowsocks 2022 SIP002 分享链接。
+- Schema 8 重复端口、占用端口和后续手动端口预留。
+- HTTP-01 签发、未到续期时间复用、证书域名 / 私钥错误、ACME 部分安装回滚。
+- 证书重载钩子、手动证书暂存和替换回滚。
+- Cloudflare Token / Zone ID 安全写入。
+- 首次 DNS-01 失败时的 ACME 配置回滚。
+- Cron 管理区块幂等写入、卸载仅删除本项目区块、旧版未标记任务保护。
+- 并发锁、失效锁回收和 systemd / OpenRC 运行态识别。
+- 网页安装器 SHA-256 / 版本校验、Shell 语法检查、原子替换和失败恢复路径。
 
 ## 部署
 
 1. 先备份 VPS 当前的 `/usr/local/sbin/sb-manager`、`/etc/sing-box/` 和 `/root/.acme.sh/`。
-2. 将包内 `sb-manager-debian-alpine.sh` 同步到 GitHub 仓库 `mxw1589/jiedian` 的 `main` 分支。
-3. 部署包内 `index.html`（如网页当前已是 1.4.0，可保持不变）。
-4. 再用网页生成 SSH 命令运行安装/更新。
+2. **先**将本包 `sb-manager-debian-alpine.sh` 同步到 GitHub 仓库 `mxw1589/jiedian` 的 `main` 分支。
+3. **再**部署本包 `index.html`。网页生成的命令会检查远端 Shell 的版本、补丁标记和 SHA-256；若 HTML 与 Shell 不是同一版本，会停止安装，不会覆盖现有管理器。
+4. 使用网页生成 SSH 命令执行安装 / 更新。
 
-注意：真实续期仍要求域名解析正确、TCP 80 可达和 ACME 验证成功。此修复解决的是“证书未到续期时间却被误判失败”，不会绕过真实的 HTTP-01 验证。
+升级继续使用 Schema 8，不主动重置已有协议凭据、节点名称、端口历史或旧版配置。首次部署前仍建议备份。
 
-本包不代表已在用户 VPS 上实机运行或完成客户端连接测试。
+## 验证边界
+
+本包自动化测试在当前构建环境通过，但**不代表已在你的 VPS 上实机运行**。没有连接 Let's Encrypt、没有执行真实公网 HTTP-01 验证，也没有在独立 Debian / Ubuntu / Alpine VPS 镜像上执行包管理器安装和完整服务生命周期测试。真实环境仍需确认域名解析、TCP 80、防火墙 / NAT 映射、Cloudflare Tunnel 健康状态及客户端连通性。
+
+## Shell 脚本 SHA-256
+
+```text
+0a10941a4bcb41171f119e20f9dc353b0f426cbdb7835d49a1f2645d7eea482e
+```

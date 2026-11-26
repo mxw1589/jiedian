@@ -1,13 +1,15 @@
 #!/bin/sh
 # sing-box single-VPS multi-protocol manager for Debian + Alpine
-# PROJECT_VERSION=1.4.0
+# PROJECT_VERSION=1.4.3
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
-# Occupied manual ports automatically fall back to free protocol-supported ports; Cloudflare DNS-01 or HTTP-01
+# CLI port conflicts may fall back; web Schema 7/8 conflicts fail closed; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_CONFIG_SCHEMA=8; WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
 # WEB_WS_PREFERENCES=1
 # WEB_PORT_REUSE=1
+# WEB_CERT_ROLLBACK=1; WEB_SERVICE_MANAGER_DETECT=1; WEB_SECURE_TMPFILES=1
+# WEB_INSTALL_INTEGRITY=1; WEB_CRON_OWNERSHIP=1; WEB_ACME_CREDENTIAL_ROLLBACK=1; WEB_MANAGER_LOCK=1; WEB_OPENRC_RUNTIME_CHECK=1
 # Manager menu 18 / sb-manager add: additive installation of missing protocol nodes
 # Manager menu 19: remove one protocol; menu 20: protocol-scoped SNI/IP/Cloudflare/port/credential editor
 # Node labels accept Unicode (including Chinese); URI fragments are percent-encoded
@@ -76,6 +78,12 @@ RELOAD_HOOK=/usr/local/sbin/sing-box-cert-reload
 SB_BIN="$(command -v sing-box 2>/dev/null || printf /usr/bin/sing-box)"
 OS_FAMILY=""
 SERVICE_KIND=""
+LOCK_DIR=/run/lock/sb-manager.lock
+manager_lock_owned=0
+ACME_CRON_BEGIN='# BEGIN SB-MANAGER ACME RENEWAL'
+ACME_CRON_END='# END SB-MANAGER ACME RENEWAL'
+ACME_CRON_COMMAND='17 3 * * * /root/.acme.sh/acme.sh --cron --home /root/.acme.sh >/dev/null 2>&1'
+ACME_CRON_MATCH='/root/.acme.sh/acme.sh --cron --home /root/.acme.sh'
 
 msg() { printf '\n%s\n' "$*"; }
 err() { printf '\n[错误] %s\n' "$*" >&2; exit 1; }
@@ -95,6 +103,75 @@ run_with_timeout() {
     return 127
 }
 need_root() { [ "$(id -u)" -eq 0 ] || err '请使用 root 运行。'; }
+
+release_manager_lock() {
+    [ "$manager_lock_owned" = 1 ] || return 0
+    lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+    [ "$lock_pid" = "$$" ] || return 0
+    rm -f "$LOCK_DIR/pid"
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    manager_lock_owned=0
+    return 0
+}
+
+acquire_manager_lock() {
+    lock_parent=${LOCK_DIR%/*}
+    [ -n "$lock_parent" ] || lock_parent=/run/lock
+    install -d -m 0755 "$lock_parent" || err '无法创建管理器锁目录。'
+    lock_attempt=0
+    while [ "$lock_attempt" -lt 5 ]; do
+        if mkdir "$LOCK_DIR" 2>/dev/null; then
+            if ! printf '%s\n' "$$" > "$LOCK_DIR/pid"; then
+                rmdir "$LOCK_DIR" 2>/dev/null || true
+                err '无法写入管理器锁 PID。'
+            fi
+            manager_lock_owned=1
+            trap 'release_manager_lock' 0
+            trap 'exit 129' HUP
+            trap 'exit 130' INT
+            trap 'exit 143' TERM
+            return 0
+        fi
+
+        if [ -r "$LOCK_DIR/pid" ]; then
+            lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+            case "$lock_pid" in
+                ''|*[!0-9]*) ;;
+                *)
+                    if [ "$lock_pid" -gt 1 ] 2>/dev/null && kill -0 "$lock_pid" 2>/dev/null; then
+                        err "检测到另一个管理器实例正在运行（PID $lock_pid）；为避免配置并发写入，本次操作已停止。"
+                    fi
+                    ;;
+            esac
+            stale_lock="${LOCK_DIR}.stale.$$"
+            if mv "$LOCK_DIR" "$stale_lock" 2>/dev/null; then
+                rm -rf "$stale_lock"
+                continue
+            fi
+        else
+            # A newly-created lock may not have written its PID yet. Wait rather
+            # than deleting it during that small race window.
+            sleep 1
+        fi
+        lock_attempt=$((lock_attempt + 1))
+    done
+    err '无法取得管理器锁；请检查是否有其他实例运行，或手动检查残留锁目录。'
+}
+
+detect_service_manager() {
+    systemd_run_dir=/run/systemd/system
+    openrc_run_dir=/run/openrc
+    if command -v systemctl >/dev/null 2>&1 && [ -d "$systemd_run_dir" ]; then
+        SERVICE_KIND=systemd
+    elif command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1 &&
+         { [ -d "$openrc_run_dir" ] || [ -f "$openrc_run_dir/softlevel" ]; }; then
+        SERVICE_KIND=openrc
+    else
+        SERVICE_KIND=
+        return 1
+    fi
+    return 0
+}
 
 read_sysctl_value() {
     key=$1
@@ -550,7 +627,7 @@ assign_ports() {
 
     used_ports=""
     reserved_ports=""
-    if [ "${web_schema:-}" = 7 ] || [ "$PORT_HISTORY" != '{}' ]; then
+    if [ "${web_schema:-}" = 7 ] || [ "${web_schema:-}" = 8 ] || [ "$PORT_HISTORY" != '{}' ]; then
         reserved_ports="$ANYTLS_PORT $WS_PORT $ARGO_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $SS2022_PORT"
     fi
     if [ "$PORT_HISTORY" != '{}' ]; then
@@ -578,7 +655,7 @@ assign_ports() {
         if [ -n "$item_port" ]; then
             case " $used_ports " in
                 *" $item_port "*)
-                    [ "${web_schema:-}" != 7 ] || err "$protocol_name 的端口 $item_port 与其他所选协议重复。请修改网页端口后重试。"
+                    [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] || err "$protocol_name 的端口 $item_port 与其他所选协议重复。请修改网页端口后重试。"
                     warn "$protocol_name 指定端口 $item_port 与已选择协议重复；将自动随机分配。"
                     item_port=""
                     PORT_FALLBACK_USED=1
@@ -587,7 +664,7 @@ assign_ports() {
                     if ! check_udp_port="$([ "$protocol_name" = 'Shadowsocks 2022' ] && printf 1 || printf 0)" manual_port_available "$item_port" \
                         "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" \
                         "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" "${PREVIOUS_ARGO_PORT:-}" "${PREVIOUS_SS2022_PORT:-}"; then
-                        [ "${web_schema:-}" != 7 ] || err "$protocol_name 的端口 $item_port 已被占用。请修改网页端口后重试。"
+                        [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] || err "$protocol_name 的端口 $item_port 已被占用。请修改网页端口后重试。"
                         warn "$protocol_name 指定 TCP 端口 $item_port 已被其他程序占用；将自动随机分配。"
                         item_port=""
                         PORT_FALLBACK_USED=1
@@ -786,7 +863,7 @@ install_debian_upstream_core() {
     if [ ! -s /etc/apt/keyrings/sagernet.asc ]; then
         install -d -m 0755 /etc/apt/keyrings || return 1
         apt_key_tmp=$(mktemp) || err '无法创建 APT 签名密钥临时文件。'
-        if ! curl -fsSL https://sing-box.app/gpg.key -o "$apt_key_tmp" || [ ! -s "$apt_key_tmp" ]; then
+        if ! curl -fsSL --connect-timeout 10 --max-time 45 https://sing-box.app/gpg.key -o "$apt_key_tmp" || [ ! -s "$apt_key_tmp" ]; then
             rm -f "$apt_key_tmp"
             err '无法下载 sing-box 官方 APT 签名密钥。'
         fi
@@ -812,7 +889,7 @@ APT_EOF
 
 install_alpine_official_release() {
     msg 'Alpine 仓库中的 sing-box 不存在或版本低于 1.13.0，改用 sing-box 官方 Linux 发布版……'
-    if ! release_json=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest); then
+    if ! release_json=$(curl -fsSL --connect-timeout 10 --max-time 45 https://api.github.com/repos/SagerNet/sing-box/releases/latest); then
         err '无法访问 GitHub Releases API；请检查 VPS 网络后重试。'
     fi
     tag=$(printf '%s\n' "$release_json" | jq -r '.tag_name // empty') ||
@@ -827,7 +904,7 @@ install_alpine_official_release() {
     esac
     archive="sing-box-${ver}-linux-${rel_arch}.tar.gz"
     unpack_dir=$(mktemp -d /tmp/sing-box-unpack.XXXXXX) || err '无法创建 sing-box 临时解压目录。'
-    if ! curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "$unpack_dir/$archive"; then
+    if ! curl -fsSL --connect-timeout 10 --max-time 180 "https://github.com/SagerNet/sing-box/releases/download/${tag}/${archive}" -o "$unpack_dir/$archive"; then
         rm -rf "$unpack_dir"
         err "下载 sing-box 官方发布版失败（${archive}）；请检查 GitHub 网络连接后重试。"
     fi
@@ -922,8 +999,8 @@ ensure_service_account() {
 }
 
 create_service() {
-    if [ "$OS_FAMILY" = debian ] && command -v systemctl >/dev/null 2>&1; then
-        SERVICE_KIND=systemd
+    detect_service_manager || err '未检测到正在运行的 systemd 或可用的 OpenRC 服务管理器。'
+    if [ "$SERVICE_KIND" = systemd ]; then
         cat > /etc/systemd/system/sing-box.service <<EOF_SERVICE
 [Unit]
 Description=sing-box proxy service
@@ -992,11 +1069,23 @@ setup_reload_hook() {
     cat > "$RELOAD_HOOK" <<'EOF_HOOK'
 #!/bin/sh
 set -eu
-[ -f /etc/sing-box/config.json ] || exit 0
-chown root:sing-box /etc/sing-box/cert /etc/sing-box/cert/privkey.pem /etc/sing-box/cert/fullchain.pem 2>/dev/null || true
-chmod 750 /etc/sing-box/cert 2>/dev/null || true
-chmod 640 /etc/sing-box/cert/privkey.pem 2>/dev/null || true
-chmod 644 /etc/sing-box/cert/fullchain.pem 2>/dev/null || true
+STATE=${SB_MANAGER_STATE_FILE:-/etc/sing-box/manager.json}
+[ -s "$STATE" ] || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+domain=$(jq -r '.tls_domain // ""' "$STATE" 2>/dev/null) || exit 0
+cert=$(jq -r '.cert_file // "/etc/sing-box/cert/fullchain.pem"' "$STATE" 2>/dev/null) || exit 0
+key=$(jq -r '.key_file // "/etc/sing-box/cert/privkey.pem"' "$STATE" 2>/dev/null) || exit 0
+[ -n "$domain" ] && [ -r "$cert" ] && [ -r "$key" ] || exit 0
+openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1 || exit 0
+openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || exit 0
+cert_pub=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null) || exit 0
+key_pub=$(openssl pkey -in "$key" -pubout 2>/dev/null) || exit 0
+[ -n "$cert_pub" ] && [ "$cert_pub" = "$key_pub" ] || exit 0
+cert_dir=${cert%/*}
+chown root:sing-box "$cert" "$key" 2>/dev/null || true
+chmod 750 "$cert_dir" 2>/dev/null || true
+chmod 640 "$key" 2>/dev/null || true
+chmod 644 "$cert" 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
   systemctl restart sing-box
 elif command -v rc-service >/dev/null 2>&1; then
@@ -1006,28 +1095,65 @@ EOF_HOOK
     chmod 0750 "$RELOAD_HOOK"
 }
 
+ensure_acme_cron() {
+    command -v crontab >/dev/null 2>&1 || return 0
+    current_cron=$(crontab -l 2>/dev/null || true)
+    has_begin=0; has_end=0
+    printf '%s\n' "$current_cron" | grep -Fqx "$ACME_CRON_BEGIN" && has_begin=1 || true
+    printf '%s\n' "$current_cron" | grep -Fqx "$ACME_CRON_END" && has_end=1 || true
+
+    if [ "$has_begin" -eq 1 ] || [ "$has_end" -eq 1 ]; then
+        if [ "$has_begin" -eq 1 ] && [ "$has_end" -eq 1 ] &&
+           printf '%s\n' "$current_cron" | awk -v begin="$ACME_CRON_BEGIN" -v end="$ACME_CRON_END" -v needle="$ACME_CRON_MATCH" '
+               $0 == begin { inside=1; next }
+               $0 == end { inside=0; next }
+               inside && index($0, needle) > 0 { found=1 }
+               END { exit !found }
+           '; then
+            return 0
+        fi
+        warn '检测到不完整或被修改的 SB-MANAGER Cron 标记；为保护现有定时任务，没有自动改写 crontab。'
+        return 0
+    fi
+
+    if printf '%s\n' "$current_cron" | grep -Fq "$ACME_CRON_MATCH"; then
+        warn '检测到未带 SB-MANAGER 标记的现有 acme.sh 续期任务；为避免接管或重复添加，保留该任务。'
+        return 0
+    fi
+
+    if [ -n "$current_cron" ]; then
+        { printf '%s\n' "$current_cron"; printf '\n%s\n%s\n%s\n' "$ACME_CRON_BEGIN" "$ACME_CRON_COMMAND" "$ACME_CRON_END"; } | crontab - ||
+            warn '无法添加带管理标记的 acme.sh 续期任务；请检查 root crontab。'
+    else
+        printf '%s\n%s\n%s\n' "$ACME_CRON_BEGIN" "$ACME_CRON_COMMAND" "$ACME_CRON_END" | crontab - ||
+            warn '无法添加带管理标记的 acme.sh 续期任务；请检查 root crontab。'
+    fi
+}
+
 start_cron() {
     if [ "$OS_FAMILY" = alpine ]; then
         apk add --no-cache cronie
-        rc-update add crond default >/dev/null 2>&1 || true
-        rc-service crond start >/dev/null 2>&1 || true
+        if [ "$SERVICE_KIND" = openrc ]; then
+            rc-update add crond default >/dev/null 2>&1 || true
+            rc-service crond start >/dev/null 2>&1 || true
+        fi
     else
         DEBIAN_FRONTEND=noninteractive apt-get install -y cron
-        systemctl enable --now cron >/dev/null 2>&1 || true
+        if [ "$SERVICE_KIND" = systemd ]; then
+            systemctl enable --now cron >/dev/null 2>&1 || warn 'cron 服务未能自动启动；请检查系统服务状态。'
+        elif [ "$SERVICE_KIND" = openrc ]; then
+            rc-update add cron default >/dev/null 2>&1 || true
+            rc-service cron start >/dev/null 2>&1 || warn 'OpenRC cron 服务未能自动启动；请检查 cron 服务状态。'
+        fi
     fi
-    if command -v crontab >/dev/null 2>&1; then
-        current_cron=$(crontab -l 2>/dev/null || true)
-        printf '%s\n' "$current_cron" | grep -q '/root/.acme.sh/acme.sh --cron' || {
-            { printf '%s\n' "$current_cron"; printf '%s\n' '17 3 * * * /root/.acme.sh/acme.sh --cron --home /root/.acme.sh >/dev/null 2>&1'; } | crontab -
-        }
-    fi
+    ensure_acme_cron
 }
 
 install_acme() {
     if [ ! -x /root/.acme.sh/acme.sh ]; then
         msg '安装 acme.sh（用于自动申请和续期证书）……'
         acme_tmp=$(mktemp -d /tmp/sb-acme.XXXXXX) || err '无法创建 acme.sh 临时目录。'
-        if ! curl -fsSL --retry 2 https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz -o "$acme_tmp/acme.tar.gz" ||
+        if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 180 https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz -o "$acme_tmp/acme.tar.gz" ||
            ! tar -xzf "$acme_tmp/acme.tar.gz" -C "$acme_tmp"; then
             rm -rf "$acme_tmp"
             err '无法下载或解压 acme.sh 官方源码。'
@@ -1099,11 +1225,23 @@ save_acme_cf_credentials() (
 )
 
 restore_acme_cf_credentials() {
-    [ -n "$acme_conf_backup" ] || return 0
-    if ! mv -f "$acme_conf_backup" "$acme_domain_conf"; then
-        warn '无法恢复签发前的 ACME 续期配置。'
-        return 1
+    if [ -n "${acme_conf_backup:-}" ]; then
+        if ! mv -f "$acme_conf_backup" "$acme_domain_conf"; then
+            warn '无法恢复签发前的 ACME 续期配置。'
+            return 1
+        fi
+        acme_conf_backup=""
+        return 0
     fi
+    if [ "${acme_conf_existed:-1}" = 0 ] && [ -n "${acme_domain_conf:-}" ]; then
+        # A first-time failed issue must not leave the DNS API token persisted
+        # in a newly-created per-domain ACME config.
+        rm -f "$acme_domain_conf" || {
+            warn '首次 DNS-01 失败后，无法删除新建的 ACME 域名配置；请检查文件权限。'
+            return 1
+        }
+    fi
+    return 0
 }
 
 issue_cloudflare_cert() {
@@ -1143,8 +1281,10 @@ issue_cloudflare_cert() {
     acme_internal_dir="/root/.acme.sh/${domain}_ecc"
     acme_domain_conf="$acme_internal_dir/${domain}.conf"
     acme_conf_backup=""
+    acme_conf_existed=0
     set -- --issue --server letsencrypt --dns dns_cf -d "$domain" --keylength ec-256
     if [ -s "$acme_domain_conf" ]; then
+        acme_conf_existed=1
         acme_conf_backup=$(mktemp "$acme_domain_conf.backup.XXXXXX") || return 1
         if ! cat "$acme_domain_conf" > "$acme_conf_backup"; then rm -f "$acme_conf_backup"; return 1; fi
         if [ "$(acme_conf_value "$acme_domain_conf" Le_Webroot)" != dns_cf ]; then set -- "$@" --force; fi
@@ -1189,11 +1329,7 @@ issue_cloudflare_cert() {
         return 1
     fi
 
-    if ! /root/.acme.sh/acme.sh --install-cert -d "$domain" --ecc \
-          --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$RELOAD_HOOK" ||
-       ! chown root:sing-box "$CERT_FILE" "$KEY_FILE" ||
-       ! chmod 0644 "$CERT_FILE" || ! chmod 0640 "$KEY_FILE" ||
-       ! check_cert_pair "$CERT_FILE" "$KEY_FILE" "$domain"; then
+    if ! install_acme_cert_pair /root/.acme.sh/acme.sh "$domain"; then
         restore_acme_cf_credentials || true
         return 1
     fi
@@ -1220,8 +1356,8 @@ issue_http_cert() {
     [ -x "$acme_bin" ] || { warn "找不到可执行的 acme.sh：$acme_bin"; return 1; }
 
     msg "通过 Let's Encrypt HTTP-01 为 $domain 申请/检查证书（不需要 Cloudflare Token）……"
-    "$acme_bin" --set-default-ca --server letsencrypt >/dev/null || {
-        warn "无法将 Let's Encrypt 设置为默认 CA。"; return 1;
+    run_with_timeout 30 "$acme_bin" --set-default-ca --server letsencrypt >/dev/null || {
+        warn "无法在 30 秒内将 Let's Encrypt 设置为默认 CA。"; return 1;
     }
 
     # acme.sh returns 2 when a valid certificate exists but is not yet due for renewal.
@@ -1256,18 +1392,9 @@ issue_http_cert() {
             ;;
     esac
 
-    if ! "$acme_bin" --install-cert -d "$domain" --ecc \
-          --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$RELOAD_HOOK"; then
-        warn 'acme.sh 无法将 HTTP-01 证书安装到 sing-box 证书目录。'
+    install_acme_cert_pair "$acme_bin" "$domain" || {
+        warn 'acme.sh 无法安全安装 HTTP-01 证书；原有证书（如有）已恢复。'
         return 1
-    fi
-    if ! chown root:sing-box "$CERT_FILE" "$KEY_FILE" ||
-       ! chmod 0644 "$CERT_FILE" || ! chmod 0640 "$KEY_FILE"; then
-        warn '无法设置 sing-box 证书/私钥文件权限。'
-        return 1
-    fi
-    check_cert_pair "$CERT_FILE" "$KEY_FILE" "$domain" || {
-        warn '安装后的 HTTP-01 证书校验失败。'; return 1;
     }
     msg 'HTTP-01 证书已安装并通过域名、有效期及证书/私钥匹配检查。'
 }
@@ -1282,10 +1409,63 @@ check_cert_pair() {
     openssl pkey -in "$key" -noout >/dev/null 2>&1 || { warn '私钥 PEM 格式无效或带有不受支持的口令。'; return 1; }
     openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1 || { warn "证书不包含域名 $domain。"; return 1; }
     openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || { warn "证书已过期：$domain。"; return 1; }
-    cert_pub=$(openssl x509 -in "$cert" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum | awk '{print $1}') || return 1
-    key_pub=$(openssl pkey -in "$key" -pubout -outform DER | sha256sum | awk '{print $1}') || return 1
-    [ "$cert_pub" = "$key_pub" ] || { warn '证书和私钥不匹配。'; return 1; }
+    cert_pub=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null) || { warn '无法读取证书公钥。'; return 1; }
+    key_pub=$(openssl pkey -in "$key" -pubout 2>/dev/null) || { warn '无法读取私钥对应的公钥。'; return 1; }
+    [ -n "$cert_pub" ] && [ "$cert_pub" = "$key_pub" ] || { warn '证书和私钥不匹配。'; return 1; }
     return 0
+}
+
+install_acme_cert_pair() {
+    install_acme_bin=$1
+    install_acme_domain=$2
+    acme_pair_backup_dir=$(umask 077; mktemp -d "$CERT_DIR/.acme-cert-backup.XXXXXX") || return 1
+    acme_pair_had_cert=0
+    acme_pair_had_key=0
+    if [ -e "$CERT_FILE" ]; then
+        cp -p "$CERT_FILE" "$acme_pair_backup_dir/fullchain.pem" || { rm -rf "$acme_pair_backup_dir"; return 1; }
+        acme_pair_had_cert=1
+    fi
+    if [ -e "$KEY_FILE" ]; then
+        cp -p "$KEY_FILE" "$acme_pair_backup_dir/privkey.pem" || { rm -rf "$acme_pair_backup_dir"; return 1; }
+        acme_pair_had_key=1
+    fi
+
+    acme_pair_old_umask=$(umask)
+    umask 027
+    if run_with_timeout 180 "$install_acme_bin" --install-cert -d "$install_acme_domain" --ecc \
+          --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$RELOAD_HOOK"; then
+        acme_pair_install_status=0
+    else
+        acme_pair_install_status=1
+    fi
+    umask "$acme_pair_old_umask"
+
+    if [ "$acme_pair_install_status" -eq 0 ] &&
+       chown root:sing-box "$CERT_FILE" "$KEY_FILE" &&
+       chmod 0644 "$CERT_FILE" && chmod 0640 "$KEY_FILE" &&
+       check_cert_pair "$CERT_FILE" "$KEY_FILE" "$install_acme_domain"; then
+        rm -rf "$acme_pair_backup_dir"
+        return 0
+    fi
+
+    warn 'ACME 证书安装或最终校验失败；正在恢复此前的证书和私钥。'
+    acme_pair_restore_status=0
+    if [ "$acme_pair_had_cert" -eq 1 ]; then cp -p "$acme_pair_backup_dir/fullchain.pem" "$CERT_FILE" || acme_pair_restore_status=1; else rm -f "$CERT_FILE" || acme_pair_restore_status=1; fi
+    if [ "$acme_pair_had_key" -eq 1 ]; then cp -p "$acme_pair_backup_dir/privkey.pem" "$KEY_FILE" || acme_pair_restore_status=1; else rm -f "$KEY_FILE" || acme_pair_restore_status=1; fi
+    if [ "$acme_pair_had_cert" -eq 1 ] && [ "$acme_pair_had_key" -eq 1 ]; then
+        chown root:sing-box "$CERT_FILE" "$KEY_FILE" 2>/dev/null || acme_pair_restore_status=1
+        chmod 0644 "$CERT_FILE" 2>/dev/null || acme_pair_restore_status=1
+        chmod 0640 "$KEY_FILE" 2>/dev/null || acme_pair_restore_status=1
+    fi
+    if [ "$acme_pair_restore_status" -ne 0 ]; then
+        warn "原有证书文件未能完全恢复；备份保留在 $acme_pair_backup_dir。"
+        return 1
+    fi
+    if ! "$RELOAD_HOOK" >/dev/null 2>&1; then
+        warn '原有证书已恢复，但服务重载失败；请手动检查 sing-box 服务状态。'
+    fi
+    rm -rf "$acme_pair_backup_dir"
+    return 1
 }
 
 install_manual_cert() {
@@ -1294,12 +1474,32 @@ install_manual_cert() {
     src_cert=$REPLY
     ask_value '请输入 privkey.pem / 私钥文件路径' ''
     src_key=$REPLY
-    check_cert_pair "$src_cert" "$src_key" "$domain" || err '手动证书校验失败。'
-    cp "$src_cert" "$CERT_FILE"
-    cp "$src_key" "$KEY_FILE"
-    chown root:sing-box "$CERT_FILE" "$KEY_FILE"
-    chmod 0644 "$CERT_FILE"
-    chmod 0640 "$KEY_FILE"
+    manual_stage_dir=$(umask 077; mktemp -d "$CERT_DIR/.manual-cert-stage.XXXXXX") || err '无法创建证书暂存目录。'
+    if ! cp "$src_cert" "$manual_stage_dir/fullchain.pem" || ! cp "$src_key" "$manual_stage_dir/privkey.pem"; then
+        rm -rf "$manual_stage_dir"
+        err '复制手动证书到暂存目录失败；现有证书未更改。'
+    fi
+    chown root:sing-box "$manual_stage_dir/fullchain.pem" "$manual_stage_dir/privkey.pem" || { rm -rf "$manual_stage_dir"; err '无法设置暂存证书所有者。'; }
+    chmod 0644 "$manual_stage_dir/fullchain.pem" || { rm -rf "$manual_stage_dir"; err '无法设置暂存证书权限。'; }
+    chmod 0640 "$manual_stage_dir/privkey.pem" || { rm -rf "$manual_stage_dir"; err '无法设置暂存私钥权限。'; }
+    check_cert_pair "$manual_stage_dir/fullchain.pem" "$manual_stage_dir/privkey.pem" "$domain" || { rm -rf "$manual_stage_dir"; err '手动证书校验失败；现有证书未更改。'; }
+
+    manual_had_cert=0; manual_had_key=0
+    if [ -e "$CERT_FILE" ]; then cp -p "$CERT_FILE" "$manual_stage_dir/old-fullchain.pem" || { rm -rf "$manual_stage_dir"; err '无法备份现有证书。'; }; manual_had_cert=1; fi
+    if [ -e "$KEY_FILE" ]; then cp -p "$KEY_FILE" "$manual_stage_dir/old-privkey.pem" || { rm -rf "$manual_stage_dir"; err '无法备份现有私钥。'; }; manual_had_key=1; fi
+    if ! mv -f "$manual_stage_dir/fullchain.pem" "$CERT_FILE" || ! mv -f "$manual_stage_dir/privkey.pem" "$KEY_FILE" || ! check_cert_pair "$CERT_FILE" "$KEY_FILE" "$domain"; then
+        manual_restore_status=0
+        if [ "$manual_had_cert" -eq 1 ]; then cp -p "$manual_stage_dir/old-fullchain.pem" "$CERT_FILE" || manual_restore_status=1; else rm -f "$CERT_FILE" || manual_restore_status=1; fi
+        if [ "$manual_had_key" -eq 1 ]; then cp -p "$manual_stage_dir/old-privkey.pem" "$KEY_FILE" || manual_restore_status=1; else rm -f "$KEY_FILE" || manual_restore_status=1; fi
+        if [ "$manual_restore_status" -eq 0 ]; then
+            rm -rf "$manual_stage_dir"
+            err '安装手动证书失败；原有证书文件已恢复。'
+        else
+            warn "原有证书文件未能完全恢复；备份保留在 $manual_stage_dir。"
+            err '安装手动证书失败；请检查保留的证书备份目录。'
+        fi
+    fi
+    rm -rf "$manual_stage_dir"
     CERT_MODE=manual
 }
 
@@ -1442,7 +1642,7 @@ cloudflared_status() {
 }
 
 save_state() {
-    tmp="$STATE_FILE.tmp.$$"
+    tmp=$(umask 077; mktemp "$STATE_FILE.tmp.XXXXXX") || { warn '无法创建安全的管理状态临时文件。'; return 1; }
     if ! jq -n \
       --argjson saved_ports "$PORT_HISTORY" \
       --arg origin_addr "$ORIGIN_ADDR" \
@@ -1591,7 +1791,7 @@ derive_runtime_needs() {
 }
 
 build_config() {
-    tmp="$CONFIG_FILE.tmp.$$"
+    tmp=$(umask 077; mktemp "$CONFIG_FILE.tmp.XXXXXX") || { warn '无法创建安全的配置临时文件。'; return 1; }
     if ipv6_kernel_enabled; then listen_addr="::"; else listen_addr="0.0.0.0"; fi
 
     jq -n \
@@ -1736,7 +1936,7 @@ write_anyreality_client_json() {
     [ "$ENABLE_ANYTLS_REALITY" = 1 ] || { rm -f "$APP_DIR/anytls-reality-client.json"; return 0; }
     client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
     [ -n "$client_server" ] || return 0
-    client_json_tmp="$APP_DIR/anytls-reality-client.json.tmp.$$"
+    client_json_tmp=$(umask 077; mktemp "$APP_DIR/anytls-reality-client.json.tmp.XXXXXX") || return 1
     jq -n \
       --arg server "$client_server" \
       --arg server_port "$ANYREALITY_PORT" \
@@ -1745,9 +1945,9 @@ write_anyreality_client_json() {
       --arg public_key "$ANYREALITY_PUBLIC" \
       --arg short_id "$ANYREALITY_SID" \
       '{type:"anytls",tag:"anytls-reality",server:$server,server_port:($server_port|tonumber),password:$password,tls:{enabled:true,server_name:$server_name,utls:{enabled:true,fingerprint:"chrome"},reality:{enabled:true,public_key:$public_key,short_id:$short_id}}}' > "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
-    chmod 0600 "$client_json_tmp"
-    chown root:root "$client_json_tmp"
-    mv "$client_json_tmp" "$APP_DIR/anytls-reality-client.json"
+    chmod 0600 "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
+    chown root:root "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
+    mv -f "$client_json_tmp" "$APP_DIR/anytls-reality-client.json" || { rm -f "$client_json_tmp"; return 1; }
 }
 
 # Build a standalone sing-box client configuration for NaiveProxy.
@@ -1757,7 +1957,7 @@ write_naive_client_json() {
     [ "$ENABLE_NAIVE" = 1 ] || { rm -f "$APP_DIR/naive-client.json"; return 0; }
     client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
     [ -n "$client_server" ] || return 1
-    client_json_tmp="$APP_DIR/naive-client.json.tmp.$$"
+    client_json_tmp=$(umask 077; mktemp "$APP_DIR/naive-client.json.tmp.XXXXXX") || return 1
     if ! jq -n \
       --arg server "$client_server" \
       --arg server_port "$NAIVE_PORT" \
@@ -1784,7 +1984,7 @@ show_ss2022_node() {
 
 show_nodes() {
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
-    nodes_tmp="$APP_DIR/nodes.txt.tmp.$$"
+    nodes_tmp=$(umask 077; mktemp "$APP_DIR/nodes.txt.tmp.XXXXXX") || { warn '无法创建安全的节点信息临时文件。'; return 1; }
     {
         printf 'sing-box 节点信息（仅显示已安装协议）\n节点前缀：%s\n\n' "${NODE_PREFIX:-未设置}"
 
@@ -1952,32 +2152,27 @@ write_cf_credentials_for_add() {
     add_zone_value=$2
 
     if [ -n "$add_cf_value" ]; then
-        add_cf_tmp="${CF_TOKEN_FILE}.tmp.$$"
-        (umask 077; printf '%s' "$add_cf_value" > "$add_cf_tmp") || {
+        add_cf_tmp=$(umask 077; mktemp "${CF_TOKEN_FILE}.tmp.XXXXXX") || return 1
+        if ! printf '%s' "$add_cf_value" > "$add_cf_tmp" ||
+           ! chown root:root "$add_cf_tmp" || ! chmod 0600 "$add_cf_tmp" ||
+           ! mv -f "$add_cf_tmp" "$CF_TOKEN_FILE"; then
             rm -f "$add_cf_tmp"
             return 1
-        }
-        chown root:root "$add_cf_tmp" && chmod 0600 "$add_cf_tmp" &&
-            mv -f "$add_cf_tmp" "$CF_TOKEN_FILE" || {
-                rm -f "$add_cf_tmp"
-                return 1
-            }
+        fi
     fi
 
     if [ -n "$add_zone_value" ]; then
-        add_zone_tmp="${CF_ZONE_ID_FILE}.tmp.$$"
-        (umask 077; printf '%s' "$add_zone_value" > "$add_zone_tmp") || {
+        add_zone_tmp=$(umask 077; mktemp "${CF_ZONE_ID_FILE}.tmp.XXXXXX") || return 1
+        if ! printf '%s' "$add_zone_value" > "$add_zone_tmp" ||
+           ! chown root:root "$add_zone_tmp" || ! chmod 0600 "$add_zone_tmp" ||
+           ! mv -f "$add_zone_tmp" "$CF_ZONE_ID_FILE"; then
             rm -f "$add_zone_tmp"
             return 1
-        }
-        chown root:root "$add_zone_tmp" && chmod 0600 "$add_zone_tmp" &&
-            mv -f "$add_zone_tmp" "$CF_ZONE_ID_FILE" || {
-                rm -f "$add_zone_tmp"
-                return 1
-            }
+        fi
     else
         rm -f "$CF_ZONE_ID_FILE"
     fi
+    return 0
 }
 
 prepare_add_certificate() {
@@ -2656,9 +2851,7 @@ install_from_config() {
         setup_reload_hook
         case "$CERT_MODE" in
             cloudflare)
-                printf '%s' "$cf_token" > "$CF_TOKEN_FILE"; chmod 0600 "$CF_TOKEN_FILE"; chown root:root "$CF_TOKEN_FILE"
-                rm -f "$CF_ZONE_ID_FILE"
-                if [ -n "$zone_id" ]; then printf '%s' "$zone_id" > "$CF_ZONE_ID_FILE"; chmod 0600 "$CF_ZONE_ID_FILE"; fi
+                write_cf_credentials_for_add "$cf_token" "$zone_id" || err '无法安全写入 Cloudflare DNS-01 凭据。'
                 install_acme "$cert_email"
                 issue_cloudflare_cert "$TLS_DOMAIN" || err 'Cloudflare DNS-01 证书处理失败；请检查 Token 权限、Zone ID 和域名托管状态。'
                 ;;
@@ -3075,8 +3268,14 @@ change_cloudflare_zone() {
         current_zone_id=""
     fi
     ask_value '新 Cloudflare Zone ID（留空保留当前；输入 - 自动查询）' "$current_zone_id"
-    new_zone_id=$(trim_value "$REPLY")
-    [ "$new_zone_id" = '-' ] && new_zone_id=""
+    new_zone_id_input=$(trim_value "$REPLY")
+    if [ "$new_zone_id_input" = '-' ]; then
+        new_zone_id=""
+    elif [ -z "$new_zone_id_input" ]; then
+        new_zone_id=$current_zone_id
+    else
+        new_zone_id=$new_zone_id_input
+    fi
     if [ -n "$new_zone_id" ]; then
         case "$new_zone_id" in *[!A-Fa-f0-9]*) warn 'Zone ID 必须是 32 位十六进制字符串。'; return 0 ;; esac
         [ "${#new_zone_id}" -eq 32 ] || { warn 'Zone ID 必须是 32 位十六进制字符串，或留空自动查询。'; return 0; }
@@ -3090,11 +3289,11 @@ change_cloudflare_zone() {
 
     msg "将为 $new_cert_domain 使用 Cloudflare DNS-01 签发 TLS 证书。Zone ID 可自动查询；DNS API Token 留空则沿用当前 Token。"
 
-    backup_dir=$(mktemp -d) || { warn '无法创建临时证书备份目录。'; return 0; }
-    cp -p "$CERT_FILE" "$backup_dir/fullchain.pem" 2>/dev/null || true
-    cp -p "$KEY_FILE" "$backup_dir/privkey.pem" 2>/dev/null || true
-    cp -p "$CF_ZONE_ID_FILE" "$backup_dir/zone-id" 2>/dev/null || true
-    cp -p "$CF_TOKEN_FILE" "$backup_dir/cloudflare.token" 2>/dev/null || true
+    backup_dir=$(umask 077; mktemp -d) || { warn '无法创建临时证书备份目录。'; return 0; }
+    if [ -f "$CERT_FILE" ] && ! cp -p "$CERT_FILE" "$backup_dir/fullchain.pem"; then rm -rf "$backup_dir"; warn '无法备份当前证书；未修改 Cloudflare 设置。'; return 0; fi
+    if [ -f "$KEY_FILE" ] && ! cp -p "$KEY_FILE" "$backup_dir/privkey.pem"; then rm -rf "$backup_dir"; warn '无法备份当前私钥；未修改 Cloudflare 设置。'; return 0; fi
+    if [ -f "$CF_ZONE_ID_FILE" ] && ! cp -p "$CF_ZONE_ID_FILE" "$backup_dir/zone-id"; then rm -rf "$backup_dir"; warn '无法备份当前 Zone ID；未修改 Cloudflare 设置。'; return 0; fi
+    if [ -f "$CF_TOKEN_FILE" ] && ! cp -p "$CF_TOKEN_FILE" "$backup_dir/cloudflare.token"; then rm -rf "$backup_dir"; warn '无法备份当前 Cloudflare Token；未修改 Cloudflare 设置。'; return 0; fi
 
     old_zone=$CF_ZONE_NAME
     old_tls_domain=$TLS_DOMAIN
@@ -3102,26 +3301,12 @@ change_cloudflare_zone() {
     old_ws_server=$WS_SERVER
     old_preferred_ip=$PREFERRED_IP
 
-    if [ -n "$new_zone_id" ]; then
-        printf '%s' "$new_zone_id" > "$CF_ZONE_ID_FILE"
-        chmod 0600 "$CF_ZONE_ID_FILE"
-        chown root:root "$CF_ZONE_ID_FILE"
-    else
-        rm -f "$CF_ZONE_ID_FILE"
-    fi
-    if [ -n "$new_cf_token" ]; then
-        token_tmp="$CF_TOKEN_FILE.tmp.$$"
-        printf '%s' "$new_cf_token" > "$token_tmp" || {
-            rm -f "$token_tmp"
-            if [ -s "$backup_dir/zone-id" ]; then cp -p "$backup_dir/zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
-            if [ -s "$backup_dir/cloudflare.token" ]; then cp -p "$backup_dir/cloudflare.token" "$CF_TOKEN_FILE"; else rm -f "$CF_TOKEN_FILE"; fi
-            rm -rf "$backup_dir"
-            warn '无法写入新的 Cloudflare DNS API Token；已恢复原凭据。'
-            return 0
-        }
-        chmod 0600 "$token_tmp"
-        chown root:root "$token_tmp"
-        mv -f "$token_tmp" "$CF_TOKEN_FILE"
+    if ! write_cf_credentials_for_add "$new_cf_token" "$new_zone_id"; then
+        if [ -s "$backup_dir/zone-id" ]; then cp -p "$backup_dir/zone-id" "$CF_ZONE_ID_FILE"; else rm -f "$CF_ZONE_ID_FILE"; fi
+        if [ -s "$backup_dir/cloudflare.token" ]; then cp -p "$backup_dir/cloudflare.token" "$CF_TOKEN_FILE"; else rm -f "$CF_TOKEN_FILE"; fi
+        rm -rf "$backup_dir"
+        warn '无法安全写入新的 Cloudflare 凭据；已恢复原凭据。'
+        return 0
     fi
     CF_ZONE_NAME=$new_zone
     TLS_DOMAIN=$new_cert_domain
@@ -3920,13 +4105,37 @@ edit_selected_protocol() {
 remove_acme_cron_entry() {
     command -v crontab >/dev/null 2>&1 || return 0
     current_cron=$(crontab -l 2>/dev/null || true)
-    filtered_cron=$(printf '%s\n' "$current_cron" | grep -vF '/root/.acme.sh/acme.sh --cron --home /root/.acme.sh' || true)
+    has_begin=0; has_end=0
+    printf '%s\n' "$current_cron" | grep -Fqx "$ACME_CRON_BEGIN" && has_begin=1 || true
+    printf '%s\n' "$current_cron" | grep -Fqx "$ACME_CRON_END" && has_end=1 || true
+
+    if [ "$has_begin" -eq 0 ] && [ "$has_end" -eq 0 ]; then
+        if printf '%s\n' "$current_cron" | grep -Fq "$ACME_CRON_MATCH"; then
+            warn '发现未带 SB-MANAGER 标记的旧式 acme.sh Cron 任务；为避免误删用户任务，卸载时保留它。若确认该任务由旧版管理器创建，可在卸载后手动删除。'
+        fi
+        return 0
+    fi
+    if [ "$has_begin" -ne 1 ] || [ "$has_end" -ne 1 ]; then
+        warn 'Cron 管理标记不完整；为保护现有任务，未自动修改 root crontab。'
+        return 0
+    fi
+
+    filtered_cron=$(printf '%s\n' "$current_cron" | awk -v begin="$ACME_CRON_BEGIN" -v end="$ACME_CRON_END" '
+        $0 == begin { if (inside) bad=1; inside=1; found=1; next }
+        $0 == end { if (!inside) bad=1; else inside=0; next }
+        !inside { print }
+        END { if (inside || bad || !found) exit 2 }
+    ') || {
+        warn 'Cron 管理区块格式异常；为保护现有任务，未自动修改 root crontab。'
+        return 0
+    }
     if [ -n "$filtered_cron" ]; then
-        printf '%s\n' "$filtered_cron" | crontab - || warn '无法更新 root crontab；请手动检查 acme.sh 续期任务。'
+        printf '%s\n' "$filtered_cron" | crontab - || warn '无法移除 SB-MANAGER 管理的 acme.sh Cron 区块。'
     else
         crontab -r >/dev/null 2>&1 || true
     fi
 }
+
 
 save_uninstall_port_history() (
     [ -s "$STATE_FILE" ] || return 0
@@ -3954,25 +4163,29 @@ confirm_uninstall() {
 
 uninstall_manager() {
     need_root
+    if [ -f /etc/alpine-release ]; then OS_FAMILY=alpine
+    elif [ -f /etc/debian_version ]; then OS_FAMILY=debian
+    else err '仅支持 Debian 和 Alpine Linux。'; fi
+    detect_service_manager || warn '未检测到活动的 systemd / OpenRC；将继续清理服务文件。'
     save_uninstall_port_history || warn '无法保存重装用的协议端口记录；不会影响卸载。'
     cf_managed=0; [ ! -f "$APP_DIR/cloudflared-managed" ] || cf_managed=1
     msg '正在停止 sing-box / Cloudflare Tunnel 服务……'
-    if command -v systemctl >/dev/null 2>&1; then
+    if [ "$SERVICE_KIND" = systemd ]; then
         systemctl disable --now "$CLOUDFLARED_SERVICE" >/dev/null 2>&1 || true
         rm -f "/etc/systemd/system/$CLOUDFLARED_SERVICE.service"
         systemctl daemon-reload >/dev/null 2>&1 || true
-    elif command -v rc-service >/dev/null 2>&1; then
+    elif [ "$SERVICE_KIND" = openrc ]; then
         rc-service "$CLOUDFLARED_SERVICE" stop >/dev/null 2>&1 || true
         rc-update del "$CLOUDFLARED_SERVICE" default >/dev/null 2>&1 || true
         rm -f "/etc/init.d/$CLOUDFLARED_SERVICE"
     fi
     rm -f "$CLOUDFLARED_RUN"
-    if command -v systemctl >/dev/null 2>&1; then
+    if [ "$SERVICE_KIND" = systemd ]; then
         systemctl disable --now sing-box >/dev/null 2>&1 || true
         rm -f /etc/systemd/system/sing-box.service
         systemctl daemon-reload >/dev/null 2>&1 || true
         systemctl reset-failed sing-box >/dev/null 2>&1 || true
-    elif command -v rc-service >/dev/null 2>&1; then
+    elif [ "$SERVICE_KIND" = openrc ]; then
         rc-service sing-box stop >/dev/null 2>&1 || true
         rc-update del sing-box default >/dev/null 2>&1 || true
         rm -f /etc/init.d/sing-box
@@ -3990,15 +4203,16 @@ uninstall_manager() {
         if [ -f "$APP_DIR/managed-apk-core" ] && command -v apk >/dev/null 2>&1 && apk info -e sing-box >/dev/null 2>&1; then
             apk del sing-box || warn 'sing-box apk 软件包卸载失败，请检查 apk 日志。'
         fi
-        rm -f /etc/init.d/sing-box
+        rm -f /etc/init.d/sing-box "/etc/init.d/$CLOUDFLARED_SERVICE"
     elif [ -f /etc/debian_version ]; then
         if [ -f "$APP_DIR/managed-apt-core" ] && debian_core_is_installed; then
             DEBIAN_FRONTEND=noninteractive apt-get purge -y sing-box || warn 'sing-box apt 软件包卸载失败，请手动执行 apt-get purge sing-box。'
         fi
-        rm -f /etc/systemd/system/sing-box.service
+        rm -f /etc/systemd/system/sing-box.service "/etc/systemd/system/$CLOUDFLARED_SERVICE.service"
+        rm -f /etc/init.d/sing-box "/etc/init.d/$CLOUDFLARED_SERVICE"
         [ ! -f "$APP_DIR/managed-apt-source" ] || rm -f /etc/apt/sources.list.d/sagernet.sources
         [ ! -f "$APP_DIR/managed-apt-key" ] || rm -f /etc/apt/keyrings/sagernet.asc
-        systemctl daemon-reload >/dev/null 2>&1 || true
+        if [ "$SERVICE_KIND" = systemd ]; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
     fi
     [ ! -f "$APP_DIR/managed-release-core" ] || rm -f "$MANAGED_SB_BIN"
     rm -rf "$APP_DIR"
@@ -4062,7 +4276,7 @@ menu() {
     derive_runtime_needs
     enable_bbr
     while :; do
-        printf '\n========== sing-box 节点管理 ==========' 
+        printf '\n========== sing-box 节点管理 =========='
         printf '\n源站 IPv4/域名：%s | 源站 IPv6：%s' "${ORIGIN_ADDR:-未设置}" "${ORIGIN_IPV6:-未设置}"
         printf '\nWS 单一连接地址：%s' "${WS_SERVER:-未设置}"
         printf '\nTLS 证书域名 / TLS SNI（证书协议）：%s' "${TLS_DOMAIN:-不需要（Argo WS 使用 $ARGO_HOST）}"
@@ -4071,7 +4285,7 @@ menu() {
             printf '\n固定 Tunnel：%s | Public Hostname：%s | 连接地址：%s | 本机端口：%s' "${ARGO_TUNNEL_NAME:-未命名}" "$ARGO_HOST" "$ARGO_SERVER" "$ARGO_PORT"
         fi
         [ "$ENABLE_SS2022" = 0 ] || printf '\nShadowsocks 2022：%s/tcp + udp' "$SS2022_PORT"
-        printf '\nReality SNI（VLESS Reality + AnyTLS Reality；默认 www.bing.com）：%s' "$REALITY_SNI" 
+        printf '\nReality SNI（VLESS Reality + AnyTLS Reality；默认 www.bing.com）：%s' "$REALITY_SNI"
         printf '\n节点前缀：%s' "${NODE_PREFIX:-未设置}"
         printf '\n端口：AnyTLS %s | WS TLS %s | VLESS Reality %s | NaiveProxy %s/TCP | AnyTLS Reality %s' "$ANYTLS_PORT" "$WS_PORT" "$REALITY_PORT" "$NAIVE_PORT" "$ANYREALITY_PORT"
         printf '\n---------------------------------------\n'
@@ -4141,6 +4355,7 @@ install_manager_command() {
 
 main() {
     need_root
+    acquire_manager_lock
     if [ "${1:-}" = bbr ] || [ "${1:-}" = bbr-status ]; then
         if [ -f /etc/alpine-release ]; then
             OS_FAMILY=alpine
@@ -4180,7 +4395,10 @@ main() {
         fi
         load_state
         derive_runtime_needs
-        if [ -f /etc/alpine-release ]; then OS_FAMILY=alpine; SERVICE_KIND=openrc; else OS_FAMILY=debian; SERVICE_KIND=systemd; fi
+        if [ -f /etc/alpine-release ]; then OS_FAMILY=alpine
+        elif [ -f /etc/debian_version ]; then OS_FAMILY=debian
+        else err '仅支持 Debian 和 Alpine Linux。'; fi
+        detect_service_manager || err '未检测到正在运行的 systemd 或可用的 OpenRC 服务管理器。'
         SB_BIN="$(resolve_sing_box_binary 2>/dev/null || printf /usr/bin/sing-box)"
         case "${1:-}" in
             install|--install) overlay_install ;;

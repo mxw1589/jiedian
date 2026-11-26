@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#f3f6fb">
-<title>sing-box Linux 安装与管理面板 v1.4.0</title>
+<title>sing-box Linux 安装与管理面板 v1.4.3</title>
 <style>
 :root{color-scheme:light;--bg:#f3f6fb;--surface:#fff;--soft:#f8faff;--line:#dce4ef;--line2:#c8d5e5;--text:#17243a;--muted:#64748b;--blue:#2563eb;--green:#15803d;--greenbg:#f0fdf4;--amber:#92400e;--amberbg:#fffbeb;--red:#b91c1c}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.55 Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1160px;margin:auto;padding:16px 16px 30px}header{padding:15px 18px;margin-bottom:12px;background:#fff;border:1px solid var(--line);border-radius:14px}h1{font-size:23px;line-height:1.25;margin:0 0 5px}.sub,.small,.hint{color:var(--muted)}.sub{font-size:12px}.legend{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:9px;font-size:11px;color:var(--muted)}.mark{display:inline-block;border-radius:5px;padding:1px 6px;font-size:10px;font-style:normal;font-weight:700;vertical-align:middle;margin-left:4px}.req{color:#b91c1c;background:#fef2f2;border:1px solid #fecaca}.opt{color:#475569;background:#f1f5f9;border:1px solid #e2e8f0}.def{color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe}.layout{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}.panel{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:15px}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}.panel h2{font-size:15px;line-height:1.3;margin:0}.panel h3{font-size:12px;margin:10px 0 7px;color:#33445d}.badge{font-size:10px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:2px 7px;white-space:nowrap;font-weight:650}.protocols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.protocol{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:9px;background:var(--soft);padding:8px;cursor:pointer;min-width:0}.protocol input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--blue)}.protocol b{font-size:12px}.protocol small{display:block;font-size:10px;color:var(--muted);line-height:1.35}.subpanel{margin-top:11px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#fbfdff}.subhead{font-size:12px;font-weight:750;margin-bottom:7px;color:#263b59}.field{display:grid;grid-template-columns:175px minmax(0,1fr);align-items:center;gap:8px;margin:7px 0}.field label{font-size:11px;font-weight:650;color:#33445d}.field input,.field select{width:100%;min-width:0;background:#fff;border:1px solid var(--line2);border-radius:7px;padding:7px 9px;color:var(--text);font-family:inherit;font-size:12px;line-height:1.3;outline:none}.field input:focus,.field select:focus,.port input:focus{border-color:#60a5fa;box-shadow:0 0 0 2px #3b82f61f}.field input:disabled,.field select:disabled,.port input:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}.field input::placeholder{color:#94a3b8}.hint{grid-column:2;font-size:10px;line-height:1.35;margin-top:-4px}.divider{height:1px;background:var(--line);margin:10px 0}.portgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.port{border:1px solid var(--line);border-radius:8px;padding:7px;background:var(--soft);min-width:0}.port label{display:block;font-size:10px;font-weight:650;color:#33445d;margin-bottom:4px}.port input{width:100%;border:1px solid var(--line2);border-radius:6px;padding:6px;color:var(--text);font-family:inherit;font-size:12px;min-width:0}.notice{margin-top:9px;padding:8px 10px;border:1px solid #f5d48a;background:var(--amberbg);color:#854d0e;border-radius:8px;font-size:11px;line-height:1.5}.notice.ok{border-color:#bbf7d0;background:var(--greenbg);color:#166534}.notice.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.hidden{display:none!important}.advanced{margin-top:7px;border-top:1px dashed var(--line2);padding-top:7px}.advanced summary,details summary{cursor:pointer;color:#1d4ed8;font-size:11px;font-weight:650}.actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}button{border:1px solid var(--blue);background:#2563eb;color:white;border-radius:7px;padding:7px 11px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer}button.secondary{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}button.ghost{background:white;border-color:var(--line2);color:#33445d}button:disabled{opacity:.45;cursor:not-allowed}.commands{margin-top:12px}.commandgrid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(260px,.65fr);gap:10px}.commandcard{min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}.commandhead{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;font-size:12px;font-weight:750}.commandhead span{font-size:10px;font-weight:500;color:var(--muted)}.command{display:block;width:100%;min-height:138px;resize:vertical;background:#f8fafc;color:#17243a;border:1px solid var(--line2);border-radius:7px;padding:9px;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto}.command.short{min-height:72px}.status{font-size:11px;margin:5px 0;color:var(--muted)}.status.ok{color:var(--green)}.status.error{color:var(--red)}.help{margin-top:10px}.help details{border:1px solid var(--line);border-radius:9px;background:#fff;padding:9px 11px}.help ol{margin:7px 0 0 18px;padding:0}.footer{text-align:center;color:#718096;font-size:10px;padding-top:15px}.footnote{font-size:10px;color:var(--muted);margin-top:7px;line-height:1.45}
@@ -169,6 +169,8 @@
 <script>
 "use strict";
 const RAW_URL="https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh";
+const EXPECTED_VERSION="1.4.3";
+const EXPECTED_SHA256="0a10941a4bcb41171f119e20f9dc353b0f426cbdb7835d49a1f2645d7eea482e";
 const UNINSTALL_COMMAND="/usr/local/sbin/sb-manager uninstall";
 const $=id=>document.getElementById(id);
 const ids=["pAnytls","pWs","pArgo","pSS2022","pReality","pNaive","pAnyReality","argoServer","argoHost","argoTunnelName","argoToken","directWsHost","wsServer","shareWsAddress","nodePrefix","originIPv4","originIPv6","realitySni","tlsDomain","portAnytls","portWs","portArgo","portSS2022","portReality","portNaive","portAnyReality"];
@@ -235,7 +237,7 @@ function refreshHistory(listId){
   }));
 }
 function rememberAddress(id){
-  if(!Object.hasOwn(historyFields,id)||$(id).disabled)return;
+  if(!Object.prototype.hasOwnProperty.call(historyFields,id)||$(id).disabled)return;
   const listId=historyFields[id],value=v(id);
   if(!historyValidators[listId](value))return;
   addressHistory[listId]=[value,...addressHistory[listId].filter(previous=>previous!==value)].slice(0,8);
@@ -277,7 +279,30 @@ if sh -eu <<'SB_INSTALL'
 umask 077
 CFG="$(mktemp)"
 SH="$(mktemp)"
-trap 'rm -f "$CFG" "$SH"' EXIT
+MANAGER_DIR=/usr/local/sbin
+MANAGER_PATH="$MANAGER_DIR/sb-manager"
+MANAGER_TMP="$MANAGER_DIR/.sb-manager.new.$$"
+MANAGER_BACKUP="$MANAGER_DIR/.sb-manager.backup.$$"
+HAD_OLD=0
+NEW_INSTALLED=0
+INSTALL_OK=0
+cleanup() {
+  rm -f "$CFG" "$SH" "$MANAGER_TMP"
+  if [ "$NEW_INSTALLED" -eq 1 ] && [ "$INSTALL_OK" -eq 0 ]; then
+    if [ "$HAD_OLD" -eq 1 ] && [ -f "$MANAGER_BACKUP" ]; then
+      if mv -f "$MANAGER_BACKUP" "$MANAGER_PATH"; then MANAGER_BACKUP=""
+      else echo "警告：旧管理器恢复失败；备份保留在 $MANAGER_BACKUP" >&2; fi
+    else
+      rm -f "$MANAGER_PATH"
+    fi
+  fi
+  [ -z "$MANAGER_BACKUP" ] || rm -f "$MANAGER_BACKUP"
+  return 0
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 printf '%s' '${encoded}' | base64 -d > "$CFG"
 chmod 600 "$CFG"
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
@@ -285,14 +310,47 @@ if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   elif [ -f /etc/debian_version ]; then apt-get update && apt-get install -y curl
   else echo '需要 curl 或 wget 才能下载安装脚本。'; exit 1; fi
 fi
-if command -v curl >/dev/null 2>&1; then curl -fsSL '${RAW_URL}' -o "$SH"
-else wget -qO "$SH" '${RAW_URL}'; fi
+if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 180 '${RAW_URL}' -o "$SH"
+else wget -q -T 180 -O "$SH" '${RAW_URL}'; fi
 head -n 1 "$SH" | grep -qx '#!/bin/sh'
+grep -qx '# PROJECT_VERSION=${EXPECTED_VERSION}' "$SH"
 grep -q 'WEB_CONFIG_MODE=1' "$SH"
-grep -q 'WEB_CONFIG_SCHEMA=8' "$SH" && grep -q 'WEB_WS_PREFERENCES=1' "$SH" && grep -q 'WEB_PORT_REUSE=1' "$SH" || { echo '线上安装脚本版本过旧；请先同步 HTML 和 Shell 脚本，再重新生成命令。'; exit 1; }
-install -m 700 "$SH" /usr/local/sbin/sb-manager
-rm -f "$SH"
-/usr/local/sbin/sb-manager install-web-config "$CFG"
+grep -q 'WEB_CONFIG_SCHEMA=8' "$SH"
+grep -q 'WEB_WS_PREFERENCES=1' "$SH"
+grep -q 'WEB_PORT_REUSE=1' "$SH"
+grep -q 'WEB_CERT_ROLLBACK=1' "$SH"
+grep -q 'WEB_SERVICE_MANAGER_DETECT=1' "$SH"
+grep -q 'WEB_SECURE_TMPFILES=1' "$SH"
+grep -q 'WEB_INSTALL_INTEGRITY=1' "$SH"
+grep -q 'WEB_CRON_OWNERSHIP=1' "$SH"
+grep -q 'WEB_ACME_CREDENTIAL_ROLLBACK=1' "$SH"
+grep -q 'WEB_MANAGER_LOCK=1' "$SH"
+grep -q 'WEB_OPENRC_RUNTIME_CHECK=1' "$SH"
+sh -n "$SH"
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_SHA256=$(sha256sum "$SH" | awk '{print $1}')
+elif command -v busybox >/dev/null 2>&1; then
+  ACTUAL_SHA256=$(busybox sha256sum "$SH" 2>/dev/null | awk '{print $1}')
+else
+  echo '系统缺少 SHA-256 校验工具；为避免安装未经校验的脚本，已停止。' >&2
+  exit 1
+fi
+[ "$ACTUAL_SHA256" = '${EXPECTED_SHA256}' ] || { echo '安装脚本 SHA-256 校验失败；文件可能不完整或与当前网页版本不匹配。' >&2; exit 1; }
+install -d -m 0755 "$MANAGER_DIR"
+if [ -f "$MANAGER_PATH" ]; then
+  cp -p "$MANAGER_PATH" "$MANAGER_BACKUP"
+  HAD_OLD=1
+fi
+install -m 0700 "$SH" "$MANAGER_TMP"
+sh -n "$MANAGER_TMP"
+mv -f "$MANAGER_TMP" "$MANAGER_PATH"
+NEW_INSTALLED=1
+if "$MANAGER_PATH" install-web-config "$CFG"; then
+  INSTALL_OK=1
+else
+  echo '安装未完成；正在恢复原管理器脚本。' >&2
+  exit 1
+fi
 SB_INSTALL
 then
   :
@@ -324,7 +382,7 @@ function syncUI(){
   $("argoHelp").classList.toggle("hidden",!argo);
 }
 async function copyText(t){try{await navigator.clipboard.writeText(t);alert("已复制到剪贴板。");}catch{const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();const ok=document.execCommand("copy");a.remove();alert(ok?"已复制。":"复制失败，请手动复制。");}}
-function download(name,text,type="text/plain;charset=utf-8"){const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
+function download(name,text,type="text/plain;charset=utf-8"){const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.style.display="none";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function render(){
   syncUI();
   const status=$("formStatus"),out=$("commandOutput"),buttons=["copyOutput","downloadOutput","exportConfig","downloadBoth"];

@@ -26,7 +26,16 @@ assert ids_arr
 for ref in re.findall(r'"([^"]+)"', ids_arr.group(1)):
     assert ref in ids, f"event binding references missing DOM id: {ref}"
 
+assert 'v1.4.3' in html and 'PROJECT_VERSION=1.4.3' in shell
 assert 'schema:8' in html
+assert 'WEB_CERT_ROLLBACK=1' in shell and 'WEB_SERVICE_MANAGER_DETECT=1' in shell and 'WEB_SECURE_TMPFILES=1' in shell
+assert "grep -q 'WEB_CERT_ROLLBACK=1' \"$SH\"" in html
+assert 'EXPECTED_VERSION=\"1.4.3\"' in html
+assert 'EXPECTED_SHA256=\"' in html
+assert 'sh -n \"$SH\"' in html and 'sha256sum \"$SH\"' in html
+assert 'MANAGER_BACKUP=\"$MANAGER_DIR/.sb-manager.backup.$$\"' in html
+assert 'mv -f \"$MANAGER_TMP\" \"$MANAGER_PATH\"' in html
+assert "--connect-timeout 10 --max-time 180 '${RAW_URL}'" in html and 'wget -q -T 180' in html
 assert 'cert_mode:certMode' in html and 'const certMode=certNeeded?"http01":"none"' in html
 assert 'id="cfZone"' not in html and 'id="cfToken"' not in html
 assert 'id="nodePrefix"' in html and 'node_prefix:v("nodePrefix")' in html
@@ -38,8 +47,22 @@ assert 'tag="${NODE_PREFIX}-${family_lc}-${address}"' in shell
 assert 'ss://%s@%s:%s#%s' in shell
 assert "openssl base64 -A | tr '+/' '-_' | tr -d '='" in shell
 assert "snell" not in shell.lower(), "Snell code appeared unexpectedly; audit assumptions changed"
+assert '[ "${web_schema:-}" = 8 ]' in shell
+assert 'install_acme_cert_pair' in shell
+assert 'detect_service_manager' in shell and 'systemd_run_dir=/run/systemd/system' in shell and 'openrc_run_dir=/run/openrc' in shell
+assert 'STATE=${SB_MANAGER_STATE_FILE:-/etc/sing-box/manager.json}' in shell
+assert 'cert_pub=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null)' in shell
+assert 'PROJECT_VERSION=1.4.3' in shell
+assert 'Object.prototype.hasOwnProperty.call(historyFields,id)' in html
+assert 'setTimeout(()=>URL.revokeObjectURL(url),1000)' in html
+assert 'WEB_INSTALL_INTEGRITY=1' in shell and 'WEB_CRON_OWNERSHIP=1' in shell
+assert 'WEB_ACME_CREDENTIAL_ROLLBACK=1' in shell and 'WEB_MANAGER_LOCK=1' in shell
+assert 'WEB_OPENRC_RUNTIME_CHECK=1' in shell
 print("PASS: HTML IDs and JavaScript DOM references")
 print("PASS: schema 8 + HTTP-01 no-CF-credentials config")
 print("PASS: node-prefix field and prefix-first server naming")
 print("PASS: Shadowsocks 2022 SIP002 URL construction")
+print("PASS: schema 8 strict port handling + rollback-safe ACME cert installation")
+print("PASS: secure client/node temp files and delayed browser download URL cleanup")
+print("PASS: active systemd/OpenRC detection and certificate-aware renewal hook")
 print("NOTE: Snell is absent from supplied Shell source; no fake Snell node is emitted")
