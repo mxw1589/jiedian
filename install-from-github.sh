@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Example:
-# REPAIR_KIT_REPO=OWNER/REPO REPAIR_KIT_REF=v1.1.0 REPAIR_KIT_REF_KIND=tag bash install-from-github.sh
+# REPAIR_KIT_REPO=OWNER/REPO REPAIR_KIT_REF=v1.2.0 REPAIR_KIT_REF_KIND=tag bash install-from-github.sh
 REPO="${REPAIR_KIT_REPO:-}"
 REF="${REPAIR_KIT_REF:-main}"
 REF_KIND="${REPAIR_KIT_REF_KIND:-branch}"

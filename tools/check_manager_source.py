@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-USER_AGENT = "sing-box-yg-repair-kit/1.1.0 (read-only GitHub source diagnostic)"
+USER_AGENT = "sing-box-yg-repair-kit/1.2.0 (read-only GitHub source diagnostic)"
 
 
 class FetchError(Exception):

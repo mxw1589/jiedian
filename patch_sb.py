@@ -3,6 +3,7 @@
 from pathlib import Path
 import datetime
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,9 +18,20 @@ STTY_NEW = r"""if [[ -t 0 && -t 1 ]]; then
     stty erase $'\b' 2>/dev/null || stty erase '^H' 2>/dev/null
 fi"""
 
-DEPS_OLD = """touch sbyg_update
-fi
-if [[ $vi = openvz ]]; then"""
+# The upstream v26.4.11 script may contain zero or more blank lines between
+# the first-run marker's closing `fi` and the OpenVZ branch. Match only this
+# narrow structural sequence; do not skip non-blank statements or accept
+# multiple candidates. This handles the exact layout reported by users:
+#   touch sbyg_update
+#   fi
+#
+#   if [[ $vi = openvz ]]; then
+DEPS_ANCHOR_RE = re.compile(
+    r"(?m)^(?P<prefix>[ \t]*touch[ \t]+sbyg_update[ \t]*\r?\n"
+    r"[ \t]*fi[ \t]*\r?\n)"
+    r"(?:[ \t]*\r?\n)*"
+    r"(?P<openvz>[ \t]*if[ \t]+\[\[[ \t]*\$vi[ \t]*=[ \t]*openvz[ \t]*\]\];[ \t]*then[ \t]*\r?)$"
+)
 
 DEPS_NEW = """touch sbyg_update
 fi
@@ -86,26 +98,60 @@ if [[ "$tls" = "false" ]]; then"""
 MARKER = "# BEGIN SING-BOX-YG RUNTIME DEPENDENCY SELF-HEAL"
 
 def patch_text(source: str):
+    original_source = source
+    is_crlf = "\r\n" in source and source.count("\n") == source.count("\r\n")
+    # Normalize only in memory for matching; restore the original newline
+    # convention after constructing the patch. No on-disk file is touched here.
+    if is_crlf:
+        source = source.replace("\r\n", "\n")
+
     if MARKER in source:
         required = [
             "if [[ -t 0 && -t 1 ]]; then",
+            "# END SING-BOX-YG RUNTIME DEPENDENCY SELF-HEAL",
             "Never interpret an empty result as TLS enabled.",
             "jq -r '.inbounds[1].tls.enabled // empty'",
         ]
         if not all(item in source for item in required):
             raise RuntimeError("检测到不完整的旧补丁；为避免重复或错误修改，已停止。")
-        return source, False
+        return original_source, False
 
-    if source.count(STTY_OLD) != 1:
-        raise RuntimeError("stty 原始代码未能唯一匹配；文件可能不是官方 v26.4.11 原版。")
-    if source.count(DEPS_OLD) != 1:
-        raise RuntimeError("首次依赖安装区未能唯一匹配；文件可能已被修改或版本不同。")
-    if source.count(ARGO_OLD) != 1:
-        raise RuntimeError("Argo TLS 判断区未能唯一匹配；文件可能已被修改或版本不同。")
+    stty_count = source.count(STTY_OLD)
+    if stty_count != 1:
+        raise RuntimeError(
+            f"stty 原始代码未能唯一匹配（匹配数：{stty_count}）；"
+            "文件可能不是预期的 v26.4.11 结构。"
+        )
+
+    dependency_matches = list(DEPS_ANCHOR_RE.finditer(source))
+    if len(dependency_matches) != 1:
+        raise RuntimeError(
+            "首次依赖安装区结构未能唯一匹配 "
+            f"（匹配数：{len(dependency_matches)}）。"
+            "补丁支持 touch sbyg_update、fi 与 OpenVZ 判断之间存在空行的布局；"
+            "若仍不匹配，说明源码结构不同或被修改，已停止。"
+        )
+
+    argo_count = source.count(ARGO_OLD)
+    if argo_count != 1:
+        raise RuntimeError(
+            f"Argo TLS 判断区未能唯一匹配（匹配数：{argo_count}）；"
+            "文件可能已被修改或版本不同。"
+        )
 
     result = source.replace(STTY_OLD, STTY_NEW, 1)
-    result = result.replace(DEPS_OLD, DEPS_NEW, 1)
+    dependency_match = DEPS_ANCHOR_RE.search(result)
+    if dependency_match is None:
+        raise RuntimeError("依赖区锚点在补丁过程中丢失；未写入目标文件。")
+    dependency_replacement = DEPS_NEW
+    result = (
+        result[:dependency_match.start()]
+        + dependency_replacement
+        + result[dependency_match.end():]
+    )
     result = result.replace(ARGO_OLD, ARGO_NEW, 1)
+    if is_crlf:
+        result = result.replace("\n", "\r\n")
     return result, True
 
 def load_and_validate():
