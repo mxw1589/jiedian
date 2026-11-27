@@ -1,4 +1,4 @@
-# NaiveProxy 配置与排障指南（Jiedian Manager 1.4.8）
+# NaiveProxy 配置与排障指南（Jiedian Manager 1.4.9）
 
 ## 1. 服务端条件
 

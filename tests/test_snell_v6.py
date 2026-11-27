@@ -154,5 +154,5 @@ with tempfile.TemporaryDirectory(prefix="jiedian-snell-state-") as td:
     assert subprocess.run(["sh", str(harness)]).returncode != 0
 print("PASS: real manager state validator accepts valid Snell v6 state and rejects short PSK / unsafe mode")
 
-assert '"schema == 9"' not in SOURCE  # keep this test focused on emitted protocol config.
+assert '"schema:10"' not in SOURCE  # shell manager validates the web schema, not JS object syntax.
 print("PASS: Snell v6 source invariants")

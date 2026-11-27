@@ -1,12 +1,13 @@
 #!/bin/sh
 # sing-box single-VPS multi-protocol manager for Debian + Alpine
-# PROJECT_VERSION=1.4.8
+# PROJECT_VERSION=1.4.9
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy + Snell v6
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
-# CLI port conflicts may fall back; web Schema 7/8/9 conflicts fail closed; Cloudflare DNS-01 or HTTP-01
+# CLI port conflicts may fall back; web Schema 7/8/9/10 conflicts fail closed; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_NAIVE_DOMAIN_URI=1; WEB_NAIVE_H2_ALPN=1; WEB_NAIVE_UOT_CLIENT=1; WEB_NAIVE_DIAGNOSTICS=1
-# WEB_CONFIG_SCHEMA=9; WEB_CONFIG_SCHEMA=8; WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
+# WEB_CONFIG_SCHEMA=10; WEB_CONFIG_SCHEMA=9; WEB_CONFIG_SCHEMA=8; WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
+# WEB_PROTOCOL_POLICY=1; preserve unselected existing protocols or replace with selected set
 # WEB_SNELL_V6=1; requires sing-box >= 1.14.0; emits protected sing-box client JSON
 # WEB_WS_PREFERENCES=1
 # WEB_PORT_REUSE=1
@@ -635,7 +636,7 @@ assign_ports() {
 
     used_ports=""
     reserved_ports=""
-    if [ "${web_schema:-}" = 7 ] || [ "${web_schema:-}" = 8 ] || [ "${web_schema:-}" = 9 ] || [ "$PORT_HISTORY" != '{}' ]; then
+    if [ "${web_schema:-}" = 7 ] || [ "${web_schema:-}" = 8 ] || [ "${web_schema:-}" = 9 ] || [ "${web_schema:-}" = 10 ] || [ "$PORT_HISTORY" != '{}' ]; then
         reserved_ports="$ANYTLS_PORT $WS_PORT $ARGO_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $SS2022_PORT $SNELL_V6_PORT"
     fi
     if [ "$PORT_HISTORY" != '{}' ]; then
@@ -665,7 +666,7 @@ assign_ports() {
         if [ -n "$item_port" ]; then
             case " $used_ports " in
                 *" $item_port "*)
-                    [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] && [ "${web_schema:-}" != 9 ] || err "$protocol_name 的端口 $item_port 与其他所选协议重复。请修改网页端口后重试。"
+                    [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] && [ "${web_schema:-}" != 9 ] && [ "${web_schema:-}" != 10 ] || err "$protocol_name 的端口 $item_port 与其他所选协议重复。请修改网页端口后重试。"
                     warn "$protocol_name 指定端口 $item_port 与已选择协议重复；将自动随机分配。"
                     item_port=""
                     PORT_FALLBACK_USED=1
@@ -674,7 +675,7 @@ assign_ports() {
                     if ! check_udp_port="$([ "$protocol_name" = 'Shadowsocks 2022' ] && printf 1 || printf 0)" manual_port_available "$item_port" \
                         "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" \
                         "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" "${PREVIOUS_ARGO_PORT:-}" "${PREVIOUS_SS2022_PORT:-}" "${PREVIOUS_SNELL_V6_PORT:-}"; then
-                        [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] && [ "${web_schema:-}" != 9 ] || err "$protocol_name 的端口 $item_port 已被占用。请修改网页端口后重试。"
+                        [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] && [ "${web_schema:-}" != 9 ] && [ "${web_schema:-}" != 10 ] || err "$protocol_name 的端口 $item_port 已被占用。请修改网页端口后重试。"
                         warn "$protocol_name 指定 TCP 端口 $item_port 已被其他程序占用；将自动随机分配。"
                         item_port=""
                         PORT_FALLBACK_USED=1
@@ -3331,6 +3332,100 @@ capture_web_state() {
     fi
 }
 
+
+apply_web_protocol_policy() {
+    [ "${web_protocol_sync:-0}" = 1 ] || return 0
+    [ "${web_protocol_policy:-replace}" = preserve ] || return 0
+
+    # Preserve mode is additive: selected protocols may be added/updated,
+    # while every previously enabled but unselected protocol remains enabled.
+    web_requested_anytls=$ENABLE_ANYTLS
+    web_requested_ws=$ENABLE_WS_TLS
+    web_requested_argo=$ENABLE_WS_ARGO
+    web_requested_ss2022=$ENABLE_SS2022
+    web_requested_reality=$ENABLE_VLESS_REALITY
+    web_requested_naive=$ENABLE_NAIVE
+    web_requested_anyreality=$ENABLE_ANYTLS_REALITY
+    web_requested_snell_v6=$ENABLE_SNELL_V6
+
+    web_preserve_old_tls=0
+    web_preserve_old_reality=0
+    web_preserve_old_argo=0
+    web_preserve_old_snell=0
+
+    if [ "$web_old_enable_anytls" = 1 ]; then
+        [ "$web_requested_anytls" = 1 ] || web_preserve_old_tls=1
+        ENABLE_ANYTLS=1
+    fi
+    if [ "$web_old_enable_ws" = 1 ]; then
+        [ "$web_requested_ws" = 1 ] || web_preserve_old_tls=1
+        ENABLE_WS_TLS=1
+    fi
+    if [ "$web_old_enable_naive" = 1 ]; then
+        [ "$web_requested_naive" = 1 ] || web_preserve_old_tls=1
+        ENABLE_NAIVE=1
+    fi
+    if [ "$web_old_enable_argo" = 1 ]; then
+        [ "$web_requested_argo" = 1 ] || web_preserve_old_argo=1
+        ENABLE_WS_ARGO=1
+    fi
+    if [ "$web_old_enable_ss2022" = 1 ]; then ENABLE_SS2022=1; fi
+    if [ "$web_old_enable_reality" = 1 ]; then
+        [ "$web_requested_reality" = 1 ] || web_preserve_old_reality=1
+        ENABLE_VLESS_REALITY=1
+    fi
+    if [ "$web_old_enable_anyreality" = 1 ]; then
+        [ "$web_requested_anyreality" = 1 ] || web_preserve_old_reality=1
+        ENABLE_ANYTLS_REALITY=1
+    fi
+    if [ "$web_old_enable_snell_v6" = 1 ]; then
+        [ "$web_requested_snell_v6" = 1 ] || web_preserve_old_snell=1
+        ENABLE_SNELL_V6=1
+    fi
+
+    # TLS domain and certificate mode are shared by AnyTLS, NaiveProxy and
+    # direct WS. If any old TLS protocol is being kept untouched, retain its
+    # shared certificate identity rather than silently changing old nodes.
+    if [ "$web_preserve_old_tls" = 1 ]; then
+        if [ -n "$TLS_DOMAIN" ] && [ "$TLS_DOMAIN" != "$web_old_tls_domain" ]; then
+            err '保留旧协议时，仍保留的 TLS 协议共用原证书域名；请恢复原域名，或选择“不保留以前的协议”后再更改。'
+        fi
+        TLS_DOMAIN=$web_old_tls_domain
+        case "$web_old_cert_mode" in
+            standalone) cert_mode=http01 ;;
+            cloudflare|manual) cert_mode=$web_old_cert_mode ;;
+            *) err '无法识别旧 TLS 证书模式；为避免影响保留节点，停止同步。' ;;
+        esac
+        CF_ZONE_NAME=${CF_ZONE_NAME:-$web_old_cf_zone_name}
+        cf_token=${cf_token:-$web_old_cf_token}
+        zone_id=${zone_id:-$web_old_cf_zone_id}
+    fi
+
+    # Reality SNI is shared by both Reality inbounds.
+    if [ "$web_preserve_old_reality" = 1 ]; then
+        if [ -n "$REALITY_SNI" ] && [ "$REALITY_SNI" != "$web_old_reality_sni" ]; then
+            err '保留旧 Reality 协议时不能更改共享 SNI；请恢复原 SNI，或选择“不保留以前的协议”后再更改。'
+        fi
+        REALITY_SNI=$web_old_reality_sni
+    fi
+
+    if [ "$web_preserve_old_argo" = 1 ]; then
+        ARGO_HOST=${ARGO_HOST:-$web_old_argo_host}
+        ARGO_SERVER=${ARGO_SERVER:-$web_old_argo_server}
+        ARGO_TUNNEL_NAME=${ARGO_TUNNEL_NAME:-$web_old_argo_tunnel_name}
+        ARGO_TOKEN=${ARGO_TOKEN:-$web_old_argo_token}
+    fi
+
+    if [ "$web_preserve_old_snell" = 1 ]; then
+        SNELL_V6_MODE=$web_old_snell_v6_mode
+    fi
+
+    # Address and node prefix are shared presentation / client-link settings.
+    ORIGIN_ADDR=${ORIGIN_ADDR:-$web_old_origin_addr}
+    ORIGIN_IPV6=${ORIGIN_IPV6:-$web_old_origin_ipv6}
+    NODE_PREFIX=${NODE_PREFIX:-$web_old_node_prefix}
+}
+
 restore_web_file() {
     if [ -f "$1" ]; then cp -p "$1" "$2"; else rm -f "$2"; fi
 }
@@ -3376,7 +3471,11 @@ apply_web_selection() (
     trap 'restore_web_sync "$?"' 0
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    msg '正在按网页勾选同步：新增所选协议、更新保留节点，并移除未勾选协议。'
+    if [ "${web_protocol_policy:-replace}" = preserve ]; then
+        msg '旧协议处理方式：保留以前的协议。本次勾选项新增或更新，未勾选的旧协议继续保留。'
+    else
+        msg '旧协议处理方式：不保留以前的协议。仅保留本次勾选项，未勾选的旧协议将移除。'
+    fi
     install_from_config
 )
 
@@ -3409,13 +3508,14 @@ install_web_config() {
     fi
     jq -e '
       def text: type == "string" and (explode | all(. != 0 and . != 10 and . != 13));
-      type == "object" and (.schema == 5 or .schema == 6 or .schema == 7 or .schema == 8 or .schema == 9) and
+      type == "object" and (.schema == 5 or .schema == 6 or .schema == 7 or .schema == 8 or .schema == 9 or .schema == 10) and
       (.protocols | type == "object") and
       (if (.schema == 7 or .schema == 8) then
         .protocols | [.anytls,.ws_tls,.ws_argo,.vless_reality,.naive,.anytls_reality,.ss2022] | all(type == "boolean")
-       elif .schema == 9 then
+       elif (.schema == 9 or .schema == 10) then
         (.protocols | [.anytls,.ws_tls,.ws_argo,.vless_reality,.naive,.anytls_reality,.ss2022,.snell_v6] | all(type == "boolean")) and
-        (.snell_v6_mode == null or .snell_v6_mode == "default" or .snell_v6_mode == "unshaped")
+        (.snell_v6_mode == null or .snell_v6_mode == "default" or .snell_v6_mode == "unshaped") and
+        (if .schema == 10 then (.protocol_policy == "preserve" or .protocol_policy == "replace") else true end)
        else true end) and
       ([.origin_ipv4,.origin_ipv6,.ws_server,.argo_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.node_prefix,.snell_v6_mode,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
         | all(. == null or text)) and
@@ -3423,11 +3523,14 @@ install_web_config() {
     ' "$web_cfg" >/dev/null 2>&1 || err '网页配置 JSON 格式不正确或版本不匹配，请刷新最新版 HTML 后重新生成命令。'
 
     web_schema=$(jq -r '.schema' "$web_cfg")
+    web_protocol_policy=$(jq -r '.protocol_policy // "replace"' "$web_cfg")
+    case "$web_protocol_policy" in preserve|replace) ;; *) err '旧协议处理方式无效。' ;; esac
     web_protocol_sync=0
     if [ -e "$STATE_FILE" ]; then
         if ! manager_state_is_valid; then backup_existing_install; err '现有 manager.json 无效；已备份原目录，停止覆盖。'; fi
         load_state
-        if [ "$web_schema" != 7 ] && [ "$web_schema" != 8 ] && [ "$web_schema" != 9 ]; then
+        derive_runtime_needs
+        if [ "$web_schema" != 7 ] && [ "$web_schema" != 8 ] && [ "$web_schema" != 9 ] && [ "$web_schema" != 10 ]; then
             legacy_web_selection_matches || err '旧版网页命令的协议勾选与现有节点不同，未修改 VPS 配置。请刷新配置页，重新勾选需要保留的协议并复制新版命令。'
             warn '旧版网页命令只执行覆盖升级，不会同步协议勾选；请刷新页面重新生成命令。'
             overlay_install
@@ -3435,6 +3538,28 @@ install_web_config() {
         fi
         web_protocol_sync=1
         capture_web_state
+        web_old_enable_anytls=$ENABLE_ANYTLS
+        web_old_enable_ws=$ENABLE_WS_TLS
+        web_old_enable_argo=$ENABLE_WS_ARGO
+        web_old_enable_ss2022=$ENABLE_SS2022
+        web_old_enable_reality=$ENABLE_VLESS_REALITY
+        web_old_enable_naive=$ENABLE_NAIVE
+        web_old_enable_anyreality=$ENABLE_ANYTLS_REALITY
+        web_old_enable_snell_v6=$ENABLE_SNELL_V6
+        web_old_origin_addr=$ORIGIN_ADDR
+        web_old_origin_ipv6=$ORIGIN_IPV6
+        web_old_tls_domain=$TLS_DOMAIN
+        web_old_cert_mode=$CERT_MODE
+        web_old_cf_zone_name=$CF_ZONE_NAME
+        web_old_cf_token=$(cat "$CF_TOKEN_FILE" 2>/dev/null || true)
+        web_old_cf_zone_id=$(cat "$CF_ZONE_ID_FILE" 2>/dev/null || true)
+        web_old_argo_host=$ARGO_HOST
+        web_old_argo_server=$ARGO_SERVER
+        web_old_argo_tunnel_name=$ARGO_TUNNEL_NAME
+        web_old_argo_token=$ARGO_TOKEN
+        web_old_reality_sni=$REALITY_SNI
+        web_old_snell_v6_mode=$SNELL_V6_MODE
+        web_old_node_prefix=$NODE_PREFIX
     fi
 
     ENABLE_ANYTLS=$(jq -r 'if .protocols.anytls == true then "1" else "0" end' "$web_cfg")
@@ -3471,7 +3596,8 @@ install_web_config() {
     ANYREALITY_PORT=$(web_port anytls_reality "${PREVIOUS_ANYREALITY_PORT:-}")
     cert_mode=$(web_string cert_mode); CF_ZONE_NAME=$(web_string cf_zone_name)
     cf_token=$(web_string cf_token); cert_email=$(web_string cf_email); zone_id=$(web_string cf_zone_id)
-    case "$cert_mode" in cloudflare) CERT_MODE=cloudflare ;; http01) CERT_MODE=standalone ;; none|'') CERT_MODE=none ;; *) err '不支持的证书方式。' ;; esac
+    apply_web_protocol_policy
+    case "$cert_mode" in cloudflare) CERT_MODE=cloudflare ;; http01) CERT_MODE=standalone ;; manual) CERT_MODE=manual ;; none|'') CERT_MODE=none ;; *) err '不支持的证书方式。' ;; esac
 
     selected_count=$((ENABLE_ANYTLS + ENABLE_WS_TLS + ENABLE_WS_ARGO + ENABLE_VLESS_REALITY + ENABLE_NAIVE + ENABLE_ANYTLS_REALITY + ENABLE_SS2022 + ENABLE_SNELL_V6))
     [ "$selected_count" -gt 0 ] || err '请至少选择一种协议。'
