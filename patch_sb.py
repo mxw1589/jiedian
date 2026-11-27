@@ -108,30 +108,49 @@ def patch_text(source: str):
     result = result.replace(ARGO_OLD, ARGO_NEW, 1)
     return result, True
 
-def main():
-    if os.geteuid() != 0:
-        print("[错误] 请使用 root 运行。", file=sys.stderr)
-        return 1
+def load_and_validate():
     if not TARGET.is_file():
-        print(f"[错误] 找不到 {TARGET}；未修改任何文件。", file=sys.stderr)
-        return 1
+        raise RuntimeError(f"找不到 {TARGET}；未修改任何文件。")
 
     if VERSION_FILE.is_file():
         installed_version = VERSION_FILE.read_text(errors="replace").strip()
         if installed_version and installed_version != EXPECTED_VERSION:
-            print(
-                f"[错误] /etc/s-box/v 显示 {installed_version}，"
-                f"本补丁仅针对 {EXPECTED_VERSION}；未修改任何文件。",
-                file=sys.stderr,
+            raise RuntimeError(
+                f"/etc/s-box/v 显示 {installed_version}，"
+                f"本补丁仅针对 {EXPECTED_VERSION}；未修改任何文件。"
             )
-            return 1
 
     original = TARGET.read_text(encoding="utf-8", errors="strict")
+    updated, changed = patch_text(original)
+    return original, updated, changed
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Targeted Sing-box-yg v26.4.11 repair")
+    parser.add_argument(
+        "--check", action="store_true",
+        help="仅检查目标版本和源代码锚点，不修改文件、不创建备份。",
+    )
+    args = parser.parse_args()
+
+    if os.geteuid() != 0:
+        print("[错误] 请使用 root 运行。", file=sys.stderr)
+        return 1
+
     try:
-        updated, changed = patch_text(original)
+        original, updated, changed = load_and_validate()
     except Exception as exc:
         print(f"[错误] {exc}", file=sys.stderr)
         return 1
+
+    if args.check:
+        if changed:
+            print("[预检通过] 目标脚本符合 v26.4.11 补丁锚点；尚未修改文件。")
+        else:
+            print("[预检通过] 目标脚本已包含完整补丁；无需重复修改。")
+        return 0
 
     if not changed:
         check = subprocess.run(["bash", "-n", str(TARGET)])

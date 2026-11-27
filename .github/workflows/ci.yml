@@ -22,6 +22,6 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
       - name: Check shell syntax
-        run: bash -n repair.sh install.sh install-from-github.sh
+        run: bash -n repair.sh install.sh install-from-github.sh tools/check-manager-404.sh
       - name: Compile Python files
-        run: python -m py_compile patch_sb.py tests/test_patch.py
+        run: python -m py_compile patch_sb.py tools/check_manager_source.py tests/test_patch.py tests/test_manager_source.py
