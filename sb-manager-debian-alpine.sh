@@ -1,10 +1,11 @@
 #!/bin/sh
 # sing-box single-VPS multi-protocol manager for Debian + Alpine
-# PROJECT_VERSION=1.4.6
+# PROJECT_VERSION=1.4.7
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
 # CLI port conflicts may fall back; web Schema 7/8 conflicts fail closed; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
+# WEB_NAIVE_DOMAIN_URI=1; WEB_NAIVE_H2_ALPN=1; WEB_NAIVE_UOT_CLIENT=1; WEB_NAIVE_DIAGNOSTICS=1
 # WEB_CONFIG_SCHEMA=8; WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
 # WEB_WS_PREFERENCES=1
 # WEB_PORT_REUSE=1
@@ -1977,7 +1978,7 @@ build_config() {
         (if $enable_ss2022 then {type:"shadowsocks",tag:"ss2022-in",listen:$listen_addr,listen_port:($ss2022_port|tonumber),method:$ss2022_method,password:$ss2022_password} else empty end),
         (if $enable_ws_argo then {type:"vless",tag:"vless-ws-argo-in",listen:"127.0.0.1",listen_port:($argo_port|tonumber),users:[{name:"primary",uuid:$argo_uuid}],transport:{type:"ws",path:$argo_path}} else empty end),
         (if $enable_vless_reality then {type:"vless",tag:"vless-reality-in",listen:$listen_addr,listen_port:($reality_port|tonumber),users:[{uuid:$reality_uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$reality_private,short_id:[$reality_sid]}}} else empty end),
-        (if $enable_naive then {type:"naive",tag:"naive-in",network:"tcp",listen:$listen_addr,listen_port:($naive_port|tonumber),users:[{username:$naive_username,password:$naive_password}],tls:{enabled:true,certificate_path:$cert_file,key_path:$key_file}} else empty end),
+        (if $enable_naive then {type:"naive",tag:"naive-in",network:"tcp",listen:$listen_addr,listen_port:($naive_port|tonumber),users:[{username:$naive_username,password:$naive_password}],tls:{enabled:true,server_name:$tls_domain,alpn:["h2"],certificate_path:$cert_file,key_path:$key_file}} else empty end),
         (if $enable_anytls_reality then {type:"anytls",tag:"anytls-reality-in",listen:$listen_addr,listen_port:($anyreality_port|tonumber),users:[{name:"primary",password:$anyreality_password}],tls:{enabled:true,server_name:$reality_sni,reality:{enabled:true,handshake:{server:$reality_sni,server_port:443},private_key:$anyreality_private,short_id:[$anyreality_sid]}}} else empty end)
       ],outbounds:[{type:"direct",tag:"direct"}]}' > "$tmp" || {
         rm -f "$tmp"
@@ -2095,24 +2096,38 @@ write_anyreality_client_json() {
 # Build a standalone sing-box client configuration for NaiveProxy.
 # This is deliberately separate from the server config.json and contains
 # credentials, so it is written with owner-only permissions.
-write_naive_client_json() {
-    [ "$ENABLE_NAIVE" = 1 ] || { rm -f "$APP_DIR/naive-client.json"; return 0; }
-    client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
-    [ -n "$client_server" ] || return 1
-    client_json_tmp=$(umask 077; mktemp "$APP_DIR/naive-client.json.tmp.XXXXXX") || return 1
+# Build NaiveProxy client profiles against the certificate domain, not an IP literal.
+# The domain is both the dial target and TLS SNI, so standard naive+https URI
+# importers can validate the certificate without a non-standard "sni" query.
+write_naive_client_profile() {
+    profile_path=$1
+    enable_uot=$2
+    [ -n "$TLS_DOMAIN" ] || return 1
+    client_json_tmp=$(umask 077; mktemp "${profile_path}.tmp.XXXXXX") || return 1
     if ! jq -n \
-      --arg server "$client_server" \
+      --arg server "$TLS_DOMAIN" \
       --arg server_port "$NAIVE_PORT" \
       --arg username "$NAIVE_USERNAME" \
       --arg password "$NAIVE_PASSWORD" \
       --arg server_name "$TLS_DOMAIN" \
-      '{log:{level:"info",timestamp:true},inbounds:[{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}],outbounds:[{type:"naive",tag:"naive-proxy",server:$server,server_port:($server_port|tonumber),username:$username,password:$password,tls:{enabled:true,server_name:$server_name}},{type:"direct",tag:"direct"}],route:{final:"naive-proxy"}}' > "$client_json_tmp"; then
+      --argjson enable_uot "$enable_uot" \
+      '{log:{level:"info",timestamp:true},inbounds:[{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}],outbounds:[({type:"naive",tag:"naive-proxy",server:$server,server_port:($server_port|tonumber),username:$username,password:$password,quic:false,tls:{enabled:true,server_name:$server_name}} + (if $enable_uot then {udp_over_tcp:{enabled:true,version:2}} else {} end)),{type:"direct",tag:"direct"}],route:{final:"naive-proxy"}}' > "$client_json_tmp"; then
         rm -f "$client_json_tmp"
         return 1
     fi
     chmod 0600 "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
     chown root:root "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
-    mv -f "$client_json_tmp" "$APP_DIR/naive-client.json"
+    mv -f "$client_json_tmp" "$profile_path"
+}
+
+write_naive_client_json() {
+    if [ "$ENABLE_NAIVE" != 1 ]; then
+        rm -f "$APP_DIR/naive-client.json" "$APP_DIR/naive-client-uot.json"
+        return 0
+    fi
+    [ -n "$TLS_DOMAIN" ] || return 1
+    write_naive_client_profile "$APP_DIR/naive-client.json" false || return 1
+    write_naive_client_profile "$APP_DIR/naive-client-uot.json" true || return 1
 }
 
 show_ss2022_node() {
@@ -2148,11 +2163,6 @@ show_nodes() {
                 REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
                 printf '[%s] VLESS + Reality | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
             fi
-            if [ "$ENABLE_NAIVE" = 1 ]; then
-                tag=$(node_tag IPv4 "$ORIGIN_ADDR" naiveproxy); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                NAIVE_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-                printf '[%s] NaiveProxy | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$NAIVE_PORT" "$NAIVE_LINK"
-            fi
         fi
 
         if [ "$ENABLE_WS_TLS" = 1 ]; then
@@ -2187,12 +2197,16 @@ show_nodes() {
                 REALITY6_LINK="vless://${REALITY_UUID}@${origin6_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
                 printf '[%s] VLESS + Reality | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$REALITY_PORT" "$REALITY6_LINK"
             fi
-            if [ "$ENABLE_NAIVE" = 1 ]; then
-                tag=$(node_tag IPv6 "$ORIGIN_IPV6" naiveproxy); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
-                NAIVE6_LINK="naive+https://${NAIVE_USERNAME}:${NAIVE_PASSWORD}@${origin6_uri}:${NAIVE_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
-                printf '[%s] NaiveProxy | 地址：[%s] | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_IPV6" "$NAIVE_PORT" "$NAIVE6_LINK"
-            fi
         fi
+        if [ "$ENABLE_NAIVE" = 1 ]; then
+            tag=$(node_tag domain "$TLS_DOMAIN" naiveproxy)
+            tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+            naive_user_uri=$(jq -nr --arg value "$NAIVE_USERNAME" '$value | @uri')
+            naive_password_uri=$(jq -nr --arg value "$NAIVE_PASSWORD" '$value | @uri')
+            NAIVE_LINK="naive+https://${naive_user_uri}:${naive_password_uri}@${TLS_DOMAIN}:${NAIVE_PORT}/#${tag_uri}"
+            printf '[%s] NaiveProxy | 域名 / TLS SNI：%s | TCP：%s（DNS 必须直达源站）\n%s\n\n' "$tag" "$TLS_DOMAIN" "$NAIVE_PORT" "$NAIVE_LINK"
+        fi
+
         if [ "$ENABLE_WS_TLS" = 0 ] && [ "$ENABLE_WS_ARGO" = 0 ] && [ "$ENABLE_SS2022" = 0 ] && [ "$ENABLE_ANYTLS" = 0 ] && [ "$ENABLE_VLESS_REALITY" = 0 ] && [ "$ENABLE_NAIVE" = 0 ] && [ "$ENABLE_ANYTLS_REALITY" = 0 ]; then
             printf '没有启用任何协议。\n'
         fi
@@ -2204,13 +2218,14 @@ show_nodes() {
     else rm -f "$APP_DIR/anytls-reality-client.json"; fi
     if [ "$ENABLE_NAIVE" = 1 ]; then
         if write_naive_client_json; then
-            printf 'NaiveProxy sing-box 1.13+ 客户端配置：%s/naive-client.json\n' "$APP_DIR"
-            printf '注意：该 JSON 含 Naive 用户名和密码，请仅通过安全方式传到自己的客户端。\n'
+            printf 'NaiveProxy sing-box TCP 客户端配置：%s/naive-client.json\n' "$APP_DIR"
+            printf 'NaiveProxy sing-box TCP + UDP-over-TCP 客户端配置：%s/naive-client-uot.json\n' "$APP_DIR"
+            printf '注意：这两个 JSON 都含 Naive 用户名和密码，请仅通过安全方式传到自己的客户端。\n'
         else
             warn 'NaiveProxy 客户端 JSON 生成失败；节点链接仍可用，请检查地址和凭据。'
         fi
     else
-        rm -f "$APP_DIR/naive-client.json"
+        rm -f "$APP_DIR/naive-client.json" "$APP_DIR/naive-client-uot.json"
     fi
     msg '================ 节点信息 ================'
     cat "$APP_DIR/nodes.txt"
@@ -4406,8 +4421,52 @@ show_logs() {
 diagnose_naive() {
     [ "$ENABLE_NAIVE" = 1 ] || { warn '当前未安装 NaiveProxy。'; return 1; }
     need_root
-    msg '========== NaiveProxy 本机诊断 =========='
-    printf '端口：%s/tcp\nTLS 域名：%s\n' "$NAIVE_PORT" "$TLS_DOMAIN"
+    msg '========== NaiveProxy 完整诊断 =========='
+    printf '端口：%s/tcp\nTLS 域名 / SNI：%s\n' "$NAIVE_PORT" "$TLS_DOMAIN"
+
+    [ -n "$TLS_DOMAIN" ] || { warn 'TLS 域名为空，无法验证 NaiveProxy 证书。'; return 1; }
+    [ -s "$CERT_FILE" ] || { warn "证书文件不存在：$CERT_FILE"; return 1; }
+    [ -s "$KEY_FILE" ] || { warn "私钥文件不存在：$KEY_FILE"; return 1; }
+
+    if ! openssl x509 -in "$CERT_FILE" -noout -checkhost "$TLS_DOMAIN" >/dev/null 2>&1; then
+        warn "证书不包含 TLS 域名 $TLS_DOMAIN。"
+        return 1
+    fi
+    if ! openssl x509 -in "$CERT_FILE" -noout -checkend 0 >/dev/null 2>&1; then
+        warn 'TLS 证书已经过期。'
+        return 1
+    fi
+    if ! openssl x509 -in "$CERT_FILE" -noout -checkend 604800 >/dev/null 2>&1; then
+        warn 'TLS 证书将在 7 天内到期，请确认 ACME 自动续期任务正常。'
+    fi
+
+    cert_pub=$(openssl x509 -in "$CERT_FILE" -pubkey -noout 2>/dev/null || true)
+    key_pub=$(openssl pkey -in "$KEY_FILE" -pubout 2>/dev/null || true)
+    if [ -z "$cert_pub" ] || [ -z "$key_pub" ] || [ "$cert_pub" != "$key_pub" ]; then
+        warn '证书与私钥不匹配或无法读取。'
+        return 1
+    fi
+    msg '证书检查：域名匹配、未过期、证书与私钥匹配。'
+
+    if command -v getent >/dev/null 2>&1; then
+        dns_a=$(getent ahostsv4 "$TLS_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u || true)
+        dns_aaaa=$(getent ahostsv6 "$TLS_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u || true)
+        printf 'DNS A：%s\n' "${dns_a:-未解析到 IPv4}"
+        printf 'DNS AAAA：%s\n' "${dns_aaaa:-未解析到 IPv6}"
+        if [ -n "$ORIGIN_ADDR" ] && [ -n "$dns_a" ] &&
+            ! printf '%s\n' "$dns_a" | grep -Fxq "$ORIGIN_ADDR"; then
+            warn "A 记录没有包含配置的源站 IPv4 $ORIGIN_ADDR。若使用 Cloudflare 橙云/其他 CDN，NaiveProxy 的直连 TCP 端口通常无法透传；请确认 DNS 直达源站。"
+        fi
+        if [ -n "$ORIGIN_IPV6" ] && [ -n "$dns_aaaa" ] &&
+            ! printf '%s\n' "$dns_aaaa" | grep -Fxq "$ORIGIN_IPV6"; then
+            warn "AAAA 记录没有包含配置的源站 IPv6 $ORIGIN_IPV6。请确认域名直接解析到当前 VPS。"
+        fi
+        if [ -n "$ORIGIN_IPV6" ] && [ -z "$dns_aaaa" ]; then
+            warn '当前配置有 IPv6 源站地址，但 TLS 域名没有解析出 AAAA；IPv6-only 客户端将无法通过域名连接。'
+        fi
+    else
+        warn '系统没有 getent，跳过 A/AAAA 解析核对。'
+    fi
 
     if ! port_listening "$NAIVE_PORT"; then
         warn "本机没有检测到 NaiveProxy TCP 监听端口 $NAIVE_PORT。请查看 sing-box 状态和日志。"
@@ -4415,28 +4474,44 @@ diagnose_naive() {
     fi
     msg "本机 TCP 监听：正常（$NAIVE_PORT/tcp）"
 
-    probe_tmp=$(mktemp)
-    if run_with_timeout 10 openssl s_client \
-        -connect "127.0.0.1:$NAIVE_PORT" \
-        -servername "$TLS_DOMAIN" \
-        -alpn h2 \
-        -verify_hostname "$TLS_DOMAIN" \
-        -verify_return_error \
-        -brief </dev/null > "$probe_tmp" 2>&1; then
-        cat "$probe_tmp"
-        if grep -qi 'ALPN protocol: h2' "$probe_tmp"; then
-            msg 'NaiveProxy 本机检查通过：TLS 证书验证成功，ALPN 协商为 HTTP/2（h2）。'
-        else
-            warn 'TLS 握手成功，但未看到 HTTP/2（h2）协商结果；请检查 sing-box 版本和日志。'
+    probe_log=$(mktemp) || { warn '无法创建 TLS 诊断临时文件。'; return 1; }
+    : > "$probe_log"
+    probe_ok=0
+    for probe_target in "[::1]:$NAIVE_PORT" "127.0.0.1:$NAIVE_PORT"; do
+        case "$probe_target" in
+            "[::1]:"*) ipv6_kernel_enabled || continue ;;
+        esac
+        probe_tmp=$(mktemp) || continue
+        if run_with_timeout 10 openssl s_client \
+            -connect "$probe_target" \
+            -servername "$TLS_DOMAIN" \
+            -alpn h2 \
+            -verify_hostname "$TLS_DOMAIN" \
+            -verify_return_error \
+            -brief </dev/null > "$probe_tmp" 2>&1 &&
+            grep -qi 'ALPN protocol: h2' "$probe_tmp"; then
+            cat "$probe_tmp"
+            probe_ok=1
+            rm -f "$probe_tmp"
+            break
         fi
+        {
+            printf '\n--- 本机探测目标 %s ---\n' "$probe_target"
+            cat "$probe_tmp"
+        } >> "$probe_log"
         rm -f "$probe_tmp"
-        return 0
-    else
-        cat "$probe_tmp"
-        rm -f "$probe_tmp"
-        warn '本机 TLS/证书验证失败。请检查证书是否过期、域名是否匹配、证书链是否完整。'
+    done
+
+    if [ "$probe_ok" -ne 1 ]; then
+        cat "$probe_log"
+        rm -f "$probe_log"
+        warn '本机 TLS / HTTP/2（h2）探测未通过。请检查 sing-box 日志、监听地址、证书链和 ALPN。'
         return 1
     fi
+    rm -f "$probe_log"
+    msg 'NaiveProxy 本机检查通过：TLS 证书验证成功，ALPN 协商为 HTTP/2（h2）。'
+    msg '外网还需确认：DNS A/AAAA 直达源站、TCP 端口放行，并从另一条网络实际连接测试。'
+    msg '标准 naive+https 分享链接使用 TLS 域名作为连接主机；不要把 IP 与非标准 sni 查询参数组合使用。'
 }
 
 menu() {

@@ -1,6 +1,26 @@
-# Jiedian 管理器 HTTP-01 稳定增强版 1.4.6
+# Jiedian 管理器 NaiveProxy + HTTP-01 稳定增强版 1.4.7
 
-本包基于 1.4.3 稳定性增强版继续修复，保留网页配置 Schema 8、原有协议数据和旧版状态兼容。1.4.6 在 1.4.5 的安装预检诊断和 1.4.4 的 ACME 多源安装基础上，增加 NAT64 出站诊断、Cloudflare HTTP-01 521 专项提示，并减少 Debian 安装 Cron 时不必要的邮件服务依赖。重点解决 GitHub 不可访问时 ACME 客户端无法安装的问题，同时保留既有证书、凭据和管理器回滚保护。
+本包基于 1.4.6 稳定增强版继续修复，保留网页配置 Schema 8、现有协议数据、节点凭据、端口历史及安装回滚机制。1.4.7 专项修复 NaiveProxy 的标准分享链接、TLS SNI / HTTP/2 ALPN、双栈域名连接和 sing-box UDP-over-TCP 客户端配置，并扩展本机证书、监听与 DNS 诊断。本版本不更换协议内核，不会自动修改 Cloudflare DNS 代理状态，也不会声称 IPv6-only VPS 能直接接受公网 IPv4 入站。
+
+## 1.4.7 本次优化：NaiveProxy 专项修复
+
+- **标准分享链接**：NaiveProxy 分享链接改用证书域名作为 URI 主机，例如 `naive+https://user:pass@proxy.example.com:PORT/`；移除不属于标准 Naive URI 约定的 `?sni=` 参数。域名同时用于 TLS SNI 和证书主机名校验，避免“IP 作为 URL 主机、证书却签给域名”导致客户端证书验证失败。
+- **单一域名节点**：NaiveProxy 不再按 IPv4 / IPv6 源站地址重复输出两条 IP 分享链接，而是输出一条域名链接，由 DNS A / AAAA 选择可用地址。
+- **服务端 TLS**：Naive 入站显式设置 `server_name` 和 `alpn:["h2"]`，固定使用标准 HTTP/2 over TCP；仍不启用 QUIC/HTTP/3。
+- **双客户端配置**：生成 `naive-client.json`（TCP）和 `naive-client-uot.json`（sing-box UDP-over-TCP v2）。两个文件均使用 TLS 域名作为连接地址和 SNI，权限为 `0600`。
+- **NaiveProxy 诊断**：检查证书域名、有效期、证书/私钥匹配、TCP 监听、HTTP/2 ALPN；同时检查 DNS A / AAAA 是否包含已配置的源站地址，并对疑似 CDN / 代理解析不匹配给出提示。
+- **IPv6-only 提示**：如果 VPS 只有 IPv6，AAAA 必须指向 VPS IPv6。没有公网 IPv4 的情况下，IPv4-only 客户端不能直接连接；需要额外 IPv4 入站网关 / 端口映射，NAT64 出站不能替代 IPv4 入站。
+- **Cloudflare 提示**：标准 NaiveProxy 需要域名直接连接源站 TCP 端口；使用 Cloudflare 橙云代理时，不能假设任意 Naive TCP 端口都能被普通 CDN 代理，应使用 DNS only 或专用 TCP 代理产品。
+
+### NaiveProxy 使用边界
+完整的服务端条件、客户端文件、IPv6-only 限制和排障流程见 [`docs/NAIVEPROXY_CN.md`](docs/NAIVEPROXY_CN.md)。
+
+
+- `naive+https://` 分享链接适用于支持该 URI 约定的客户端；URI 主机必须是与证书匹配的域名，不使用 IP + `sni` 查询参数。
+- 原生 NaiveProxy 主要承载 TCP。若要让 sing-box 客户端通过 Naive 承载 UDP，请导入 `naive-client-uot.json`；它使用 sing-box 专有 UDP-over-TCP v2，客户端和服务端都需使用兼容版本。并非所有支持 Naive 分享链接的应用都支持 UoT。
+- sing-box Naive 出站只在特定平台 / 构建中可用。Linux 客户端需要包含 `libcronet.so` 的兼容构建；Windows 客户端需要 `libcronet.dll` 随程序放置。服务端只运行 Naive 入站，不代表任意客户端 sing-box 构建都支持 Naive 出站。
+- 域名应使用 DNS only 并正确配置 A / AAAA；证书必须由公开信任 CA 签发并覆盖该域名；Naive TCP 端口必须在 VPS 防火墙和服务商安全组放行。
+- “本机 TLS/H2 检查通过”不等于公网客户端已经可达。仍需从另一条网络实际导入节点并测试 TCP；UDP-over-TCP 则需另行测试 UDP 应用。
 
 ## 1.4.6 本次优化
 
@@ -52,6 +72,7 @@
 - 系统包目录缺少 acme.sh 主程序或 DNS API 目录时拒绝使用。
 
 新增 1.4.6 测试覆盖 NAT64 IPv4-only 出站探测、NAT64 出口地址不被误当作源站 IPv4、Cloudflare 521 / 522 错误提示，以及 ACME 输出实时转发和原始退出码保留。
+新增 1.4.7 NaiveProxy 测试覆盖标准域名分享链接、服务端 TLS SNI / HTTP/2 ALPN、TCP-only 与 UDP-over-TCP v2 客户端 JSON、凭据文件权限及 IPv6 DNS 诊断标记。
 
 既有测试继续覆盖：
 - POSIX sh、dash、BusyBox ash 语法检查。
@@ -73,12 +94,12 @@
 上传到 GitHub 后，可先在 VPS 执行以下只读检查，确认远端 Shell 已更新：
 
 ```sh
-curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh?v=1.4.6' -o /tmp/sb-manager-check.sh
+curl -fsSL 'https://raw.githubusercontent.com/mxw1589/jiedian/main/sb-manager-debian-alpine.sh?v=1.4.7' -o /tmp/sb-manager-check.sh
 grep '^# PROJECT_VERSION=' /tmp/sb-manager-check.sh
 sha256sum /tmp/sb-manager-check.sh
 ```
 
-预期版本为 `1.4.6`，预期 SHA-256 为本 README 最下方的 Shell 校验值。若不匹配，不要继续执行网页安装命令；先确认 GitHub `main` 上的 Shell 文件上传完成，再刷新网页。
+预期版本为 `1.4.7`，预期 SHA-256 为本 README 最下方的 Shell 校验值。若不匹配，不要继续执行网页安装命令；先确认 GitHub `main` 上的 Shell 文件上传完成，再刷新网页。
 
 **部署顺序：** 先上传 `sb-manager-debian-alpine.sh`，再上传 `index.html`。网页安装命令会打印具体的下载、版本、功能标记、Shell 语法或 SHA-256 失败原因。
 
@@ -120,7 +141,7 @@ HOME=/root sh ./acme.sh --install --home /root/.acme.sh --nocron
 ## Shell 脚本 SHA-256
 
 ```text
-f45608c438fbdc0315b9de0b0ea5f6aa28633f265831cfef59645338b3fd3a96
+2333225bd8f05ff86f7e9d44501734a2693a700321a42d70b4e43176f4ceb9df
 ```
 
 
