@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for schema-8 port validation and reservation."""
+"""Regression tests for schema-9 port validation and reservation."""
 from pathlib import Path
 import os
 import re
@@ -15,7 +15,7 @@ ASSIGN = match.group(0)
 COMMON = r'''#!/bin/sh
 set -eu
 PORT_HISTORY='{}'
-web_schema=8
+web_schema=9
 ENABLE_ANYTLS=1
 ENABLE_WS_TLS=0
 ENABLE_WS_ARGO=0
@@ -23,6 +23,7 @@ ENABLE_SS2022=0
 ENABLE_VLESS_REALITY=0
 ENABLE_NAIVE=0
 ENABLE_ANYTLS_REALITY=0
+ENABLE_SNELL_V6=0
 ANYTLS_PORT=''
 WS_PORT=''
 ARGO_PORT=''
@@ -30,6 +31,7 @@ SS2022_PORT=''
 REALITY_PORT=''
 NAIVE_PORT=''
 ANYREALITY_PORT=''
+SNELL_V6_PORT=''
 PREVIOUS_ANYTLS_PORT=''
 PREVIOUS_WS_PORT=''
 PREVIOUS_REALITY_PORT=''
@@ -37,6 +39,7 @@ PREVIOUS_NAIVE_PORT=''
 PREVIOUS_ANYREALITY_PORT=''
 PREVIOUS_ARGO_PORT=''
 PREVIOUS_SS2022_PORT=''
+PREVIOUS_SNELL_V6_PORT=''
 trim_value() { printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 normalize_optional_port() {
   value=$(trim_value "$1")
@@ -68,16 +71,23 @@ def run_case(extra: str, env_extra=None):
 # Schema 8 must reject duplicate manually supplied ports rather than silently reassigning one.
 p, _ = run_case("ENABLE_WS_TLS=1\nANYTLS_PORT=20000\nWS_PORT=20000")
 assert p.returncode != 0 and "重复" in p.stderr, p.stdout + p.stderr
-print("PASS: schema 8 rejects duplicate selected ports")
+print("PASS: schema 9 rejects duplicate selected ports")
 
 # Schema 8 must reject an occupied manual port rather than silently selecting another port.
 p, _ = run_case("ANYTLS_PORT=20000", {"MOCK_BUSY_PORT": "20000"})
 assert p.returncode != 0 and "已被占用" in p.stderr, p.stdout + p.stderr
-print("PASS: schema 8 rejects an occupied manual port")
+print("PASS: schema 9 rejects an occupied manual port")
 
 # A random earlier port must reserve every later manual port before allocation.
 p, args = run_case("ENABLE_WS_TLS=1\nANYTLS_PORT=''\nWS_PORT=20000")
 assert p.returncode == 0, p.stdout + p.stderr
 assert "20000" in args, args
 assert "AnyTLS=20001" in p.stdout and "WS TLS=20000" in p.stdout, p.stdout
-print("PASS: schema 8 reserves later manual ports before random allocation")
+print("PASS: schema 9 reserves later manual ports before random allocation")
+
+# Snell v6 is a TCP-only inbound and participates in schema-9 port collision checks.
+p, _ = run_case("ENABLE_SNELL_V6=1\nSNELL_V6_PORT=21000")
+assert p.returncode == 0 and "Snell v6=21000" in p.stdout, p.stdout + p.stderr
+p, _ = run_case("ENABLE_SNELL_V6=1\nSNELL_V6_PORT=20000\nANYTLS_PORT=20000")
+assert p.returncode != 0 and "Snell v6" in p.stderr, p.stdout + p.stderr
+print("PASS: schema 9 allocates Snell v6 TCP port and rejects cross-protocol duplicates")
