@@ -12,7 +12,7 @@ SOURCE = (ROOT / "sb-manager-debian-alpine.sh").read_text(encoding="utf-8")
 assert 'id="keepOldProtocols"' in HTML
 assert 'id="replaceOldProtocols"' in HTML
 assert 'let protocolPolicy="preserve"' in HTML
-assert 'schema:10,protocol_policy:protocolPolicy' in HTML
+assert 'schema:11,protocol_policy:protocolPolicy' in HTML
 assert "WEB_PROTOCOL_POLICY=1" in SOURCE
 assert "manual) CERT_MODE=manual" in SOURCE
 assert '.protocol_policy == "preserve" or .protocol_policy == "replace"' in SOURCE

@@ -1,9 +1,72 @@
-# Jiedian 管理器 1.4.8 — Snell v6 + NaiveProxy 稳定增强版
+# Jiedian 管理器 1.5.0 — 节点 IPv4 / IPv6 类型选择
 
-本版本基于 `mxw1589/jiedian` 现有 1.4.7 项目继续开发，保留原有 AnyTLS、VLESS、Shadowsocks 2022、NaiveProxy、Argo Tunnel、证书管理、端口历史、状态备份和安装回滚逻辑，并新增 **Snell v6**。
+本版本基于 Jiedian Manager 1.4.9 继续开发，保留现有协议、Snell v6、NaiveProxy、Argo Tunnel、证书管理、端口历史、状态备份和安装回滚逻辑，并新增 **节点 IPv4 / IPv6 类型选择**。
 
 项目主页：<https://mxw1589.github.io/jiedian/>  
 GitHub：<https://github.com/mxw1589/jiedian/>
+
+## 1.5.0 更新内容
+
+### 节点 IP 类型选择
+
+网页新增三个互斥选项，第一个默认选中：
+
+- **IPv4 + IPv6 双栈节点（默认）**：为直接使用 IP 的协议分别生成 IPv4 与 IPv6 节点；需要可用的两种源站地址。
+- **仅 IPv4 节点**：只生成 IPv4 地址节点。
+- **仅 IPv6 节点**：只生成 IPv6 地址节点。
+
+该选项只影响节点链接和客户端配置文件中的连接地址，不修改 sing-box 服务端监听地址、协议入站、端口或防火墙。选择的地址族缺少对应源站地址时，安装器会停止并给出提示，不会生成一个不可连接的假节点。
+
+TLS 域名型节点（例如 NaiveProxy，以及 WS / Argo 使用域名连接地址时）仍以域名输出，因为 TLS 证书和 SNI 需要域名；域名的 A / AAAA 解析由客户端 DNS 和网络环境决定，不能仅凭 URI 强制所有客户端只用某个地址族。若 WS / Argo 手动填写 IP 字面量，网页会检查它是否与所选地址族匹配。
+
+节点 IP 类型会写入 `/etc/sing-box/manager.json`，后续管理器重新生成节点信息时继续沿用。旧版 manager.json 未记录该字段时默认双栈。
+
+网页配置升级到 Schema 11；后端继续兼容 Schema 5–10。旧协议保留 / 替换按钮仍默认选择“保留以前的协议”。
+
+### ZIP 解压与测试
+
+将发布 ZIP 上传到 VPS 后执行（文件名按实际下载名称调整）：
+
+```bash
+apt-get update
+apt-get install -y unzip python3 jq
+mkdir -p /opt/jiedian
+unzip -o Jiedian_HTTP01_1.5.0_NodeIPModes.zip -d /opt/jiedian
+cd /opt/jiedian/Jiedian_HTTP01_1.5.0_NodeIPModes
+sha256sum -c SHA256SUMS.txt
+sh tests/run-tests.sh
+```
+
+以上只解压和测试源码，不会自动覆盖运行中的管理器。网页安装仍须通过同版本 `index.html` 生成的命令，远端 Shell 版本和 SHA-256 必须匹配。
+
+## 1.4.9 更新内容
+
+### 旧协议处理按钮
+
+网页新增两个互斥选项：
+
+- **保留以前的协议（默认）**：本次勾选的协议新增或更新；旧安装中已存在但本次未勾选的协议继续保留。
+- **不保留以前的协议**：只保留本次勾选的协议；未勾选的旧协议会从 sing-box 配置和 manager.json 状态中移除。
+
+保留模式会继续使用旧协议已有端口和凭据。若旧协议共享 TLS 证书域名或 Reality SNI，且本次只更新其中一部分，安装器会拒绝不兼容的共享参数更改，避免悄悄破坏未勾选的旧节点。首次安装时没有旧节点，两种方式效果相同。
+
+网页配置升级到 Schema 10。Shell 后端仍兼容旧 Schema 5–9；旧版本配置按原来的替换同步语义处理。
+
+### ZIP 解压与测试
+
+将发布 ZIP 上传到 VPS 后执行（文件名按实际下载名称调整）：
+
+```bash
+apt-get update
+apt-get install -y unzip python3 jq
+mkdir -p /opt/jiedian
+unzip -o Jiedian_HTTP01_1.4.9_ProtocolPolicy.zip -d /opt/jiedian
+cd /opt/jiedian/Jiedian_HTTP01_1.4.9_ProtocolPolicy
+sha256sum -c SHA256SUMS.txt
+sh tests/run-tests.sh
+```
+
+以上只解压和测试源码，不会自动覆盖运行中的管理器。网页安装仍须通过同版本 `index.html` 生成的命令，远端 Shell 版本和 SHA-256 必须匹配。
 
 ## 1.4.8 更新内容
 
@@ -60,7 +123,7 @@ Snell v6 不需要 TLS 证书、TLS SNI、Reality SNI、Cloudflare Token 或单�
 1. 打开 <https://mxw1589.github.io/jiedian/>。
 2. 勾选 **Snell v6**。端口框与协议名称在同一行；留空代表自动分配。注意网页默认预选 Argo WS；如果只需要 Snell，请取消 Argo WS 勾选，否则安装器还会要求 Cloudflare Tunnel Token。
 3. 在“Snell v6 参数”中选择 `default`（推荐）或 `unshaped`。
-4. 如果 VPS 是 IPv6-only，建议在源站 IPv6 项填写 VPS 的公网 IPv6；客户端网络必须具备 IPv6 连通性。
+4. 在“节点 IP 类型”中选择双栈、仅 IPv4 或仅 IPv6。IPv6-only VPS 应选择“仅 IPv6”，并在源站 IPv6 项填写公网 IPv6；客户端网络必须具备 IPv6 连通性。双栈选项要求两种地址均可用。
 5. 复制网页自动生成的安装 / 同步命令，在 VPS root SSH 终端执行。
 6. 安装完成后执行 `/usr/local/sbin/sb-manager`，查看节点信息；管理器会输出 TCP 端口、PSK 和客户端 JSON 文件位置。
 7. 在 VPS 防火墙及服务商安全组放行该 TCP 端口。如果使用 NAT VPS，还需要把公网映射端口映射到该 VPS 的本机 TCP 监听端口。
@@ -128,29 +191,29 @@ sh tests/run-tests.sh
 apt-get update
 apt-get install -y unzip python3 jq
 mkdir -p /opt/jiedian
-unzip -o Jiedian_HTTP01_1.4.8_SnellV6.zip -d /opt/jiedian
-cd /opt/jiedian/Jiedian_HTTP01_1.4.8_SnellV6
+unzip -o Jiedian_HTTP01_1.5.0_NodeIPModes.zip -d /opt/jiedian
+cd /opt/jiedian/Jiedian_HTTP01_1.5.0_NodeIPModes
 sha256sum -c SHA256SUMS.txt
 sh tests/run-tests.sh
 ```
 
 这一步是解压项目源码并运行测试，不会自动覆盖 VPS 正在运行的 `/usr/local/sbin/sb-manager`。实际安装 / 更新仍应通过网页生成的、带版本和 SHA-256 校验的命令执行。
-当前网页固定校验的管理脚本 SHA-256：`dbe3085958413fea74c786407339469b2bf2b52001564d554a83d9df055d6e24`。若修改 `sb-manager-debian-alpine.sh`，必须同步更新 `index.html` 中的 `EXPECTED_SHA256`，否则网页会安全拒绝安装。
+当前网页固定校验的管理脚本 SHA-256：`89ced94889fc21b64c78918102dffcb95630dabc17e66d951af4afd71d0be243`。若修改 `sb-manager-debian-alpine.sh`，必须同步更新 `index.html` 中的 `EXPECTED_SHA256`，否则网页会安全拒绝安装。
 
 ## 发布到 GitHub Pages
 
 将 ZIP 解压到本地，然后将项目文件同步到仓库 `mxw1589/jiedian` 的 `main` 分支。示例（假设 ZIP 和解压目录位于当前用户目录）：
 
 ```bash
-unzip -o Jiedian_HTTP01_1.4.8_SnellV6.zip -d /tmp/jiedian-release
+unzip -o Jiedian_HTTP01_1.5.0_NodeIPModes.zip -d /tmp/jiedian-release
 
 git clone https://github.com/mxw1589/jiedian.git /tmp/jiedian-repo
-cp -a /tmp/jiedian-release/Jiedian_HTTP01_1.4.8_SnellV6/. /tmp/jiedian-repo/
+cp -a /tmp/jiedian-release/Jiedian_HTTP01_1.5.0_NodeIPModes/. /tmp/jiedian-repo/
 cd /tmp/jiedian-repo
 sha256sum -c SHA256SUMS.txt
 
 git add index.html sb-manager-debian-alpine.sh README.md CHANGELOG.md AUDIT.md docs tests SHA256SUMS.txt VERSION
-git commit -m "Release Jiedian Manager v1.4.8 with Snell v6"
+git commit -m "Release Jiedian Manager v1.5.0 with node IP family selection"
 git push origin main
 ```
 
@@ -169,3 +232,24 @@ git push origin main
 ## 验证边界
 
 自动化测试验证本地生成逻辑、JSON 结构、版本门槛、端口冲突和文件权限；并不等于已在所有 Debian / Ubuntu / Alpine 发行版、所有客户端 App 或用户实际 VPS 上完成真实外网连接和吞吐量测试。发布前请在测试 VPS 上运行 sing-box `check`，并从独立 IPv6 网络实际导入客户端测试 TCP 连接和 DNS。
+
+## 旧协议保留 / 替换模式使用说明
+
+在网页协议列表下方选择旧协议处理方式：
+
+1. **保留以前的协议**（默认）：未勾选的旧节点仍保持启用；勾选的协议可以新增或更新。
+2. **不保留以前的协议**：仅保留本次勾选的协议，未勾选的旧节点会被移除。
+
+保留模式会尽量复用旧端口、密码、UUID、PSK、证书和 Argo 凭据。由于 AnyTLS、NaiveProxy、直连 WS 共用 TLS 域名 / 证书，两个 Reality 入站共用 Reality SNI，如果保留的旧协议依赖这些共享参数，安装器会阻止对其进行不兼容的更改。此时可恢复原参数，或选择替换模式后再修改。
+
+选择结果会写入网页生成的 Schema 10 JSON，并由服务器端管理器执行；不是仅改变网页提示。
+
+## 节点 IP 类型选择说明
+
+- **IPv4 + IPv6 双栈**（默认）：对 AnyTLS、Reality、Shadowsocks 2022、Snell v6 等直接使用源站 IP 的协议，分别生成 IPv4 和 IPv6 地址节点；相应源站地址必须都可用。
+- **仅 IPv4**：只输出 IPv4 IP 字面量节点。
+- **仅 IPv6**：只输出 IPv6 IP 字面量节点。
+
+选择只影响 `nodes.txt`、Snell v6 / AnyTLS + Reality 客户端 JSON 的服务器地址，不改变服务端监听和网络栈。WS / Argo / Naive 等基于 TLS 域名的节点继续输出域名，因为证书校验与 SNI 依赖域名；客户端会根据自己的 DNS / 网络环境选择 A 或 AAAA。域名并不等同于强制 IPv4 或 IPv6。
+
+若所选模式需要 IPv4 或 IPv6，而 VPS 没有对应可用地址，安装器会提示补充地址或切换模式，不会把 NAT64 出口地址误当作 IPv4 入站地址。节点 IP 类型保存在 manager.json，旧安装默认按双栈显示。

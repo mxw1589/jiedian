@@ -9,7 +9,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "sb-manager-debian-alpine.sh").read_text(encoding="utf-8")
 
-assert '# PROJECT_VERSION=1.4.9' in SOURCE
+assert '# PROJECT_VERSION=1.5.0' in SOURCE
 assert 'server_name:$tls_domain,alpn:["h2"],certificate_path:$cert_file,key_path:$key_file' in SOURCE
 assert 'naive+https://${naive_user_uri}:${naive_password_uri}@${TLS_DOMAIN}:${NAIVE_PORT}/#${tag_uri}' in SOURCE
 assert 'naive_user_uri=$(jq -nr --arg value "$NAIVE_USERNAME" \'$value | @uri\')' in SOURCE

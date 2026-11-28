@@ -1,13 +1,14 @@
 #!/bin/sh
 # sing-box single-VPS multi-protocol manager for Debian + Alpine
-# PROJECT_VERSION=1.4.9
+# PROJECT_VERSION=1.5.0
 # AnyTLS + AnyTLS/Reality + VLESS/WS/TLS + VLESS/Reality + NaiveProxy + Snell v6
 # IPv4 + IPv6 dual-stack listeners and separate address-family node links
-# CLI port conflicts may fall back; web Schema 7/8/9/10 conflicts fail closed; Cloudflare DNS-01 or HTTP-01
+# CLI port conflicts may fall back; web Schema 7/8/9/10/11 conflicts fail closed; Cloudflare DNS-01 or HTTP-01
 # WEB_CONFIG_MODE=1; web single-server configuration; overlay install preserves existing settings
 # WEB_NAIVE_DOMAIN_URI=1; WEB_NAIVE_H2_ALPN=1; WEB_NAIVE_UOT_CLIENT=1; WEB_NAIVE_DIAGNOSTICS=1
-# WEB_CONFIG_SCHEMA=10; WEB_CONFIG_SCHEMA=9; WEB_CONFIG_SCHEMA=8; WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
+# WEB_CONFIG_SCHEMA=11; WEB_CONFIG_SCHEMA=10; WEB_CONFIG_SCHEMA=9; WEB_CONFIG_SCHEMA=8; WEB_CONFIG_SCHEMA=7; WEB_CONFIG_SCHEMA=6; WEB_CONFIG_SCHEMA=5
 # WEB_PROTOCOL_POLICY=1; preserve unselected existing protocols or replace with selected set
+# WEB_NODE_IP_MODE=1; generate dual-stack, IPv4-only, or IPv6-only node endpoints
 # WEB_SNELL_V6=1; requires sing-box >= 1.14.0; emits protected sing-box client JSON
 # WEB_WS_PREFERENCES=1
 # WEB_PORT_REUSE=1
@@ -45,6 +46,7 @@ CF_TOKEN_FILE="$APP_DIR/cloudflare.token"
 CF_ZONE_ID_FILE="$APP_DIR/cloudflare-zone-id"
 CF_ZONE_NAME=""
 NODE_PREFIX=""
+NODE_IP_MODE=dual
 NAIVE_PORT=""
 NAIVE_USERNAME=""
 NAIVE_PASSWORD=""
@@ -636,7 +638,7 @@ assign_ports() {
 
     used_ports=""
     reserved_ports=""
-    if [ "${web_schema:-}" = 7 ] || [ "${web_schema:-}" = 8 ] || [ "${web_schema:-}" = 9 ] || [ "${web_schema:-}" = 10 ] || [ "$PORT_HISTORY" != '{}' ]; then
+    if [ "${web_schema:-}" = 7 ] || [ "${web_schema:-}" = 8 ] || [ "${web_schema:-}" = 9 ] || [ "${web_schema:-}" = 10 ] || [ "${web_schema:-}" = 11 ] || [ "$PORT_HISTORY" != '{}' ]; then
         reserved_ports="$ANYTLS_PORT $WS_PORT $ARGO_PORT $REALITY_PORT $NAIVE_PORT $ANYREALITY_PORT $SS2022_PORT $SNELL_V6_PORT"
     fi
     if [ "$PORT_HISTORY" != '{}' ]; then
@@ -666,7 +668,7 @@ assign_ports() {
         if [ -n "$item_port" ]; then
             case " $used_ports " in
                 *" $item_port "*)
-                    [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] && [ "${web_schema:-}" != 9 ] && [ "${web_schema:-}" != 10 ] || err "$protocol_name 的端口 $item_port 与其他所选协议重复。请修改网页端口后重试。"
+                    [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] && [ "${web_schema:-}" != 9 ] && [ "${web_schema:-}" != 10 ] && [ "${web_schema:-}" != 11 ] || err "$protocol_name 的端口 $item_port 与其他所选协议重复。请修改网页端口后重试。"
                     warn "$protocol_name 指定端口 $item_port 与已选择协议重复；将自动随机分配。"
                     item_port=""
                     PORT_FALLBACK_USED=1
@@ -675,7 +677,7 @@ assign_ports() {
                     if ! check_udp_port="$([ "$protocol_name" = 'Shadowsocks 2022' ] && printf 1 || printf 0)" manual_port_available "$item_port" \
                         "$PREVIOUS_ANYTLS_PORT" "$PREVIOUS_WS_PORT" "$PREVIOUS_REALITY_PORT" \
                         "$PREVIOUS_NAIVE_PORT" "$PREVIOUS_ANYREALITY_PORT" "${PREVIOUS_ARGO_PORT:-}" "${PREVIOUS_SS2022_PORT:-}" "${PREVIOUS_SNELL_V6_PORT:-}"; then
-                        [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] && [ "${web_schema:-}" != 9 ] && [ "${web_schema:-}" != 10 ] || err "$protocol_name 的端口 $item_port 已被占用。请修改网页端口后重试。"
+                        [ "${web_schema:-}" != 7 ] && [ "${web_schema:-}" != 8 ] && [ "${web_schema:-}" != 9 ] && [ "${web_schema:-}" != 10 ] && [ "${web_schema:-}" != 11 ] || err "$protocol_name 的端口 $item_port 已被占用。请修改网页端口后重试。"
                         warn "$protocol_name 指定 TCP 端口 $item_port 已被其他程序占用；将自动随机分配。"
                         item_port=""
                         PORT_FALLBACK_USED=1
@@ -1879,12 +1881,13 @@ save_state() {
       --arg cert_mode "$CERT_MODE" \
       --arg cf_zone_name "$CF_ZONE_NAME" \
       --arg node_prefix "$NODE_PREFIX" \
+      --arg node_ip_mode "$NODE_IP_MODE" \
       --arg enable_anytls "$ENABLE_ANYTLS" \
       --arg enable_ws_tls "$ENABLE_WS_TLS" \
       --arg enable_vless_reality "$ENABLE_VLESS_REALITY" \
       --arg enable_naive "$ENABLE_NAIVE" \
       --arg enable_anytls_reality "$ENABLE_ANYTLS_REALITY" \
-      "$PORT_HISTORY_FILTER"'{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,enabled_ws_argo:($enable_ws_argo=="1"),enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_password:$ss2022_password,enabled_snell_v6:($enable_snell_v6=="1"),snell_v6_port:(if $enable_snell_v6=="1" then ($snell_v6_port|tonumber) else null end),snell_v6_psk:$snell_v6_psk,snell_v6_mode:$snell_v6_mode,argo_port:(if $enable_ws_argo=="1" then ($argo_port|tonumber) else null end),argo_server:$argo_server,argo_uuid:$argo_uuid,argo_path:$argo_path,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_prefix:$node_prefix} | .port_history = ($saved_ports + active_ports)' > "$tmp"; then
+      "$PORT_HISTORY_FILTER"'{origin_addr:$origin_addr,origin_ipv6:$origin_ipv6,preferred_ip:$preferred_ip,preferred_ipv6:$preferred_ipv6,ws_server:$ws_server,enabled_ws_argo:($enable_ws_argo=="1"),enabled_ss2022:($enable_ss2022=="1"),ss2022_port:(if $enable_ss2022=="1" then ($ss2022_port|tonumber) else null end),ss2022_password:$ss2022_password,enabled_snell_v6:($enable_snell_v6=="1"),snell_v6_port:(if $enable_snell_v6=="1" then ($snell_v6_port|tonumber) else null end),snell_v6_psk:$snell_v6_psk,snell_v6_mode:$snell_v6_mode,argo_port:(if $enable_ws_argo=="1" then ($argo_port|tonumber) else null end),argo_server:$argo_server,argo_uuid:$argo_uuid,argo_path:$argo_path,argo_host:$argo_host,argo_tunnel_name:$argo_tunnel_name,tls_domain:$tls_domain,ws_host:$ws_host,reality_sni:$reality_sni,enabled_anytls:($enable_anytls=="1"),enabled_ws_tls:($enable_ws_tls=="1"),enabled_vless_reality:($enable_vless_reality=="1"),enabled_naive:($enable_naive=="1"),enabled_anytls_reality:($enable_anytls_reality=="1"),anytls_port:(if $enable_anytls=="1" then ($anytls_port|tonumber) else null end),ws_port:(if $enable_ws_tls=="1" then ($ws_port|tonumber) else null end),reality_port:(if $enable_vless_reality=="1" then ($reality_port|tonumber) else null end),naive_port:(if $enable_naive=="1" then ($naive_port|tonumber) else null end),anyreality_port:(if $enable_anytls_reality=="1" then ($anyreality_port|tonumber) else null end),naive_username:$naive_username,naive_password:$naive_password,anyreality_password:$anyreality_password,anyreality_private:$anyreality_private,anyreality_public:$anyreality_public,anyreality_sid:$anyreality_sid,anytls_password:$anytls_password,ws_uuid:$ws_uuid,reality_uuid:$reality_uuid,reality_private:$reality_private,reality_public:$reality_public,reality_sid:$reality_sid,ws_path:$ws_path,cert_file:$cert_file,key_file:$key_file,cert_mode:$cert_mode,cf_zone_name:$cf_zone_name,node_prefix:$node_prefix,node_ip_mode:$node_ip_mode} | .port_history = ($saved_ports + active_ports)' > "$tmp"; then
         rm -f "$tmp"
         warn '无法生成 manager.json；原有管理状态未更改。'
         return 1
@@ -1955,6 +1958,8 @@ load_state() {
     CERT_MODE=$(jq -r '.cert_mode // "none"' "$STATE_FILE")
     CF_ZONE_NAME=$(jq -r '.cf_zone_name // ""' "$STATE_FILE")
     NODE_PREFIX=$(jq -r '.node_prefix // .node_label // ""' "$STATE_FILE")
+    NODE_IP_MODE=$(jq -r '.node_ip_mode // "dual"' "$STATE_FILE")
+    case "$NODE_IP_MODE" in dual|ipv4|ipv6) ;; *) NODE_IP_MODE=dual ;; esac
     if [ "$ENABLE_WS_TLS" = 1 ] && jq -e 'has("enabled_ws_argo") | not' "$STATE_FILE" >/dev/null &&
         [ "$(jq -r '.ws_mode // "direct"' "$STATE_FILE")" = argo ]; then
         legacy_ws_server=$(jq -r '.ws_server // ""' "$STATE_FILE")
@@ -2135,11 +2140,11 @@ change_node_prefix() {
     show_nodes
 }
 
-write_anyreality_client_json() {
-    [ "$ENABLE_ANYTLS_REALITY" = 1 ] || { rm -f "$APP_DIR/anytls-reality-client.json"; return 0; }
-    client_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
-    [ -n "$client_server" ] || return 0
-    client_json_tmp=$(umask 077; mktemp "$APP_DIR/anytls-reality-client.json.tmp.XXXXXX") || return 1
+write_anyreality_client_profile() {
+    profile_path=$1
+    client_server=$2
+    [ -n "$client_server" ] || return 1
+    client_json_tmp=$(umask 077; mktemp "${profile_path}.tmp.XXXXXX") || return 1
     jq -n \
       --arg server "$client_server" \
       --arg server_port "$ANYREALITY_PORT" \
@@ -2150,7 +2155,36 @@ write_anyreality_client_json() {
       '{type:"anytls",tag:"anytls-reality",server:$server,server_port:($server_port|tonumber),password:$password,tls:{enabled:true,server_name:$server_name,utls:{enabled:true,fingerprint:"chrome"},reality:{enabled:true,public_key:$public_key,short_id:$short_id}}}' > "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
     chmod 0600 "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
     chown root:root "$client_json_tmp" || { rm -f "$client_json_tmp"; return 1; }
-    mv -f "$client_json_tmp" "$APP_DIR/anytls-reality-client.json" || { rm -f "$client_json_tmp"; return 1; }
+    mv -f "$client_json_tmp" "$profile_path" || { rm -f "$client_json_tmp"; return 1; }
+}
+
+write_anyreality_client_json() {
+    if [ "$ENABLE_ANYTLS_REALITY" != 1 ]; then
+        rm -f "$APP_DIR/anytls-reality-client.json" "$APP_DIR/anytls-reality-client-ipv6.json"
+        return 0
+    fi
+    case "${NODE_IP_MODE:-dual}" in
+        ipv4)
+            client_primary=$ORIGIN_ADDR
+            client_secondary=""
+            ;;
+        ipv6)
+            client_primary=$ORIGIN_IPV6
+            client_secondary=""
+            ;;
+        *)
+            client_primary=${ORIGIN_ADDR:-$ORIGIN_IPV6}
+            client_secondary=$ORIGIN_IPV6
+            [ "$client_secondary" = "$client_primary" ] && client_secondary=""
+            ;;
+    esac
+    [ -n "$client_primary" ] || return 0
+    write_anyreality_client_profile "$APP_DIR/anytls-reality-client.json" "$client_primary" || return 1
+    if [ -n "$client_secondary" ]; then
+        write_anyreality_client_profile "$APP_DIR/anytls-reality-client-ipv6.json" "$client_secondary" || return 1
+    else
+        rm -f "$APP_DIR/anytls-reality-client-ipv6.json"
+    fi
 }
 
 # Build a standalone sing-box client configuration for NaiveProxy.
@@ -2216,11 +2250,25 @@ write_snell_v6_client_json() {
         rm -f "$APP_DIR/snell-v6-client-primary.json" "$APP_DIR/snell-v6-client-ipv6.json"
         return 0
     fi
-    client_primary=${ORIGIN_ADDR:-$ORIGIN_IPV6}
+    case "${NODE_IP_MODE:-dual}" in
+        ipv4)
+            client_primary=$ORIGIN_ADDR
+            client_secondary=""
+            ;;
+        ipv6)
+            client_primary=$ORIGIN_IPV6
+            client_secondary=""
+            ;;
+        *)
+            client_primary=${ORIGIN_ADDR:-$ORIGIN_IPV6}
+            client_secondary=$ORIGIN_IPV6
+            [ "$client_secondary" = "$client_primary" ] && client_secondary=""
+            ;;
+    esac
     [ -n "$client_primary" ] || return 1
     write_snell_v6_client_profile "$APP_DIR/snell-v6-client-primary.json" "$client_primary" || return 1
-    if [ -n "$ORIGIN_IPV6" ] && [ "$ORIGIN_IPV6" != "$client_primary" ]; then
-        write_snell_v6_client_profile "$APP_DIR/snell-v6-client-ipv6.json" "$ORIGIN_IPV6" || return 1
+    if [ -n "$client_secondary" ]; then
+        write_snell_v6_client_profile "$APP_DIR/snell-v6-client-ipv6.json" "$client_secondary" || return 1
     else
         rm -f "$APP_DIR/snell-v6-client-ipv6.json"
     fi
@@ -2235,39 +2283,74 @@ show_ss2022_node() {
         "$ss_tag" "$SS2022_PORT" "$ss_auth" "$(uri_host "$2")" "$SS2022_PORT" "$ss_tag_uri"
 }
 
+node_ip_mode_label() {
+    case "${NODE_IP_MODE:-dual}" in
+        ipv4) printf '仅 IPv4' ;;
+        ipv6) printf '仅 IPv6' ;;
+        *) printf 'IPv4 + IPv6 双栈' ;;
+    esac
+}
+
+node_mode_allows_ipv4() {
+    case "${NODE_IP_MODE:-dual}" in dual|ipv4) return 0 ;; *) return 1 ;; esac
+}
+
+node_mode_allows_ipv6() {
+    case "${NODE_IP_MODE:-dual}" in dual|ipv6) return 0 ;; *) return 1 ;; esac
+}
+
+# Domain endpoints remain domain endpoints because TLS/SNI and DNS may rely on
+# both A and AAAA records. Only explicit IP literals are filtered by this mode.
+node_address_allowed() {
+    [ -n "$1" ] || return 1
+    case "$1" in
+        *:*) node_mode_allows_ipv6 ;;
+        *)
+            if valid_ipv4_address "$1"; then
+                node_mode_allows_ipv4
+            else
+                return 0
+            fi
+            ;;
+    esac
+}
+
 show_nodes() {
     WS_PATH_ENC=$(printf '%s' "$WS_PATH" | sed 's#/#%2F#g')
     nodes_tmp=$(umask 077; mktemp "$APP_DIR/nodes.txt.tmp.XXXXXX") || { warn '无法创建安全的节点信息临时文件。'; return 1; }
     {
-        printf 'sing-box 节点信息（仅显示已安装协议）\n节点前缀：%s\n\n' "${NODE_PREFIX:-未设置}"
+        printf 'sing-box 节点信息（仅显示已安装协议）\n节点前缀：%s\n节点 IP 类型：%s\n' "${NODE_PREFIX:-未设置}" "$(node_ip_mode_label)"
+        printf '说明：IP 类型仅筛选明确的 IPv4 / IPv6 地址；WS、Argo、Naive 等域名节点仍按域名输出，由客户端 DNS 解析 A / AAAA。\n\n'
 
-        if [ -n "$ORIGIN_ADDR" ]; then
+        if [ -n "$ORIGIN_ADDR" ] && node_address_allowed "$ORIGIN_ADDR"; then
             origin_uri=$(uri_host "$ORIGIN_ADDR")
-            [ "$ENABLE_SS2022" = 0 ] || show_ss2022_node IPv4 "$ORIGIN_ADDR"
+            origin_family=IPv4
+            valid_ipv4_address "$ORIGIN_ADDR" || origin_family=Domain
+            [ "$ENABLE_SS2022" = 0 ] || show_ss2022_node "$origin_family" "$ORIGIN_ADDR"
             if [ "$ENABLE_ANYTLS" = 1 ]; then
-                tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                tag=$(node_tag "$origin_family" "$ORIGIN_ADDR" anytls); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
                 ANYTLS_LINK="anytls://${ANYTLS_PASSWORD}@${origin_uri}:${ANYTLS_PORT}/?sni=${TLS_DOMAIN}#${tag_uri}"
                 printf '[%s] AnyTLS | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYTLS_PORT" "$ANYTLS_LINK"
             fi
             if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
-                tag=$(node_tag IPv4 "$ORIGIN_ADDR" anytls+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                tag=$(node_tag "$origin_family" "$ORIGIN_ADDR" anytls+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
                 ANYREALITY_LINK="anytls://${ANYREALITY_PASSWORD}@${origin_uri}:${ANYREALITY_PORT}?security=reality&type=tcp&sni=${REALITY_SNI}&fp=chrome&pbk=${ANYREALITY_PUBLIC}&sid=${ANYREALITY_SID}#${tag_uri}"
                 printf '[%s] AnyTLS + Reality | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$ANYREALITY_PORT" "$ANYREALITY_LINK"
             fi
             if [ "$ENABLE_VLESS_REALITY" = 1 ]; then
-                tag=$(node_tag IPv4 "$ORIGIN_ADDR" vless+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
+                tag=$(node_tag "$origin_family" "$ORIGIN_ADDR" vless+reality); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
                 REALITY_LINK="vless://${REALITY_UUID}@${origin_uri}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp#${tag_uri}"
                 printf '[%s] VLESS + Reality | 地址：%s | TCP：%s\n%s\n\n' "$tag" "$ORIGIN_ADDR" "$REALITY_PORT" "$REALITY_LINK"
             fi
         fi
 
-        if [ "$ENABLE_WS_TLS" = 1 ]; then
+        if [ "$ENABLE_WS_TLS" = 1 ] && node_address_allowed "$WS_SERVER"; then
             ws_server_uri=$(uri_host "$WS_SERVER")
             tag=$(node_tag_single vless+ws+tls "$WS_SERVER"); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
             WS_LINK="vless://${WS_UUID}@${ws_server_uri}:${WS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${WS_HOST}&path=${WS_PATH_ENC}#${tag_uri}"
             printf '[%s] VLESS + WebSocket + TLS（直连） | 端口：%s\n%s\n\n' "$tag" "$WS_PORT" "$WS_LINK"
         fi
-        if [ "$ENABLE_WS_ARGO" = 1 ]; then
+        if [ "$ENABLE_WS_ARGO" = 1 ] && node_address_allowed "$ARGO_SERVER"; then
             argo_server_uri=$(uri_host "$ARGO_SERVER")
             argo_path_enc=$(printf '%s' "$ARGO_PATH" | sed 's#/#%2F#g')
             tag=$(node_tag_single vless+ws+tls-argo "$ARGO_SERVER"); tag_uri=$(jq -nr --arg tag "$tag" '$tag | @uri')
@@ -2275,7 +2358,7 @@ show_nodes() {
             printf '[%s] VLESS + WebSocket + TLS（Argo） | 客户端端口：443 | 本机端口：%s\n%s\n\n' "$tag" "$ARGO_PORT" "$ARGO_LINK"
         fi
 
-        if [ -n "$ORIGIN_IPV6" ]; then
+        if [ -n "$ORIGIN_IPV6" ] && node_address_allowed "$ORIGIN_IPV6"; then
             origin6_uri=$(uri_host "$ORIGIN_IPV6")
             [ "$ENABLE_SS2022" = 0 ] || show_ss2022_node IPv6 "$ORIGIN_IPV6"
             if [ "$ENABLE_ANYTLS" = 1 ]; then
@@ -2295,12 +2378,22 @@ show_nodes() {
             fi
         fi
         if [ "$ENABLE_SNELL_V6" = 1 ]; then
-            snell_server=${ORIGIN_ADDR:-$ORIGIN_IPV6}
+            case "${NODE_IP_MODE:-dual}" in
+                ipv4) snell_server=$ORIGIN_ADDR ;;
+                ipv6) snell_server=$ORIGIN_IPV6 ;;
+                *) snell_server=${ORIGIN_ADDR:-$ORIGIN_IPV6} ;;
+            esac
+            snell_family=IPv4
+            case "$snell_server" in
+                *:*) snell_family=IPv6 ;;
+                *) valid_ipv4_address "$snell_server" || snell_family=Domain ;;
+            esac
             if [ -n "$snell_server" ]; then
-                printf '[%s] Snell v6 | 地址：%s | TCP：%s | mode：%s\nPSK：%s\n' \
-                    "$(node_tag_single snell-v6 "$snell_server")" "$snell_server" "$SNELL_V6_PORT" "$SNELL_V6_MODE" "$SNELL_V6_PSK"
+                snell_server_uri=$(uri_host "$snell_server")
+                printf '[%s] Snell v6 %s | 地址：%s | TCP：%s | mode：%s\nPSK：%s\n' \
+                    "$(node_tag_single snell-v6 "$snell_server")" "$snell_family" "$snell_server_uri" "$SNELL_V6_PORT" "$SNELL_V6_MODE" "$SNELL_V6_PSK"
             fi
-            if [ -n "$ORIGIN_IPV6" ] && [ "$ORIGIN_IPV6" != "$snell_server" ]; then
+            if [ "${NODE_IP_MODE:-dual}" = dual ] && [ -n "$ORIGIN_IPV6" ] && [ "$ORIGIN_IPV6" != "$snell_server" ]; then
                 printf '[%s] Snell v6 IPv6 | 地址：[%s] | TCP：%s | mode：%s\nPSK：%s\n' \
                     "$(node_tag_single snell-v6 "$ORIGIN_IPV6")" "$ORIGIN_IPV6" "$SNELL_V6_PORT" "$SNELL_V6_MODE" "$SNELL_V6_PSK"
             fi
@@ -2325,8 +2418,11 @@ show_nodes() {
     chmod 0600 "$nodes_tmp"
     mv "$nodes_tmp" "$APP_DIR/nodes.txt"
     if [ "$ENABLE_ANYTLS_REALITY" = 1 ]; then
-        if write_anyreality_client_json; then printf 'AnyTLS + Reality 客户端配置片段：%s/anytls-reality-client.json\n' "$APP_DIR"; else warn 'AnyTLS + Reality 客户端 JSON 片段生成失败。'; fi
-    else rm -f "$APP_DIR/anytls-reality-client.json"; fi
+        if write_anyreality_client_json; then
+            printf 'AnyTLS + Reality 客户端配置片段：%s/anytls-reality-client.json\n' "$APP_DIR"
+            [ -f "$APP_DIR/anytls-reality-client-ipv6.json" ] && printf 'AnyTLS + Reality IPv6 客户端配置片段：%s/anytls-reality-client-ipv6.json\n' "$APP_DIR"
+        else warn 'AnyTLS + Reality 客户端 JSON 片段生成失败。'; fi
+    else rm -f "$APP_DIR/anytls-reality-client.json" "$APP_DIR/anytls-reality-client-ipv6.json"; fi
     if [ "$ENABLE_NAIVE" = 1 ]; then
         if write_naive_client_json; then
             printf 'NaiveProxy sing-box TCP 客户端配置：%s/naive-client.json\n' "$APP_DIR"
@@ -2897,7 +2993,7 @@ ask_argo_install_fields() {
 
 install_wizard() {
     need_root
-    ORIGIN_ADDR=""; ORIGIN_IPV6=""; WS_SERVER=""; WS_HOST=""
+    ORIGIN_ADDR=""; ORIGIN_IPV6=""; WS_SERVER=""; WS_HOST=""; NODE_IP_MODE=dual
     ENABLE_ANYTLS=0; ENABLE_WS_TLS=0; ENABLE_WS_ARGO=0; ENABLE_SS2022=0; ENABLE_VLESS_REALITY=0; ENABLE_NAIVE=0; ENABLE_ANYTLS_REALITY=0; ENABLE_SNELL_V6=0; SNELL_V6_MODE=default
     msg '========== sing-box 选择性安装向导 =========='
     ask_value '安装普通 AnyTLS？(y/N)' 'n'; case "$REPLY" in y|Y|yes|YES) ENABLE_ANYTLS=1 ;; esac
@@ -3017,10 +3113,12 @@ detect_nat64_public_ipv4() {
 }
 
 resolve_install_addresses() {
-    if [ "$NEED_ORIGIN" = 1 ] && [ -z "$ORIGIN_ADDR" ] && [ -z "$ORIGIN_IPV6" ]; then
-        ORIGIN_ADDR=$(detect_public_ip 4)
-        if ! valid_ipv4_address "$ORIGIN_ADDR"; then ORIGIN_ADDR=""; fi
-        if ipv6_kernel_enabled; then
+    if [ "$NEED_ORIGIN" = 1 ]; then
+        if [ -z "$ORIGIN_ADDR" ]; then
+            ORIGIN_ADDR=$(detect_public_ip 4)
+            if ! valid_ipv4_address "$ORIGIN_ADDR"; then ORIGIN_ADDR=""; fi
+        fi
+        if [ -z "$ORIGIN_IPV6" ] && ipv6_kernel_enabled; then
             ORIGIN_IPV6=$(detect_public_ip 6)
             if ! valid_ipv6_address "$ORIGIN_IPV6"; then ORIGIN_IPV6=""; fi
         fi
@@ -3034,6 +3132,29 @@ resolve_install_addresses() {
             valid_ipv6_address "$ORIGIN_IPV6" || err '源站 IPv6 地址格式不正确，或服务器没有到该地址的 IPv6 路由。'
         fi
         [ -n "$ORIGIN_ADDR" ] || [ -n "$ORIGIN_IPV6" ] || err '所选直连协议需要公网 IPv4 或 IPv6；未能检测到源站地址。'
+        NEED_FAMILY_NODES=0
+        [ "$ENABLE_ANYTLS" = 1 ] && NEED_FAMILY_NODES=1
+        [ "$ENABLE_VLESS_REALITY" = 1 ] && NEED_FAMILY_NODES=1
+        [ "$ENABLE_ANYTLS_REALITY" = 1 ] && NEED_FAMILY_NODES=1
+        [ "$ENABLE_SS2022" = 1 ] && NEED_FAMILY_NODES=1
+        [ "$ENABLE_SNELL_V6" = 1 ] && NEED_FAMILY_NODES=1
+        if [ "$NEED_FAMILY_NODES" = 1 ]; then
+            case "${NODE_IP_MODE:-dual}" in
+                dual)
+                    [ -n "$ORIGIN_ADDR" ] && [ -n "$ORIGIN_IPV6" ] ||
+                        err '你选择了 IPv4 + IPv6 双栈节点，但未同时检测到/填写 IPv4（或 IPv4 域名）和 IPv6。请补齐地址，或改选仅 IPv4 / 仅 IPv6。'
+                    ;;
+                ipv4)
+                    [ -n "$ORIGIN_ADDR" ] ||
+                        err '你选择了仅 IPv4 节点，但没有可用的源站 IPv4 / IPv4 域名。请填写地址，或改选仅 IPv6。'
+                    ;;
+                ipv6)
+                    [ -n "$ORIGIN_IPV6" ] ||
+                        err '你选择了仅 IPv6 节点，但没有可用的源站 IPv6。请填写 IPv6，或改选仅 IPv4。'
+                    ;;
+                *) err '节点 IP 类型无效；请刷新网页并重新生成安装命令。' ;;
+            esac
+        fi
     else
         ORIGIN_ADDR=""
         ORIGIN_IPV6=""
@@ -3508,16 +3629,17 @@ install_web_config() {
     fi
     jq -e '
       def text: type == "string" and (explode | all(. != 0 and . != 10 and . != 13));
-      type == "object" and (.schema == 5 or .schema == 6 or .schema == 7 or .schema == 8 or .schema == 9 or .schema == 10) and
+      type == "object" and (.schema == 5 or .schema == 6 or .schema == 7 or .schema == 8 or .schema == 9 or .schema == 10 or .schema == 11) and
       (.protocols | type == "object") and
       (if (.schema == 7 or .schema == 8) then
         .protocols | [.anytls,.ws_tls,.ws_argo,.vless_reality,.naive,.anytls_reality,.ss2022] | all(type == "boolean")
-       elif (.schema == 9 or .schema == 10) then
+       elif (.schema == 9 or .schema == 10 or .schema == 11) then
         (.protocols | [.anytls,.ws_tls,.ws_argo,.vless_reality,.naive,.anytls_reality,.ss2022,.snell_v6] | all(type == "boolean")) and
         (.snell_v6_mode == null or .snell_v6_mode == "default" or .snell_v6_mode == "unshaped") and
-        (if .schema == 10 then (.protocol_policy == "preserve" or .protocol_policy == "replace") else true end)
+        (if (.schema == 10 or .schema == 11) then (.protocol_policy == "preserve" or .protocol_policy == "replace") else true end) and
+        (if .schema == 11 then (.node_ip_mode == "dual" or .node_ip_mode == "ipv4" or .node_ip_mode == "ipv6") else true end)
        else true end) and
-      ([.origin_ipv4,.origin_ipv6,.ws_server,.argo_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.node_prefix,.snell_v6_mode,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
+      ([.origin_ipv4,.origin_ipv6,.ws_server,.argo_server,.ws_mode,.argo_host,.argo_tunnel_name,.argo_token,.tls_domain,.ws_host,.reality_sni,.node_label,.node_prefix,.snell_v6_mode,.node_ip_mode,.cert_mode,.cf_zone_name,.cf_token,.cf_email,.cf_zone_id]
         | all(. == null or text)) and
       (.ports | type == "object")
     ' "$web_cfg" >/dev/null 2>&1 || err '网页配置 JSON 格式不正确或版本不匹配，请刷新最新版 HTML 后重新生成命令。'
@@ -3530,7 +3652,7 @@ install_web_config() {
         if ! manager_state_is_valid; then backup_existing_install; err '现有 manager.json 无效；已备份原目录，停止覆盖。'; fi
         load_state
         derive_runtime_needs
-        if [ "$web_schema" != 7 ] && [ "$web_schema" != 8 ] && [ "$web_schema" != 9 ] && [ "$web_schema" != 10 ]; then
+        if [ "$web_schema" != 7 ] && [ "$web_schema" != 8 ] && [ "$web_schema" != 9 ] && [ "$web_schema" != 10 ] && [ "$web_schema" != 11 ]; then
             legacy_web_selection_matches || err '旧版网页命令的协议勾选与现有节点不同，未修改 VPS 配置。请刷新配置页，重新勾选需要保留的协议并复制新版命令。'
             warn '旧版网页命令只执行覆盖升级，不会同步协议勾选；请刷新页面重新生成命令。'
             overlay_install
@@ -3577,6 +3699,8 @@ install_web_config() {
     ARGO_TUNNEL_NAME=$(web_string argo_tunnel_name)
     ARGO_TOKEN=$(web_string argo_token)
     ORIGIN_ADDR=$(web_string origin_ipv4); ORIGIN_IPV6=$(web_string origin_ipv6)
+    NODE_IP_MODE=$(jq -r '.node_ip_mode // "dual"' "$web_cfg")
+    case "$NODE_IP_MODE" in dual|ipv4|ipv6) ;; *) err '节点 IP 类型无效。' ;; esac
     WS_SERVER=$(web_ws_setting ws_server "${web_previous_ws_server:-}")
     TLS_DOMAIN=$(web_string tls_domain); WS_HOST=$(web_ws_setting ws_host "${web_previous_ws_host:-}")
     REALITY_SNI=$(web_string reality_sni); NODE_PREFIX=$(jq -r '.node_prefix // .node_label // ""' "$web_cfg")
